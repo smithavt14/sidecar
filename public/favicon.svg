@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- raised lowercase m, spktr colorway: ink shadow offset behind a yellow fill with ink outline -->
+  <text x="33.6" y="46.4" text-anchor="middle" font-family="Arial, Helvetica, sans-serif"
+        font-weight="900" font-size="52" fill="#0f0f0c">m</text>
+  <text x="31" y="43.8" text-anchor="middle" font-family="Arial, Helvetica, sans-serif"
+        font-weight="900" font-size="52" fill="#ffeb00" stroke="#0f0f0c" stroke-width="3"
+        paint-order="stroke" stroke-linejoin="round">m</text>
+</svg>
