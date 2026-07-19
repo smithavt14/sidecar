@@ -54,6 +54,11 @@ When the human clicks **accept**, the server replaces the anchored span in the r
 `replacement`, flips `status` to `accepted`, and stamps `decidedAt`. **reject** sets `status: rejected`
 and leaves the file untouched. The card shows them a word-level diff of `quote` to `replacement`.
 
+**Answering a comment with an edit — set `replyTo`.** When your suggestion *responds to* one of the
+human's comments (they asked "rewrite this to be warmer"), add `"replyTo": "<that-comment-id>"`. The
+suggestion then renders **nested inside that comment's thread** (diff + accept/reject right there), and
+**accepting it auto-resolves the parent comment**. Omit `replyTo` for a suggestion you raise on your own.
+
 ### Comment: start a thread (question, flag, note)
 
 ```json
@@ -118,6 +123,54 @@ write can't drop each other's work. You should still read-modify-write.
 5. **Respond**: resolve threads they answered, revise, add new suggestions.
 6. Repeat until **zero open items**, then commit once at the end. Accepting a card leaves the tree dirty
    on purpose; the dirty diff *is* the review state.
+
+---
+
+## Live participation — `margin wait` (react as they review)
+
+Instead of asking the human to come back to chat and say "done," **background `margin wait <file>` after you
+post**. It fs-watches the sidecar and **returns the instant they do anything** — a new comment/reply, an
+accept/reject, a direct edit, or hitting **done** — printing a compact digest of exactly what changed. It
+sleeps for free in between (no polling, no cost), so you can respond the moment a comment lands.
+
+```bash
+margin wait path/to/doc.md            # blocks; prints a digest and exits on the first change (--timeout 900)
+```
+
+The loop: **background `margin wait` → it returns → respond in-thread → background `margin wait` again →
+… until the digest says `DONE: true`, then make the single commit.** Respond by the request's nature:
+
+- **Mechanical** (cut this, fix a typo, make a list) → just **edit the file** and drop a short "done" reply
+  in the thread. No card; it's applied and reversible.
+- **Judgment / rewrite** (make this warmer, tighten this) → write a **suggestion with `replyTo`** into the
+  comment's thread (diff + accept/reject inline). On reject or "try again," add another `replyTo` suggestion
+  in the same thread and iterate.
+
+`session` and `presence` are two coordination fields on the sidecar/state:
+
+```json
+{ "schema": 1, "session": { "at": "ISO", "done": false }, "items": [ ... ] }
+```
+
+- `session.done` — the human's terminal "commit it" signal (a Done control in the UI, or chat). `margin wait`
+  reports it as `DONE: true`; that's your cue to stop looping and commit once.
+- `presence` — best-effort "Claude is here" shown in their header while a `margin wait` is running (posted to
+  the server, in-memory, never committed). Nothing for you to write by hand.
+
+---
+
+## Working on margin itself
+
+If you edit margin's **own code** (`server.js`, `public/`), the running server won't pick it up until it
+restarts. The persistent LaunchAgent is `com.alex.margin` — **kickstart it before testing**, or you'll be
+reviewing against stale code:
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.alex.margin
+```
+
+The server logs a `[code <git-sha> · <mtime>]` stamp at boot (also on the wordmark's hover title in the UI),
+so you can confirm the live instance is on current code at a glance.
 
 ---
 

@@ -129,6 +129,21 @@
   .doclink { color:var(--muted); font-size:13px; font-weight:500; text-decoration:none;
     border-bottom:1.5px solid transparent; }
   .doclink:hover { color:var(--fg); border-bottom-color:var(--accent); }
+  /* P1: turn/presence chip, threaded suggestion, done control */
+  .turn { font-size:12px; color:var(--muted); display:flex; align-items:center; gap:5px; white-space:nowrap; }
+  .turn:empty { display:none; }
+  .turn .dot { width:7px; height:7px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 1px var(--fg); flex:none; }
+  .turn.here { color:var(--fg); font-weight:500; }
+  .turn .orphan { color:var(--fg); border-bottom:1.5px solid var(--accent); cursor:pointer; }
+  @keyframes presPulse { 0%,100%{opacity:.35} 50%{opacity:1} }
+  .turn.responding .dot { animation:presPulse 1s ease-in-out infinite; }
+  /* quiet, not appetizing — a muted text link (mainly for mobile, where there's no chat to say "done") */
+  .donebtn { font-size:12px; display:none; }
+  /* a suggestion nested inside the comment thread it answers (replyTo) — a quiet recessed panel,
+     NOT a left-accent callout; the accent lives in the diff's <ins> highlights + the claude dot */
+  .subcard { margin:9px 0 5px; padding:11px 13px; border:1px solid var(--line-strong);
+    border-radius:12px; background:rgba(15,15,12,.025); }
+  .subcard .who { font-weight:600; }
   #filelist { padding:48px 40px; max-width:760px; margin:0 auto; }
   #filelist h2 { font-weight:500; letter-spacing:-.02em; }
   #filelist a { display:flex; justify-content:space-between; padding:11px 14px; border-bottom:1px solid var(--line);
@@ -189,6 +204,8 @@
       <span class="wm">spktr<span class="sep">/</span>margin</span>
     </h1>
     <div class="spacer"></div>
+    <div id="turn" class="turn"></div>
+    <button id="doneBtn" class="donebtn ghost" onclick="markDone()" title="Finish review — I'll make the single commit">done reviewing</button>
     <a class="doclink" href="https://github.com/smithavt14/margin" target="_blank" rel="noopener">docs</a>
     <div id="status">saved</div>
   </div>
@@ -285,8 +302,9 @@ async function boot() {
     const { rel } = JSON.parse(e.data);
     if (rel !== FILE) return;
     const fresh = await api('GET', '/api/state?path=' + encodeURIComponent(FILE));
-    if (fresh.hash === state.hash) {          // our own save, or only the sidecar moved — keep the caret
+    if (fresh.hash === state.hash) {          // our own save, or only the sidecar/presence moved — keep the caret
       state.review = fresh.review;
+      state.presence = fresh.presence;        // presence pings arrive here (doc bytes unchanged)
       renderSide();
       return;
     }
@@ -307,6 +325,7 @@ async function reloadFile() {
 function applyState(s) {
   hideBanner();
   state = s; dirty = false; setStatus('saved');
+  if (s.code) { const b = document.querySelector('.brand'); if (b) b.title = 'server code ' + s.code; }   // §6b: staleness visible on hover
   renderPwd(); renderDoc(); renderSide();
 }
 // pwd line above the doc — the document's path, terminal-style (dir muted, filename inked)
@@ -711,13 +730,33 @@ async function flag() {
 
 // ---------- sidebar ----------
 function esc(s) { return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+// A suggestion's inner word-level diff (old → new), monochrome+accent.
+function diffHtml(quote, replacement) {
+  return '<div class="diffbox">' + Diff.diffWords(quote, replacement).map(p =>
+    p.added ? '<ins>' + esc(p.value) + '</ins>' : p.removed ? '<del>' + esc(p.value) + '</del>' : esc(p.value)).join('') + '</div>';
+}
+// A suggestion that answers a comment (replyTo) renders INSIDE that thread — its own diff + accept/reject,
+// carrying its own data-id so the delegated dispatcher targets the suggestion, not the parent comment.
+function nestedSugHtml(sug) {
+  const orphan = sug.status === 'orphaned' ? ' <span class="badge orphaned">orphaned — text changed</span>' : '';
+  return `<div class="subcard" data-id="${esc(sug.id)}"><span class="who claude">claude</span> <span class="badge suggestion">suggestion</span>${orphan}`
+    + diffHtml(sug.anchor.quote, sug.replacement)
+    + (sug.note ? `<div class="msg"><span class="t">${esc(sug.note)}</span></div>` : '')
+    + `<div class="row"><button class="primary" data-action="accept">accept</button>
+       <button data-action="reject">reject</button></div></div>`;
+}
 function renderSide() {
   const side = $('side');
   const items = state.review.items.filter(i => !['resolved','accepted','rejected'].includes(i.status));
+  // Reply suggestions render nested under their parent comment, not as their own top-level card.
+  const childSug = {};
+  for (const it of state.review.items) if (it.kind === 'suggestion' && it.replyTo && ['pending','orphaned'].includes(it.status))
+    (childSug[it.replyTo] = childSug[it.replyTo] || []).push(it);
+  const top = items.filter(i => !(i.kind === 'suggestion' && i.replyTo));
   const done = state.review.items.length - items.length;
-  $('sheetCount').textContent = items.length || '';   // mobile pull-up pill count
-  side.innerHTML = items.length ? '' : `<div class="empty">no open items.${done ? ` (${done} settled)` : ''}<br>select text to comment.</div>`;
-  for (const it of items) {
+  $('sheetCount').textContent = top.length || '';   // mobile pull-up pill count
+  side.innerHTML = top.length ? '' : `<div class="empty">no open items.${done ? ` (${done} settled)` : ''}<br>select text to comment.</div>`;
+  for (const it of top) {
     const el = document.createElement('div');
     el.className = 'card'; el.dataset.id = it.id;
     let head = `<span class="who ${it.by}">${it.by}</span> <span class="badge ${it.flag ? 'flag' : it.kind}">${it.flag ? 'flag' : it.kind}</span>`;
@@ -726,14 +765,13 @@ function renderSide() {
     // control carries a static data-action, dispatched by the delegated listeners on #side (see below).
     let body = `<div class="quote" title="click to locate" data-action="locate">${esc(it.anchor.quote)}</div>`;
     if (it.kind === 'suggestion') {
-      const d = Diff.diffWords(it.anchor.quote, it.replacement);
-      body += '<div class="diffbox">' + d.map(p =>
-        p.added ? '<ins>' + esc(p.value) + '</ins>' : p.removed ? '<del>' + esc(p.value) + '</del>' : esc(p.value)).join('') + '</div>';
+      body += diffHtml(it.anchor.quote, it.replacement);
       if (it.note) body += `<div class="msg"><span class="t">${esc(it.note)}</span></div>`;
       body += `<div class="row"><button class="primary" data-action="accept">accept</button>
                <button data-action="reject">reject</button></div>`;
     } else {
       body += (it.thread || []).map(m => `<div class="msg"><span class="who ${m.by}">${m.by}</span> <span class="t">${esc(m.text)}</span></div>`).join('');
+      for (const sug of (childSug[it.id] || [])) body += nestedSugHtml(sug);   // my proposed edits, inline in the thread
       body += `<div class="row"><textarea class="reply" rows="1" placeholder="reply…" oninput="autogrow(this)" data-action="reply"></textarea></div>
                <div class="row spread"><button class="ghost" data-action="resolve">resolve</button>
                <button class="primary" data-action="send">send</button></div>`;
@@ -742,6 +780,43 @@ function renderSide() {
     side.appendChild(el);
   }
   markAnchors();   // refresh the in-doc highlight cues to match the current items
+  renderTurn();    // header chip: presence / open count / orphaned / done control
+}
+// Header chip — whose turn / who's here, the open + orphaned counts, and the terminal "done" control.
+function renderTurn() {
+  const el = $('turn'), doneBtn = $('doneBtn'); if (!el) return;
+  const its = state.review.items;
+  const open = its.filter(i => ['open','pending'].includes(i.status)).length;
+  const orphaned = its.filter(i => i.status === 'orphaned').length;
+  const pres = state.presence, session = state.review.session;
+  el.className = 'turn'; let html = '';
+  if (pres && pres.state === 'responding') { el.classList.add('here','responding'); html = '<span class="dot"></span>claude is responding…'; }
+  else if (pres && pres.state === 'watching') { el.classList.add('here'); html = '<span class="dot"></span>claude is here'; }
+  else if (session && session.done) html = 'done — sent to claude';
+  else if (open) html = open + ' open';
+  else html = 'all clear';
+  if (orphaned) html += (html ? ' · ' : '') + `<span class="orphan" data-action="orphans" title="text moved or changed — re-anchor or resolve">${orphaned} orphaned</span>`;
+  el.innerHTML = html;
+  const settled = session && session.done;
+  doneBtn.style.display = (its.length && !settled) ? 'inline-flex' : 'none';
+}
+// Header orphan cue → open the sidebar and flash the orphaned cards (the doc-side fix for §6a: orphaned
+// items have no in-doc highlight, so they must never go silently missing).
+$('turn').addEventListener('click', (e) => {
+  if (!e.target.closest('[data-action="orphans"]')) return;
+  toggleSheet(true);
+  const card = [...$('side').querySelectorAll('.card')].find(c => c.querySelector('.badge.orphaned'));
+  if (card) { card.scrollIntoView({ behavior: 'smooth', block: 'center' }); pulse([card]); }
+});
+// Terminal "done, commit it" — the one decision chat can't make redundant (and the phone's only way to
+// say it). Sets session.done; the agent's `margin wait` returns with DONE, and I make the single commit.
+async function markDone() {
+  state.review.session = { state: 'idle', at: new Date().toISOString(), done: true };
+  try {
+    const r = await api('PUT', '/api/review', { path: FILE, review: state.review });
+    state.review = r.review; renderSide();
+    showBanner('Sent to Claude — I’ll wrap up and commit.', [{ label: 'ok', fn: () => {} }]);
+  } catch (e) { alert('could not send: ' + e.message); }
 }
 // grow a textarea to fit its content so the whole comment stays visible while typing
 function autogrow(el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }
@@ -770,14 +845,16 @@ async function decide(id, verb) {
 $('side').addEventListener('click', (e) => {
   const el = e.target.closest('[data-action]');
   if (!el || !$('side').contains(el)) return;
-  const card = el.closest('.card'); if (!card) return;
-  const id = card.dataset.id;
+  // Nearest data-id, so a nested suggestion's accept/reject targets the suggestion (its .subcard[data-id]),
+  // while the comment's own reply/resolve/locate resolve to the enclosing .card[data-id].
+  const holder = el.closest('[data-id]'); if (!holder) return;
+  const id = holder.dataset.id;
   switch (el.dataset.action) {
     case 'locate': locate(id); break;
     case 'accept': decide(id, 'accept'); break;
     case 'reject': decide(id, 'reject'); break;
     case 'resolve': resolveItem(id); break;
-    case 'send': reply(id, card.querySelector('.reply')); break;
+    case 'send': reply(id, holder.querySelector('.reply')); break;
   }
 });
 // Enter-to-send in a reply textarea (Shift+Enter still newlines) — delegated keydown, same id source.
@@ -860,6 +937,7 @@ function markAnchors() {
   doc.normalize();
   for (const it of state.review.items) {
     if (!['open', 'pending'].includes(it.status)) continue;
+    if (it.kind === 'suggestion' && it.replyTo) continue;   // shares its parent comment's span — don't double-wrap
     wrapAnchor(it.anchor.quote, it.anchor.occurrence || 0, it.id);
   }
 }

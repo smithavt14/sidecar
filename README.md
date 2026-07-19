@@ -71,6 +71,10 @@ diff. Accept applies it to the real file; reject leaves it. Comments and suggest
 text, not line or character offsets: if the text moves, the anchor follows; if it's gone, the item goes
 orphaned (loud and visible) instead of editing the wrong place.
 
+**Collaborate live** (optional). Your agent can run `margin wait <file>` to watch the review and respond the
+moment you comment — proposing rewrites right inside your comment threads — then commit once when you click
+done. See [AGENTS.md](AGENTS.md).
+
 **Save.** Edits autosave to the real file (debounced). Only the block you touched is re-serialized; every
 untouched block keeps its exact original bytes, so `git diff` shows just what changed.
 

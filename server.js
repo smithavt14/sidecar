@@ -61,6 +61,89 @@ function saveReview(abs, review) {
   fs.renameSync(tmp, p);
 }
 
+// ---------- `margin wait <file>` — the reactive-loop primitive (P1) ----------
+// The agent backgrounds this after posting a draft. It fs-watches the sidecar + doc (no server needed,
+// stays true to "the agent works through files") and returns the instant Alex does something: a new
+// comment/reply, an accept/reject/resolve, a direct edit, or hitting "done". Wake-per-event, and it
+// SLEEPS for free in between — the whole point (no polling, no token cost while Alex reviews). One run =
+// one wake; the agent responds in-thread, then backgrounds another `margin wait`. `session.done` ends it.
+function runWait(argv) {
+  let file = null, timeoutSec = 900;   // 15-min backstop (Alex's call) so a background wait can't hang forever
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--timeout') timeoutSec = Number(argv[++i]) || timeoutSec;
+    else if (!file) file = argv[i];
+  }
+  if (!file) { console.error('usage: margin wait <file> [--timeout <seconds>]'); process.exit(2); }
+  const abs = path.resolve(process.cwd(), file);
+  const readSafe = (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return ''; } };
+  const loadSafe = () => { try { return loadReview(abs); } catch { return { items: [] }; } };
+
+  // Fixed baseline snapshot; every event is diffed against it. We exit on the first real delta, so a
+  // fixed base is correct (no need to advance it).
+  const base = (() => {
+    const r = loadSafe(), items = {};
+    for (const it of (r.items || [])) items[it.id] = { status: it.status, threadLen: (it.thread || []).length };
+    return { items, docHash: sha(readSafe(abs)) };
+  })();
+
+  const clip = (s) => (s || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+  function emitDelta() {   // returns true (and prints a digest) iff there's something for the agent to act on
+    const r = loadSafe(), lines = [];
+    for (const it of (r.items || [])) {
+      const q = clip(it.anchor && it.anchor.quote);
+      const b = base.items[it.id];
+      if (!b) {   // brand-new item since the wait began
+        if (it.by === 'alex') { const m = (it.thread || []).slice(-1)[0]; lines.push(`- NEW ${it.flag ? 'flag' : it.kind} @ “${q}”: ${m ? m.text : ''}`); }
+        continue;
+      }
+      for (const m of (it.thread || []).slice(b.threadLen)) if (m.by === 'alex') lines.push(`- REPLY @ “${q}”: ${m.text}`);
+      if (b.status !== it.status && ['accepted', 'rejected', 'resolved'].includes(it.status)) lines.push(`- ${it.status.toUpperCase()} @ “${q}”`);
+    }
+    const done = !!(r.session && r.session.done);
+    const docChanged = sha(readSafe(abs)) !== base.docHash;
+    if (!lines.length && !docChanged && !done) return false;   // nothing actionable yet — keep sleeping
+    let out = lines.length ? '## margin — your turn\n' + lines.join('\n') : '## margin — Alex finished';
+    if (docChanged) { let diff = ''; try { diff = execFileSync('git', ['diff', '--', path.basename(abs)], { cwd: path.dirname(abs) }).toString().trim(); } catch {} if (diff) out += '\n\n### doc changes (git diff)\n```diff\n' + diff + '\n```'; }
+    out += '\n\nDONE: ' + (done ? 'true' : 'false');
+    console.log(out);
+    return true;
+  }
+
+  // Best-effort presence: tell a running server "Claude is here" so the browser can show it. Purely
+  // decorative and server-optional — if the POST fails (server down), the wait still works.
+  const PORT = process.env.MARGIN_PORT || 4880;
+  const ping = (state, cb) => {   // cb fires once the POST settles (or 400ms elapses) so an exit-time ping can flush
+    let settled = false; const fin = () => { if (!settled) { settled = true; cb && cb(); } };
+    try {
+      const body = JSON.stringify({ path: abs, state });
+      const req = require('http').request({ host: '127.0.0.1', port: PORT, path: '/api/presence', method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), Host: `127.0.0.1:${PORT}` },
+        }, (res) => { res.on('data', () => {}); res.on('end', fin); });
+      req.on('error', fin); req.end(body); setTimeout(fin, 400);
+    } catch { fin(); }
+  };
+  const leave = (code) => { clearInterval(beat); clearTimeout(timer); ping('idle', () => process.exit(code)); };
+
+  if (emitDelta()) { ping('idle', () => process.exit(0)); return; }   // already something waiting (e.g. done was set) → report now
+
+  ping('watching');
+  const beat = setInterval(() => ping('watching'), 15000);   // heartbeat so a killed session goes stale, not stuck
+  const timer = setTimeout(() => { console.log('still watching (no activity within ' + timeoutSec + 's)\n\nDONE: false'); leave(1); }, timeoutSec * 1000);
+  const watcher = chokidar.watch([sidecarPath(abs), abs], { ignoreInitial: true });
+  watcher.on('all', () => { if (emitDelta()) leave(0); });
+  process.on('SIGINT', () => leave(130));
+}
+if (process.argv[2] === 'wait') { runWait(process.argv.slice(3)); return; }   // subcommand: don't boot the server
+
+// Boot-time code stamp (§6b): the whole "false orphan" incident was a launchd server running a matcher
+// loaded hours before it was rewritten. Log the git sha + server.js mtime at startup, and surface it in
+// /api/state, so "is the live server on current code?" is answerable at a glance.
+const CODE_STAMP = (() => {
+  let s = 'nogit'; try { s = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: __dirname }).toString().trim(); } catch {}
+  let mt = ''; try { mt = fs.statSync(__filename).mtime.toISOString().slice(0, 19).replace('T', ' '); } catch {}
+  return s + (mt ? ' · ' + mt : '');
+})();
+
 // Content-anchor matching lives in the shared module so accept/format/orphan here and the client's
 // highlight + occurrence code count occurrences the SAME way (same ws + markdown normalization).
 const findAnchor = (raw, quote, occurrence = 0) => Anchor.findNth(raw, quote, occurrence);
@@ -141,7 +224,8 @@ app.get('/api/state', (req, res) => {
   let diff = '';
   // execFileSync + args array: no shell is spawned, so a filename with $(...) or backticks can't inject.
   try { diff = execFileSync('git', ['diff', '--', path.basename(abs)], { cwd: path.dirname(abs) }).toString(); } catch {}
-  res.json({ path: req.query.path, pwd: pwdFor(abs), markdown, review, diff, hash: sha(markdown) });
+  res.json({ path: req.query.path, pwd: pwdFor(abs), markdown, review, diff, hash: sha(markdown),
+    presence: presenceFor(abs), code: CODE_STAMP });
 });
 
 app.put('/api/save', (req, res) => {
@@ -174,6 +258,11 @@ app.put('/api/review', (req, res) => {
   // Same id → non-destructive merge (union thread, keep the more-advanced status); new id → insert.
   for (const it of incoming.items) byId.set(it.id, byId.has(it.id) ? mergeItem(byId.get(it.id), it) : it);
   const merged = { schema: current.schema || incoming.schema || 1, items: [...byId.values()] };
+  // Coordination field `session` (turn state + the terminal `done`). Last-writer-wins by its `at`, so a
+  // stale client PUT (the client echoes back the WHOLE review it loaded) can't regress a fresher session.
+  const pickByAt = (a, b) => (!a ? b : !b ? a : (b.at || '') >= (a.at || '') ? b : a);
+  const session = pickByAt(current.session, incoming.session);
+  if (session) merged.session = session;
   saveReview(abs, merged);
   res.json({ ok: true, review: merged });
 });
@@ -191,6 +280,12 @@ app.post('/api/accept', (req, res) => {
   const next = raw.slice(0, hit.start) + it.replacement + raw.slice(hit.end);
   fs.writeFileSync(abs, next);
   it.status = 'accepted'; it.decidedAt = new Date().toISOString();
+  // A suggestion written to answer a comment (replyTo) closes that comment when accepted — the ask was
+  // fulfilled. Guarded so it never regresses an already-decided parent.
+  if (it.replyTo) {
+    const parent = review.items.find(i => i.id === it.replyTo);
+    if (parent && !['resolved', 'accepted', 'rejected'].includes(parent.status)) { parent.status = 'resolved'; parent.decidedAt = it.decidedAt; }
+  }
   saveReview(abs, review);
   res.json({ ok: true });
 });
@@ -239,6 +334,24 @@ app.post('/api/format', (req, res) => {
   res.json({ ok: true, hash: sha(next) });
 });
 
+// ---------- presence (P1): "is the agent watching this file right now?" ----------
+// Ephemeral + in-memory (keyed by absolute path), written by `margin wait` via POST /api/presence and
+// read back in /api/state. In-memory, NOT the sidecar, so it never contends with review writes and never
+// lands in git. A missing/stale (>40s, no heartbeat) or idle entry reads as "not here".
+const presence = {};
+const PRESENCE_TTL = 40000;
+function presenceFor(abs) {
+  const p = presence[abs];
+  return p && p.state !== 'idle' && Date.now() - p.at < PRESENCE_TTL ? { state: p.state, at: p.at } : null;
+}
+app.post('/api/presence', (req, res) => {
+  let abs; try { abs = safePath(req.body.path); } catch { return res.json({ ok: true }); }   // unknown file → ignore (fail-safe)
+  presence[abs] = { state: req.body.state || 'watching', at: Date.now() };
+  const rel = path.relative(BASE_DIR, abs);
+  for (const c of clients) c.write(`data: ${JSON.stringify({ event: 'presence', rel })}\n\n`);
+  res.json({ ok: true });
+});
+
 // ---------- events (fs watch -> SSE) ----------
 const clients = new Set();
 app.get('/events', (req, res) => {
@@ -263,5 +376,5 @@ app.use((err, req, res, next) => { res.status(err.status || 400).json({ error: e
 
 app.listen(PORT, '127.0.0.1', () => {
   const f = rootIsFile ? `/?f=${encodeURIComponent(path.relative(BASE_DIR, ROOT))}` : '/';
-  console.log(`margin ready → http://localhost:${PORT}${f}`);
+  console.log(`margin ready → http://localhost:${PORT}${f}  [code ${CODE_STAMP}]`);
 });

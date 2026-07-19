@@ -26,6 +26,7 @@
   },
   "scripts": {
     "start": "node server.js",
+    "wait": "node server.js wait",
     "test": "node --test test.js"
   },
   "engines": {

@@ -616,3 +616,73 @@ test('reindex refreshes baselines after a tight save so the next diff measures a
   assert.equal(again.md, md, 'after reindex the edited block reads as untouched → emits its new raw');
   assert.equal(again.tight, true);
 });
+
+// ---------- P1: turn/session, threaded suggestions, the wait loop ----------
+
+test('review PUT preserves top-level session — last-writer-wins by `at` (no regress of a decision)', async () => {
+  const p = path.join(dir, 'doc.md.review.json');
+  const cur = JSON.parse(fs.readFileSync(p, 'utf8'));
+  cur.session = { state: 'idle', at: '2026-07-19T03:00:00Z', done: true };   // a fresh decision on disk
+  fs.writeFileSync(p, JSON.stringify(cur));
+  // a STALE client PUT (older session.at) echoes back the whole review — must not regress done:true.
+  const r = await put('/api/review', { path: 'doc.md', review: { schema: 1,
+    session: { state: 'watching', at: '2026-07-19T02:00:00Z', done: false },
+    items: [{ id: 'sess-c', kind: 'comment', by: 'alex', anchor: { quote: 'Title', occurrence: 0 }, status: 'open', thread: [] }] } });
+  const b1 = await j(r);
+  assert.equal(b1.review.session.done, true, 'older client session cannot regress a newer done');
+  assert.equal(b1.review.session.at, '2026-07-19T03:00:00Z');
+  // a FRESHER client PUT (newer at) wins.
+  const r2 = await put('/api/review', { path: 'doc.md', review: { schema: 1,
+    session: { state: 'watching', at: '2026-07-19T04:00:00Z', done: false }, items: [] } });
+  const b2 = await j(r2);
+  assert.equal(b2.review.session.at, '2026-07-19T04:00:00Z', 'newer session wins');
+  assert.equal(b2.review.session.done, false);
+});
+
+test('accept of a replyTo suggestion applies the edit AND resolves its parent comment', async () => {
+  // Hermetic: its own file so it can't collide with the shared doc's accumulated edits.
+  const f = path.join(dir, 'replydoc.md');
+  fs.writeFileSync(f, '# R\n\nRESOLVEME target line.\n');
+  fs.writeFileSync(f + '.review.json', JSON.stringify({ schema: 1, items: [
+    { id: 'par1', kind: 'comment', by: 'alex', status: 'open', anchor: { quote: 'RESOLVEME target line.', occurrence: 0 },
+      thread: [{ by: 'alex', at: '2026-07-19T05:00:00Z', text: 'rewrite this' }] },
+    { id: 'sug1', kind: 'suggestion', by: 'claude', status: 'pending', replyTo: 'par1',
+      anchor: { quote: 'RESOLVEME target line.', occurrence: 0 }, replacement: 'RESOLVED replacement line.' }] }));
+  const r = await post('/api/accept', { path: 'replydoc.md', id: 'sug1' });
+  assert.equal(r.status, 200);
+  const after = JSON.parse(fs.readFileSync(f + '.review.json', 'utf8'));
+  assert.equal(after.items.find(i => i.id === 'sug1').status, 'accepted');
+  assert.equal(after.items.find(i => i.id === 'par1').status, 'resolved', 'parent comment resolves on accept');
+  assert.match(fs.readFileSync(f, 'utf8'), /RESOLVED replacement line\./);
+});
+
+test('margin wait wakes on a new alex comment and exits 0 with a digest', async () => {
+  const wf = path.join(dir, 'waitdoc.md');
+  fs.writeFileSync(wf, '# W\n\nSome content here.\n');
+  fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [] }));
+  // MARGIN_PORT points at a dead port so the best-effort presence ping just errors out harmlessly.
+  const w = spawn('node', [path.join(__dirname, 'server.js'), 'wait', wf, '--timeout', '10'],
+    { env: { ...process.env, MARGIN_PORT: '4990' }, stdio: 'pipe' });
+  let out = ''; w.stdout.on('data', (d) => out += d.toString());
+  await new Promise((res) => setTimeout(res, 900));   // let the fs-watcher attach
+  fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [
+    { id: 'wc1', kind: 'comment', by: 'alex', anchor: { quote: 'Some content here.', occurrence: 0 }, status: 'open',
+      thread: [{ by: 'alex', at: '2026-07-19T06:00:00Z', text: 'MAKE-IT-CONCRETE' }] }] }));
+  const code = await new Promise((res) => w.on('exit', res));
+  assert.equal(code, 0, 'wait exits 0 once Alex acts');
+  assert.match(out, /your turn/);
+  assert.match(out, /MAKE-IT-CONCRETE/, 'digest names the new comment');
+  assert.match(out, /DONE: false/);
+});
+
+test('margin wait --timeout exits non-zero when nothing happens', async () => {
+  const wf = path.join(dir, 'waitdoc2.md');
+  fs.writeFileSync(wf, '# W2\n');
+  fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [] }));
+  const w = spawn('node', [path.join(__dirname, 'server.js'), 'wait', wf, '--timeout', '1'],
+    { env: { ...process.env, MARGIN_PORT: '4990' }, stdio: 'pipe' });
+  let out = ''; w.stdout.on('data', (d) => out += d.toString());
+  const code = await new Promise((res) => w.on('exit', res));
+  assert.equal(code, 1, 'timeout exits non-zero');
+  assert.match(out, /still watching/);
+});
