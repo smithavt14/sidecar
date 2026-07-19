@@ -4,7 +4,7 @@
 
 **A better way to work on documents with your AI agent.**
 
-![Reviewing a document in margin: a suggestion card with a word-level diff, and a comment thread](docs/screenshot.png)
+![Reviewing a document in margin: a suggestion card with a word-level diff, and a comment thread](docs/example.png)
 
 Reviewing a document with an AI usually means pasting it back and forth. A few web tools do this well,
 with comment threads and tracked suggestions.
