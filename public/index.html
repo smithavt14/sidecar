@@ -142,8 +142,10 @@
   .presence.here .dot { background:var(--accent); box-shadow:0 0 0 1px var(--fg); }
   .presence.away { color:var(--muted); font-weight:500; }
   .presence.away .dot { background:transparent; border:1.5px solid var(--line-strong); }
+  .presence.sent { color:var(--muted); font-weight:500; }            /* review handed off — a settled, filled dot */
+  .presence.sent .dot { background:var(--muted); box-shadow:none; }
   @keyframes presPulse { 0%,100%{opacity:.35} 50%{opacity:1} }
-  .presence.working .dot, .presence.responding .dot { animation:presPulse 1s ease-in-out infinite; }
+  .presence.working .dot { animation:presPulse 1s ease-in-out infinite; }
   /* docs is a LINK (leaves the page) — mark it as one so it reads differently from status + actions */
   .doclink::after { content:'\2197'; font-size:.82em; margin-left:1px; opacity:.6; }
   /* "done reviewing" is a review ACTION → it lives at the foot of the review column, not the nav bar.
@@ -823,10 +825,14 @@ function renderTurn() {
 function renderPresence() {
   const el = $('presence'); if (!el) return;
   const st = state.presence && state.presence.state;
-  const working = st === 'working' || st === 'responding';   // Alex just acted; I'm composing the response
-  const here = st === 'watching';                            // I'm watching; the ball is in Alex's court
-  el.className = 'presence ' + (working ? 'here working' : here ? 'here' : 'away');
-  el.innerHTML = '<span class="dot"></span>' + (working ? 'claude is working…' : here ? 'claude is here' : 'waiting for claude');
+  const done = !!(state.review.session && state.review.session.done);
+  let cls, txt;
+  if (st === 'working') { cls = 'here working'; txt = 'claude is working…'; }   // Alex acted; I'm composing
+  else if (st === 'watching') { cls = 'here'; txt = 'claude is here'; }          // watching; ball in Alex's court
+  else if (done) { cls = 'sent'; txt = 'sent to claude'; }                       // review handed off, not "waiting"
+  else { cls = 'away'; txt = 'waiting for claude'; }
+  el.className = 'presence ' + cls;
+  el.innerHTML = '<span class="dot"></span>' + txt;
 }
 // Header orphan cue → open the sidebar and flash the orphaned cards (the doc-side fix for §6a: orphaned
 // items have no in-doc highlight, so they must never go silently missing).

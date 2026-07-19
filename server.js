@@ -348,10 +348,14 @@ app.post('/api/format', (req, res) => {
 // read back in /api/state. In-memory, NOT the sidecar, so it never contends with review writes and never
 // lands in git. A missing/stale (>40s, no heartbeat) or idle entry reads as "not here".
 const presence = {};
-const PRESENCE_TTL = 40000;
+const PRESENCE_TTL = 40000;    // "watching" is heartbeated every 15s, so a short TTL keeps it honest
+const WORKING_TTL = 180000;    // "working" has NO heartbeat (the wait already exited while the agent composes),
+                               // so give it a generous window; it's overwritten by the next "watching"/"idle".
 function presenceFor(abs) {
   const p = presence[abs];
-  return p && p.state !== 'idle' && Date.now() - p.at < PRESENCE_TTL ? { state: p.state, at: p.at } : null;
+  if (!p || p.state === 'idle') return null;
+  const ttl = p.state === 'working' ? WORKING_TTL : PRESENCE_TTL;
+  return Date.now() - p.at < ttl ? { state: p.state, at: p.at } : null;
 }
 app.post('/api/presence', (req, res) => {
   let abs; try { abs = safePath(req.body.path); } catch { return res.json({ ok: true }); }   // unknown file → ignore (fail-safe)

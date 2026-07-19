@@ -686,3 +686,12 @@ test('margin wait --timeout exits non-zero when nothing happens', async () => {
   assert.equal(code, 1, 'timeout exits non-zero');
   assert.match(out, /still watching/);
 });
+
+test('presence: watching/working surface in /api/state; idle reads as not-here', async () => {
+  await post('/api/presence', { path: 'doc.md', state: 'watching' });
+  assert.equal((await state()).presence?.state, 'watching');
+  await post('/api/presence', { path: 'doc.md', state: 'working' });
+  assert.equal((await state()).presence?.state, 'working');
+  await post('/api/presence', { path: 'doc.md', state: 'idle' });
+  assert.equal((await state()).presence, null, 'idle presence reads as not-here');
+});
