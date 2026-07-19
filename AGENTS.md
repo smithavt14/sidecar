@@ -134,8 +134,12 @@ accept/reject, a direct edit, or hitting **done** — printing a compact digest 
 sleeps for free in between (no polling, no cost), so you can respond the moment a comment lands.
 
 ```bash
-margin wait path/to/doc.md            # blocks; prints a digest and exits on the first change (--timeout 900)
+margin wait /abs/path/to/doc.md       # blocks; prints a digest and exits on the first change (--timeout 900)
 ```
+
+**Use an absolute path** (or a path relative to the served directory). `margin wait` resolves the path against
+its own cwd, so a relative path from the wrong directory would silently watch a nonexistent file. It now exits
+with an error if the path doesn't resolve to a real file.
 
 The loop: **background `margin wait` → it returns → respond in-thread → background `margin wait` again →
 … until the digest says `DONE: true`, then make the single commit.** Respond by the request's nature:

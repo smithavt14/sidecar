@@ -75,6 +75,12 @@ function runWait(argv) {
   }
   if (!file) { console.error('usage: margin wait <file> [--timeout <seconds>]'); process.exit(2); }
   const abs = path.resolve(process.cwd(), file);
+  // Fail loud: a relative path resolved from the wrong cwd would otherwise silently watch a nonexistent
+  // file (and mis-key presence). Prefer an ABSOLUTE path; if relative, it must be relative to the served dir.
+  if (!fs.existsSync(abs)) {
+    console.error(`margin wait: no file at ${abs}\nPass an absolute path, or run from the served directory.`);
+    process.exit(2);
+  }
   const readSafe = (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return ''; } };
   const loadSafe = () => { try { return loadReview(abs); } catch { return { items: [] }; } };
 
@@ -122,16 +128,19 @@ function runWait(argv) {
       req.on('error', fin); req.end(body); setTimeout(fin, 400);
     } catch { fin(); }
   };
-  const leave = (code) => { clearInterval(beat); clearTimeout(timer); ping('idle', () => process.exit(code)); };
+  const leave = (code, pstate) => { clearInterval(beat); clearTimeout(timer); ping(pstate || 'idle', () => process.exit(code)); };
 
-  if (emitDelta()) { ping('idle', () => process.exit(0)); return; }   // already something waiting (e.g. done was set) → report now
+  // Something already actionable at startup (a delta, or done) → I'm about to handle it: show "working".
+  if (emitDelta()) { ping('working', () => process.exit(0)); return; }
 
   ping('watching');
   const beat = setInterval(() => ping('watching'), 15000);   // heartbeat so a killed session goes stale, not stuck
-  const timer = setTimeout(() => { console.log('still watching (no activity within ' + timeoutSec + 's)\n\nDONE: false'); leave(1); }, timeoutSec * 1000);
+  const timer = setTimeout(() => { console.log('still watching (no activity within ' + timeoutSec + 's)\n\nDONE: false'); leave(1, 'idle'); }, timeoutSec * 1000);
   const watcher = chokidar.watch([sidecarPath(abs), abs], { ignoreInitial: true });
-  watcher.on('all', () => { if (emitDelta()) leave(0); });
-  process.on('SIGINT', () => leave(130));
+  // Alex acted → the wait exits, but I'm now HANDLING it. Ping "working" (NOT idle) so the browser reads
+  // "claude is working…" through my response window instead of "waiting for claude". Re-arming → "here".
+  watcher.on('all', () => { if (emitDelta()) leave(0, 'working'); });
+  process.on('SIGINT', () => leave(130, 'idle'));
 }
 if (process.argv[2] === 'wait') { runWait(process.argv.slice(3)); return; }   // subcommand: don't boot the server
 
