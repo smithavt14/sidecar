@@ -99,7 +99,11 @@ function runWait(argv) {
       const q = clip(it.anchor && it.anchor.quote);
       const b = base.items[it.id];
       if (!b) {   // brand-new item since the wait began
-        if (it.by === 'alex') { const m = (it.thread || []).slice(-1)[0]; lines.push(`- NEW ${it.flag ? 'flag' : it.kind} @ “${q}”: ${m ? m.text : ''}`); }
+        // A `run: true` comment gets its own RUN line so the agent can tell "act on this" from
+        // "discuss this" without parsing anything. margin makes no claim about WHAT the work is —
+        // that reading belongs entirely to the agent; here it's just a louder ask.
+        if (it.by === 'alex') { const m = (it.thread || []).slice(-1)[0], t = m ? m.text : '';
+          lines.push(it.run ? `- RUN @ “${q}”: ${t}` : `- NEW ${it.flag ? 'flag' : it.kind} @ “${q}”: ${t}`); }
         continue;
       }
       for (const m of (it.thread || []).slice(b.threadLen)) if (m.by === 'alex') lines.push(`- REPLY @ “${q}”: ${m.text}`);

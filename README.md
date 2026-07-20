@@ -60,11 +60,17 @@ it publicly.
   an existing heading to re-level it.
 - **Block styles:** highlight text, then the toolbar's ¶ / H1 / H2 / H3 convert the block (or turn a
   heading back into body text).
-- Select text for a floating toolbar: bold, italic (⌘B/⌘I), link, comment, flag.
+- Select text for a floating toolbar: bold, italic (⌘B/⌘I), link, comment, flag, run.
 
 **Comment.** Select text, then comment. Threads reply and resolve. Every open comment or suggestion softly
 highlights its span in the document; tap the highlight to open its card, tap a card's quote to jump to the
 text.
+
+**Run.** Point at a line and hit **run** to tell the watching agent "act on this now." It posts an
+ordinary comment marked `run: true`, which the agent's `margin wait` digest shows as a `RUN` line; the
+agent does the work and answers in the thread. margin itself does not interpret the requested work — it
+never parses the line, knows nothing about tasks or task syntax, and tracks no jobs, queue, or run
+history. It only carries the request and the reply; the meaning lives in your agent.
 
 **Suggest** (your agent). Suggestion cards propose a replacement for a quoted span, shown as a word-level
 diff. Accept applies it to the real file; reject leaves it. Comments and suggestions anchor to quoted

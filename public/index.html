@@ -88,6 +88,11 @@
     border:1px solid var(--line-strong); color:var(--muted); }
   .card .badge.suggestion { color:var(--fg); border-color:var(--fg); }
   .card .badge.flag { background:var(--accent); color:var(--accent-fg); border-color:var(--fg); }
+  /* run = "act on this now". Inverted ink chip: unmistakable against comment/flag at a glance, but
+     monochrome and quiet — no stripe, no glow. margin doesn't know what the work IS; this is only a
+     louder way of saying "please do this", so it must not out-shout the accent. */
+  .card .badge.run { background:var(--fg); color:var(--bg); border-color:var(--fg); }
+  .card.run { border-color:var(--line-strong); }
   .card .badge.orphaned { color:var(--muted); border-color:var(--muted); }
   .msg { margin:7px 0; } .msg .t { color:var(--fg); }
   /* diffs stay monochrome+yellow: additions get the electric highlight, deletions a muted strike */
@@ -246,6 +251,7 @@
   <button data-op="link">link</button>
   <button data-op="comment">comment</button>
   <button data-op="flag" title="Flag for review">flag</button>
+  <button data-op="run" title="Ask the agent to act on this now">run</button>
 </div>
 <div id="popover"></div>
 <div id="banner"></div>
@@ -645,6 +651,7 @@ $('seltool').addEventListener('click', (e) => {
   else if (op === 'link') openLinkInput();
   else if (op === 'comment') openComment();
   else if (op === 'flag') flag();
+  else if (op === 'run') run();
   else if (op === 'p' || op === 'h1' || op === 'h2' || op === 'h3') setBlockFormat(op);
 });
 
@@ -742,6 +749,17 @@ async function flag() {
     anchor: { quote: pendingSel, occurrence: occurrenceFor(pendingSel, pendingSelBlock, pendingSelOffset) }, status: 'open',
     thread: [{ by: 'alex', at: new Date().toISOString(), text: '🚩 Flagged for review.' }] });
 }
+// Run: "act on this now" — a comment carrying `run: true`, nothing more. It reuses the whole comment
+// machinery (thread, resolve, orphan), so the agent answers in the thread like any other card. margin
+// does NOT read the anchored text, parse it, or model the work: whether that line is a task, a query,
+// or nonsense is entirely the agent's business. This is shorthand for a comment Alex could have typed.
+async function run() {
+  hideTool();
+  await flushSave();
+  await pushReviewItem({ id: 'r' + Date.now(), kind: 'comment', by: 'alex', run: true,
+    anchor: { quote: pendingSel, occurrence: occurrenceFor(pendingSel, pendingSelBlock, pendingSelOffset) }, status: 'open',
+    thread: [{ by: 'alex', at: new Date().toISOString(), text: 'Run this.' }] });
+}
 // ⌘B / ⌘I are handled natively by the contenteditable surface (fires 'input' → debounced save).
 
 // ---------- sidebar ----------
@@ -774,8 +792,10 @@ function renderSide() {
   side.innerHTML = top.length ? '' : `<div class="empty">no open items.${done ? ` (${done} settled)` : ''}<br>select text to comment.</div>`;
   for (const it of top) {
     const el = document.createElement('div');
-    el.className = 'card'; el.dataset.id = it.id;
-    let head = `<span class="who ${it.by}">${it.by}</span> <span class="badge ${it.flag ? 'flag' : it.kind}">${it.flag ? 'flag' : it.kind}</span>`;
+    el.className = 'card' + (it.run ? ' run' : ''); el.dataset.id = it.id;
+    // run beats flag beats kind — a run request must read as "do this", not as one more comment.
+    const label = it.run ? 'run' : it.flag ? 'flag' : it.kind;
+    let head = `<span class="who ${it.by}">${it.by}</span> <span class="badge ${label}">${label}</span>`;
     if (it.status === 'orphaned') head += ' <span class="badge orphaned">orphaned — text changed</span>';
     // No interpolated inline handlers: the id lives on the card's data-id (set safely above) and every
     // control carries a static data-action, dispatched by the delegated listeners on #side (see below).
