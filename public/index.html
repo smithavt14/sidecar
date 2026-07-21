@@ -781,6 +781,16 @@ function nestedSugHtml(sug) {
 }
 function renderSide() {
   const side = $('side');
+  // Preserve any reply the user is mid-typing. renderSide rebuilds every card via innerHTML, and it
+  // fires on our own sidecar writes AND on presence heartbeats — either would otherwise wipe an unsaved
+  // reply and its caret out from under them. Capture now, restore after the rebuild (below).
+  const active = document.activeElement;
+  const drafts = {};
+  for (const ta of side.querySelectorAll('textarea.reply')) {
+    if (!ta.value) continue;
+    const card = ta.closest('[data-id]');
+    if (card) drafts[card.dataset.id] = { value: ta.value, focused: ta === active, start: ta.selectionStart, end: ta.selectionEnd };
+  }
   const items = state.review.items.filter(i => !['resolved','accepted','rejected'].includes(i.status));
   // Reply suggestions render nested under their parent comment, not as their own top-level card.
   const childSug = {};
@@ -825,6 +835,15 @@ function renderSide() {
     f.title = "Finish — I'll make the single commit";
     f.onclick = markDone;
     side.appendChild(f);
+  }
+  // Restore in-progress replies captured before the rebuild (see top of renderSide).
+  for (const id in drafts) {
+    const card = side.querySelector('.card[data-id="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]');
+    const ta = card && card.querySelector('textarea.reply');
+    if (!ta) continue;
+    const d = drafts[id];
+    ta.value = d.value; autogrow(ta);
+    if (d.focused) { ta.focus(); try { ta.setSelectionRange(d.start, d.end); } catch (_) {} }
   }
   markAnchors();   // refresh the in-doc highlight cues to match the current items
   renderTurn();    // right cluster: open / orphaned counts
@@ -878,6 +897,7 @@ async function reply(id, input) {
   if (!input.value.trim()) return;
   const it = state.review.items.find(i => i.id === id);
   it.thread.push({ by: 'alex', at: new Date().toISOString(), text: input.value.trim() });
+  input.value = '';   // clear before any re-render so the capture/restore above doesn't repopulate the sent text
   const r = await api('PUT', '/api/review', { path: FILE, review: state.review });
   state.review = r.review;
   renderSide();
