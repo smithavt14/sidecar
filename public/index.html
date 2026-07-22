@@ -816,7 +816,7 @@ function renderSide() {
       body += `<div class="row"><button class="primary" data-action="accept">accept</button>
                <button data-action="reject">reject</button></div>`;
     } else {
-      body += (it.thread || []).map(m => `<div class="msg"><span class="who ${m.by}">${m.by}</span> <span class="t">${esc(m.text)}</span></div>`).join('');
+      body += (it.thread || []).slice().sort((a, b) => (a.at || '').localeCompare(b.at || '')).map(m => `<div class="msg"><span class="who ${m.by}">${m.by}</span> <span class="t">${esc(m.text)}</span></div>`).join('');
       for (const sug of (childSug[it.id] || [])) body += nestedSugHtml(sug);   // my proposed edits, inline in the thread
       body += `<div class="row"><textarea class="reply" rows="1" placeholder="reply…" oninput="autogrow(this)" data-action="reply"></textarea></div>
                <div class="row spread"><button class="ghost" data-action="resolve">resolve</button>
