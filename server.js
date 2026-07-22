@@ -219,11 +219,17 @@ app.get('/api/files', (req, res) => {
         const rel = path.relative(BASE_DIR, abs);
         const review = loadReview(abs);
         const open = review.items.filter(i => ['open', 'pending', 'orphaned'].includes(i.status)).length;
-        files.push({ rel, open, hasReview: fs.existsSync(sidecarPath(abs)) });
+        const scPath = sidecarPath(abs);
+        const hasReview = fs.existsSync(scPath);
+        // "last reviewed" = the most recent change to the doc OR its sidecar (an edit, accept, or comment
+        // bumps one of the two), so a document you touched five minutes ago sorts to the top.
+        let mtime = fs.statSync(abs).mtimeMs;
+        if (hasReview) { try { mtime = Math.max(mtime, fs.statSync(scPath).mtimeMs); } catch (_) {} }
+        files.push({ rel, open, hasReview, mtime });
       }
     }
   })(BASE_DIR);
-  files.sort((a, b) => b.open - a.open || a.rel.localeCompare(b.rel));
+  files.sort((a, b) => b.mtime - a.mtime);   // most-recently-reviewed first
   res.json({ files, defaultFile: rootIsFile ? path.relative(BASE_DIR, ROOT) : null });
 });
 

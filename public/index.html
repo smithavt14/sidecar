@@ -48,7 +48,10 @@
   /* header — white chrome, lowercase wordmark, hairline rule */
   header { position:sticky; top:0; z-index:20; background:var(--bg); border-bottom:1px solid var(--line); }
   .hwrap { position:relative; display:flex; align-items:center; gap:13px; max-width:1280px; margin:0 auto; padding:14px 40px; }
-  header h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:-.02em; display:flex; align-items:center; gap:9px; min-width:0; }
+  header h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:-.02em; display:flex; align-items:center; min-width:0; }
+  header h1 .home { display:flex; align-items:center; gap:9px; min-width:0; text-decoration:none; color:inherit;
+    border-radius:8px; padding:2px 4px; margin:-2px -4px; transition:background .15s ease; }
+  header h1 .home:hover { background:var(--fill); }
   header h1 .mark { height:22px; width:auto; flex:none; display:block; }
   header h1 .wm { color:var(--ink); font-weight:600; }
   header h1 #fname { color:var(--muted); font-weight:400; letter-spacing:0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -156,6 +159,15 @@
   #seltool button { background:none; border:none; box-shadow:none; color:var(--fg); padding:6px 11px;
     border-radius:7px; font-size:13px; font-weight:600; line-height:1; }
   #seltool button:hover { background:var(--fill); color:var(--ink); }
+  /* text-style dropdown — a single control replacing the ¶/h1/h2/h3 row */
+  #seltool .fmt { position:relative; display:inline-flex; }
+  #seltool .fmt-btn { display:inline-flex; align-items:center; gap:3px; }
+  #seltool .fmt-btn .car { font-size:9px; opacity:.55; }
+  #seltool .fmt-menu { position:absolute; top:calc(100% + 5px); left:0; z-index:1;
+    background:var(--bg); border:1px solid var(--line-2); border-radius:10px; box-shadow:var(--shadow);
+    padding:4px; display:flex; flex-direction:column; gap:1px; min-width:132px; }
+  #seltool .fmt-menu[hidden] { display:none; }
+  #seltool .fmt-menu button { display:block; width:100%; text-align:left; white-space:nowrap; }
   #seltool b { font-weight:800; } #seltool i { font-style:italic; font-family:Georgia,serif; }
   #seltool .tsep { width:1px; height:16px; background:var(--line-2); margin:0 3px; }
   #seltool input { background:var(--bg); border:1px solid var(--line-2); color:var(--fg); border-radius:7px;
@@ -163,6 +175,13 @@
   #seltool input:focus { border-color:var(--ink-btn); box-shadow:var(--ring); }
   #popover { position:absolute; display:none; z-index:31; background:var(--bg); border:1px solid var(--line-2);
     border-radius:12px; box-shadow:var(--shadow); padding:13px; width:300px; }
+  /* drag handle — grab this to move the comment box off the text you're commenting on */
+  #popover .po-head { display:flex; align-items:center; justify-content:space-between; gap:8px;
+    margin:-13px -13px 11px; padding:8px 13px; border-bottom:1px solid var(--line);
+    border-radius:12px 12px 0 0; cursor:grab; user-select:none; touch-action:none; }
+  #popover .po-head:active { cursor:grabbing; }
+  #popover .po-title { font-size:10.5px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); }
+  #popover .po-grip { color:var(--faint); font-size:13px; line-height:1; letter-spacing:1.5px; }
   #popover textarea { width:100%; min-height:66px; max-height:40vh; overflow-y:auto; font:inherit; font-size:13px;
     border:1px solid var(--line-2); border-radius:9px; padding:8px 10px; resize:vertical; outline:none;
     background:var(--bg); color:var(--fg); }
@@ -216,7 +235,9 @@
   #filelist a .nm { font-size:14.5px; font-weight:500; }
   #filelist a .ext { font-family:'Geist Mono', ui-monospace, monospace; font-size:11px; color:var(--fainter); }
   #filelist a .sp { flex:1; }
-  #filelist a .none { font-size:12px; color:#c2c2ba; }
+  #filelist a .ago { font-size:11.5px; color:var(--faint); font-family:'Geist Mono', ui-monospace, monospace;
+    white-space:nowrap; }
+  #filelist a .none { font-size:12px; color:#c2c2ba; min-width:20px; text-align:center; }
   /* open-count pill — grey chip carrying a single yellow dot (the agent has notes waiting) */
   .count { display:inline-flex; align-items:center; gap:6px; background:#f6f6f2; color:#57574f;
     border-radius:20px; font-size:12px; padding:3px 10px; font-weight:600; }
@@ -232,9 +253,10 @@
     #pwd { padding:16px 18px 0; font-size:12px; }
     #doc { padding: 8px 18px 42vh; font-size: 16px; line-height:1.62; }
     #doc h1 { font-size:25px; } #doc h2 { font-size:18px; }
-    .hwrap { padding:11px 18px; gap:10px; }
+    /* clear the notch/status bar: pad the top by the safe-area inset so the bar isn't cramped or hidden */
+    .hwrap { padding:14px 18px; padding-top:calc(14px + env(safe-area-inset-top)); gap:10px; }
     header h1 { font-size:15px; max-width:56vw; }
-    header h1 .mark { height:19px; }
+    header h1 .mark { height:20px; }
     #status { min-width:0; }
     .presence { display:none; }   /* absolute-center collides with the cramped mobile header — TODO: reposition for mobile */
     #filelist { padding:28px 18px; }
@@ -274,8 +296,10 @@
 <header>
   <div class="hwrap">
     <h1 class="brand">
-      <img class="mark" src="/mark.svg" alt="" aria-hidden="true">
-      <span class="wm">sidecar</span>
+      <a href="/" class="home" title="all documents">
+        <img class="mark" src="/mark.svg" alt="" aria-hidden="true">
+        <span class="wm">sidecar</span>
+      </a>
     </h1>
     <div id="presence" class="presence away"></div>
     <div class="spacer"></div>
@@ -293,18 +317,21 @@
 </main>
 <div id="filelist" style="display:none"></div>
 <div id="seltool">
-  <button data-op="p" title="Normal text">¶</button>
-  <button data-op="h1" title="Heading 1">H1</button>
-  <button data-op="h2" title="Heading 2">H2</button>
-  <button data-op="h3" title="Heading 3">H3</button>
+  <div class="fmt">
+    <button data-op="fmt-toggle" class="fmt-btn" title="Text style">¶<span class="car">▾</span></button>
+    <div class="fmt-menu" hidden>
+      <button data-op="p">¶&nbsp;&nbsp;text</button>
+      <button data-op="h1">heading 1</button>
+      <button data-op="h2">heading 2</button>
+      <button data-op="h3">heading 3</button>
+    </div>
+  </div>
   <span class="tsep"></span>
   <button data-op="bold" title="Bold (⌘B)"><b>B</b></button>
   <button data-op="italic" title="Italic (⌘I)"><i>I</i></button>
   <span class="tsep"></span>
   <button data-op="link">link</button>
   <button data-op="comment">comment</button>
-  <button data-op="flag" title="Flag for review">flag</button>
-  <button data-op="run" title="Ask the agent to act on this now">run</button>
 </div>
 <div id="popover"></div>
 <div id="banner"></div>
@@ -352,6 +379,19 @@ function reindex() { blocks = Serialize.reindex($('doc'), blocks, state.markdown
 
 const $ = (id) => document.getElementById(id);
 
+// Relative "last reviewed" label for the file picker (mtime of the doc or its sidecar, whichever is newer).
+function timeAgo(ms) {
+  if (!ms) return '';
+  const s = Math.max(0, (Date.now() - ms) / 1000);
+  if (s < 60) return 'just now';
+  const m = s / 60; if (m < 60) return Math.floor(m) + 'm ago';
+  const h = m / 60; if (h < 24) return Math.floor(h) + 'h ago';
+  const d = h / 24; if (d < 7) return Math.floor(d) + 'd ago';
+  const w = d / 7; if (w < 5) return Math.floor(w) + 'w ago';
+  const mo = d / 30; if (mo < 12) return Math.floor(mo) + 'mo ago';
+  return Math.floor(d / 365) + 'y ago';
+}
+
 async function api(method, url, body) {
   const r = await fetch(url, { method, headers: {'Content-Type':'application/json'},
     body: body ? JSON.stringify(body) : undefined });
@@ -366,9 +406,10 @@ async function boot() {
     if (defaultFile) { location.search = '?f=' + encodeURIComponent(defaultFile); return; }
     $('main').style.display = 'none'; $('filelist').style.display = 'block';
     const ext = (p) => { const b = p.split('/').pop(); const i = b.lastIndexOf('.'); return i > 0 ? b.slice(i + 1) : ''; };
-    $('filelist').innerHTML = '<div class="h">pick a file</div><div class="sub">select a document to review.</div>' + files.map(f =>
+    $('filelist').innerHTML = '<div class="h">pick a file</div><div class="sub">documents, most recently reviewed first.</div>' + files.map(f =>
       `<a href="/?f=${encodeURIComponent(f.rel)}"><span class="ext">${esc(ext(f.rel))}</span>` +
       `<span class="nm">${esc(f.rel)}</span><span class="sp"></span>` +
+      `<span class="ago">${esc(timeAgo(f.mtime))}</span>` +
       (f.open ? `<span class="count">${f.open}</span>` : `<span class="none">—</span>`) + `</a>`).join('');
     return;
   }
@@ -702,14 +743,21 @@ function hidePopover() { $('popover').style.display = 'none'; $('popover').inner
 $('seltool').addEventListener('mousedown', (e) => e.preventDefault()); // keep the text selection alive
 $('seltool').addEventListener('click', (e) => {
   const op = e.target.closest('button') && e.target.closest('button').dataset.op;
-  if (!op || !pendingSel) return;
+  if (!op) return;
+  if (op === 'fmt-toggle') { toggleFmtMenu(); return; }   // open/close the text-style dropdown
+  if (!pendingSel) return;
   if (op === 'bold' || op === 'italic') exec(op);
   else if (op === 'link') openLinkInput();
   else if (op === 'comment') openComment();
-  else if (op === 'flag') flag();
-  else if (op === 'run') run();
   else if (op === 'p' || op === 'h1' || op === 'h2' || op === 'h3') setBlockFormat(op);
 });
+// The text-style dropdown (¶ / h1–h3). Lives inside #seltool so the toolbar's mousedown-preventDefault
+// keeps the text selection alive; setBlockFormat restores savedRange, same as the old inline buttons.
+function toggleFmtMenu(force) {
+  const m = $('seltool').querySelector('.fmt-menu'); if (!m) return;
+  const open = force === undefined ? m.hasAttribute('hidden') : force;
+  if (open) m.removeAttribute('hidden'); else m.setAttribute('hidden', '');
+}
 
 // Change the selected block between normal text (p) and headings (h1–h3) — the reverse of type-to-format,
 // and the way OUT of a heading. Only simple text blocks convert; lists/tables/quotes/code are left alone.
@@ -730,10 +778,15 @@ function setBlockFormat(tag) {
 
 // Position the popover just below where the toolbar sits.
 function popoverAt() {
-  const st = $('seltool'), po = $('popover');
-  po.style.left = Math.max(8, Math.min(parseInt(st.style.left) || 0, innerWidth - 320)) + 'px';
-  po.style.top = ((selRect.top + scrollY) + 8) + 'px';
-  po.style.display = 'block';
+  const po = $('popover');
+  po.style.display = 'block';                              // display first so we can measure it
+  const w = po.offsetWidth || 300, h = po.offsetHeight || 170;
+  const left = Math.max(12, Math.min(selRect.left, innerWidth - w - 12));
+  // Prefer BELOW the selection so the text you're commenting on stays visible; flip above if no room.
+  let top = selRect.bottom + 10;
+  if (top + h > innerHeight - 12) top = Math.max(12, selRect.top - h - 10);
+  po.style.left = (left + scrollX) + 'px';
+  po.style.top = (top + scrollY) + 'px';
 }
 
 // Restore the pre-toolbar selection, then run a rich-text command; the debounced save serializes it.
@@ -767,10 +820,12 @@ function openLinkInput() {
 function openComment() {
   hideTool();
   const po = $('popover');
-  po.innerHTML = `<textarea id="pobody" placeholder="comment…"></textarea>
+  po.innerHTML = `<div class="po-head" id="poHead"><span class="po-title">comment</span><span class="po-grip">⠿</span></div>
+    <textarea id="pobody" placeholder="comment…"></textarea>
     <div class="row"><button class="ghost" id="poCancel">cancel</button>
     <button class="primary" id="poSubmit">comment</button></div>`;
   popoverAt();
+  makeDraggable(po, $('poHead'));   // drag the header to move it off the text you're commenting on
   const ta = $('pobody'); ta.focus();
   $('poCancel').onclick = hidePopover;
   $('poSubmit').onclick = submitComment;
@@ -779,6 +834,32 @@ function openComment() {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submitComment(); }
     if (e.key === 'Escape') hidePopover();
   });
+}
+// Drag an absolutely-positioned element by a handle. Delta-based (origin-agnostic), pointer events for
+// mouse+touch, clamped so it can't be dragged fully off-screen.
+function makeDraggable(el, handle) {
+  let sx, sy, ox, oy, dragging = false;
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button != null && e.button !== 0) return;
+    dragging = true;
+    try { handle.setPointerCapture(e.pointerId); } catch (_) {}
+    sx = e.clientX; sy = e.clientY;
+    ox = parseFloat(el.style.left) || 0; oy = parseFloat(el.style.top) || 0;
+    e.preventDefault();
+  });
+  handle.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const nx = ox + (e.clientX - sx), ny = oy + (e.clientY - sy);
+    el.style.left = nx + 'px'; el.style.top = ny + 'px';
+    const r = el.getBoundingClientRect();   // keep it reachable — nudge back inside the viewport
+    let ax = 0, ay = 0;
+    if (r.left < 6) ax = 6 - r.left; else if (r.right > innerWidth - 6) ax = (innerWidth - 6) - r.right;
+    if (r.top < 6) ay = 6 - r.top; else if (r.bottom > innerHeight - 6) ay = (innerHeight - 6) - r.bottom;
+    if (ax || ay) { el.style.left = (nx + ax) + 'px'; el.style.top = (ny + ay) + 'px'; }
+  });
+  const end = (e) => { if (dragging) { dragging = false; try { handle.releasePointerCapture(e.pointerId); } catch (_) {} } };
+  handle.addEventListener('pointerup', end);
+  handle.addEventListener('pointercancel', end);
 }
 
 async function pushReviewItem(item) {
@@ -797,25 +878,9 @@ async function submitComment() {
   hidePopover();
   await pushReviewItem(item);
 }
-// Flag: one click, no typing — an open item the agent will see anchored to the selection.
-async function flag() {
-  hideTool();
-  await flushSave();
-  await pushReviewItem({ id: 'f' + Date.now(), kind: 'comment', by: 'alex', flag: true,
-    anchor: { quote: pendingSel, occurrence: occurrenceFor(pendingSel, pendingSelBlock, pendingSelOffset) }, status: 'open',
-    thread: [{ by: 'alex', at: new Date().toISOString(), text: '🚩 Flagged for review.' }] });
-}
-// Run: "act on this now" — a comment carrying `run: true`, nothing more. It reuses the whole comment
-// machinery (thread, resolve, orphan), so the agent answers in the thread like any other card. sidecar
-// does NOT read the anchored text, parse it, or model the work: whether that line is a task, a query,
-// or nonsense is entirely the agent's business. This is shorthand for a comment Alex could have typed.
-async function run() {
-  hideTool();
-  await flushSave();
-  await pushReviewItem({ id: 'r' + Date.now(), kind: 'comment', by: 'alex', run: true,
-    anchor: { quote: pendingSel, occurrence: occurrenceFor(pendingSel, pendingSelBlock, pendingSelOffset) }, status: 'open',
-    thread: [{ by: 'alex', at: new Date().toISOString(), text: 'Run this.' }] });
-}
+// flag/run were removed as selection-toolbar actions (2026-07-22). Existing flag/run items in a sidecar
+// still render (renderSide keys off it.flag / it.run), and an agent can still write them into the JSON
+// directly; there is just no longer a button to create them by hand.
 // ⌘B / ⌘I are handled natively by the contenteditable surface (fires 'input' → debounced save).
 
 // ---------- sidebar ----------
