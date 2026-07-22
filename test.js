@@ -1,4 +1,4 @@
-/* margin test suite — spins the real server against a temp fixture dir and hits the real API.
+/* sidecar test suite — spins the real server against a temp fixture dir and hits the real API.
    Run: npm test */
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
@@ -60,11 +60,11 @@ const rawGet = (pathname, host) => new Promise((resolve, reject) => {
 });
 
 before(async () => {
-  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'margin-test-'));
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-test-'));
   fs.writeFileSync(path.join(dir, 'doc.md'), DOC);
   execSync('git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm init', { cwd: dir });
   proc = spawn('node', [path.join(__dirname, 'server.js'), dir],
-    { env: { ...process.env, MARGIN_PORT: PORT }, stdio: 'pipe' });
+    { env: { ...process.env, SIDECAR_PORT: PORT }, stdio: 'pipe' });
   await new Promise((res, rej) => {
     proc.stdout.on('data', (d) => { if (d.toString().includes('ready')) res(); });
     proc.on('exit', () => rej(new Error('server died')));
@@ -656,13 +656,13 @@ test('accept of a replyTo suggestion applies the edit AND resolves its parent co
   assert.match(fs.readFileSync(f, 'utf8'), /RESOLVED replacement line\./);
 });
 
-test('margin wait wakes on a new alex comment and exits 0 with a digest', async () => {
+test('sidecar wait wakes on a new alex comment and exits 0 with a digest', async () => {
   const wf = path.join(dir, 'waitdoc.md');
   fs.writeFileSync(wf, '# W\n\nSome content here.\n');
   fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [] }));
-  // MARGIN_PORT points at a dead port so the best-effort presence ping just errors out harmlessly.
+  // SIDECAR_PORT points at a dead port so the best-effort presence ping just errors out harmlessly.
   const w = spawn('node', [path.join(__dirname, 'server.js'), 'wait', wf, '--timeout', '10'],
-    { env: { ...process.env, MARGIN_PORT: '4990' }, stdio: 'pipe' });
+    { env: { ...process.env, SIDECAR_PORT: '4990' }, stdio: 'pipe' });
   let out = ''; w.stdout.on('data', (d) => out += d.toString());
   await new Promise((res) => setTimeout(res, 900));   // let the fs-watcher attach
   fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [
@@ -675,12 +675,12 @@ test('margin wait wakes on a new alex comment and exits 0 with a digest', async 
   assert.match(out, /DONE: false/);
 });
 
-test('margin wait --timeout exits non-zero when nothing happens', async () => {
+test('sidecar wait --timeout exits non-zero when nothing happens', async () => {
   const wf = path.join(dir, 'waitdoc2.md');
   fs.writeFileSync(wf, '# W2\n');
   fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [] }));
   const w = spawn('node', [path.join(__dirname, 'server.js'), 'wait', wf, '--timeout', '1'],
-    { env: { ...process.env, MARGIN_PORT: '4990' }, stdio: 'pipe' });
+    { env: { ...process.env, SIDECAR_PORT: '4990' }, stdio: 'pipe' });
   let out = ''; w.stdout.on('data', (d) => out += d.toString());
   const code = await new Promise((res) => w.on('exit', res));
   assert.equal(code, 1, 'timeout exits non-zero');
@@ -688,7 +688,7 @@ test('margin wait --timeout exits non-zero when nothing happens', async () => {
 });
 
 // ---------- run action: a comment carrying `run: true` ----------
-// margin stores and surfaces the request; it never interprets the anchored text. These tests assert
+// sidecar stores and surfaces the request; it never interprets the anchored text. These tests assert
 // exactly that scope: the flag round-trips, the digest calls it out, and everything else (threading,
 // resolution, orphaning) behaves like the ordinary comment it is.
 
@@ -706,12 +706,12 @@ test('run item round-trips through review PUT with run:true intact', async () =>
   assert.equal(stored.status, 'open');
 });
 
-test('margin wait digests a run request as a RUN line, distinct from a plain comment', async () => {
+test('sidecar wait digests a run request as a RUN line, distinct from a plain comment', async () => {
   const wf = path.join(dir, 'runwait.md');
   fs.writeFileSync(wf, '# RW\n\nShip the newsletter draft.\n\nSome other prose.\n');
   fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [] }));
   const w = spawn('node', [path.join(__dirname, 'server.js'), 'wait', wf, '--timeout', '10'],
-    { env: { ...process.env, MARGIN_PORT: '4990' }, stdio: 'pipe' });
+    { env: { ...process.env, SIDECAR_PORT: '4990' }, stdio: 'pipe' });
   let out = ''; w.stdout.on('data', (d) => out += d.toString());
   await new Promise((res) => setTimeout(res, 900));   // let the fs-watcher attach
   fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [

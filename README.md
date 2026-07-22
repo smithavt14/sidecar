@@ -1,20 +1,20 @@
-# margin
+# sidecar
 
-[![test](https://github.com/smithavt14/margin/actions/workflows/test.yml/badge.svg)](https://github.com/smithavt14/margin/actions/workflows/test.yml)
+[![test](https://github.com/smithavt14/sidecar/actions/workflows/test.yml/badge.svg)](https://github.com/smithavt14/sidecar/actions/workflows/test.yml)
 
 **A better way to work on documents with your AI agent.**
 
-![Reviewing a document in margin: a suggestion card with a word-level diff, and a comment thread](docs/example.png)
+![Reviewing a document in sidecar: a suggestion card with a word-level diff, and a comment thread](docs/example.png)
 
 Reviewing a document with an AI usually means pasting it back and forth. A few web tools do this well,
 with comment threads and tracked suggestions.
 
-margin does the same, but entirely local. No upload, no network requests, no account. It works on the
+sidecar does the same, but entirely local. No upload, no network requests, no account. It works on the
 files already on your disk, and your agent works those same files. To review from your phone, expose it
 over your own Tailscale network.
 
 > **Built by [spktr](https://spktr.ai),** an applied-AI studio. We help small businesses put AI to work,
-> and we build tools for the people building *with* AI. margin is one of those tools.
+> and we build tools for the people building *with* AI. sidecar is one of those tools.
 
 ---
 
@@ -39,15 +39,15 @@ to review it on their own machine, owning their files.
 ## Quickstart
 
 ```bash
-git clone https://github.com/smithavt14/margin && cd margin
+git clone https://github.com/smithavt14/sidecar && cd sidecar
 npm install
 npm start -- ~/path/to/your/docs      # → http://localhost:4880
 ```
 
-Then tell your agent: *"review draft.md in margin."* It writes the sidecar; you review in the browser.
+Then tell your agent: *"review draft.md in sidecar."* It writes the sidecar; you review in the browser.
 
-**Review on your phone** (optional): `./scripts/tailscale-serve.sh` proxies margin onto your private
-[Tailscale](https://tailscale.com) tailnet. Tailnet-only: margin has no auth, so never `tailscale funnel`
+**Review on your phone** (optional): `./scripts/tailscale-serve.sh` proxies sidecar onto your private
+[Tailscale](https://tailscale.com) tailnet. Tailnet-only: sidecar has no auth, so never `tailscale funnel`
 it publicly.
 
 ---
@@ -67,8 +67,8 @@ highlights its span in the document; tap the highlight to open its card, tap a c
 text.
 
 **Run.** Point at a line and hit **run** to tell the watching agent "act on this now." It posts an
-ordinary comment marked `run: true`, which the agent's `margin wait` digest shows as a `RUN` line; the
-agent does the work and answers in the thread. margin itself does not interpret the requested work — it
+ordinary comment marked `run: true`, which the agent's `sidecar wait` digest shows as a `RUN` line; the
+agent does the work and answers in the thread. sidecar itself does not interpret the requested work — it
 never parses the line, knows nothing about tasks or task syntax, and tracks no jobs, queue, or run
 history. It only carries the request and the reply; the meaning lives in your agent.
 
@@ -77,7 +77,7 @@ diff. Accept applies it to the real file; reject leaves it. Comments and suggest
 text, not line or character offsets: if the text moves, the anchor follows; if it's gone, the item goes
 orphaned (loud and visible) instead of editing the wrong place.
 
-**Collaborate live** (optional). Your agent can run `margin wait <file>` to watch the review and respond the
+**Collaborate live** (optional). Your agent can run `sidecar wait <file>` to watch the review and respond the
 moment you comment — proposing rewrites right inside your comment threads — then commit once when you click
 done. See [AGENTS.md](AGENTS.md).
 
@@ -88,9 +88,9 @@ untouched block keeps its exact original bytes, so `git diff` shows just what ch
 
 ## Safety model
 
-margin is a single-user, local, no-auth tool, hardened for that threat model:
+sidecar is a single-user, local, no-auth tool, hardened for that threat model:
 
-- Binds to `127.0.0.1` and validates the `Host` header (an allowlist; add hosts via `MARGIN_HOSTS`).
+- Binds to `127.0.0.1` and validates the `Host` header (an allowlist; add hosts via `SIDECAR_HOSTS`).
   Loopback binding alone doesn't stop DNS-rebinding, so the Host check is enforced.
 - Rendered markdown is sanitized with DOMPurify, so a hostile `<img onerror>` in a file can't execute.
 - File access is confined to the served directory (path-traversal guarded), and `git diff` runs without a

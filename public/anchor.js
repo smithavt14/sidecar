@@ -1,4 +1,4 @@
-/* margin — the ONE content-anchor matcher, shared by server (accept/format/orphan) and client
+/* sidecar — the ONE content-anchor matcher, shared by server (accept/format/orphan) and client
    (occurrenceFor / highlight). Before this existed the server matched raw bytes with no whitespace
    normalization while the client normalized `\s+`→' ', so a quote spanning a soft line-break counted
    a different number of occurrences on each side — the highlight could point at one duplicate while

@@ -1,5 +1,5 @@
 {
-  "name": "margin",
+  "name": "sidecar",
   "version": "0.1.0",
   "description": "Review documents with your AI agent, locally: comments, suggestion cards with word-level diffs, and rich-text editing on your own files.",
   "keywords": [
@@ -11,18 +11,18 @@
     "suggestions",
     "local-first"
   ],
-  "homepage": "https://github.com/smithavt14/margin#readme",
+  "homepage": "https://github.com/smithavt14/sidecar#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/smithavt14/margin.git"
+    "url": "git+https://github.com/smithavt14/sidecar.git"
   },
   "bugs": {
-    "url": "https://github.com/smithavt14/margin/issues"
+    "url": "https://github.com/smithavt14/sidecar/issues"
   },
   "author": "Alex Smith",
   "license": "MIT",
   "bin": {
-    "margin": "./server.js"
+    "sidecar": "./server.js"
   },
   "scripts": {
     "start": "node server.js",

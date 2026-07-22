@@ -1,4 +1,4 @@
-/* margin — the markdown serialization / tight-diff round-trip, shared by the browser (loaded via
+/* sidecar — the markdown serialization / tight-diff round-trip, shared by the browser (loaded via
    <script>, called from index.html's save path) and Node tests (require'd against a jsdom DOM).
    Extracted verbatim from index.html so the exact same code that runs the live save path is what
    the test suite exercises — no re-implemented turndown config drifting out of sync with the page.

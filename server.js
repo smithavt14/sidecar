@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* margin — local review server. One file, one sidecar, filesystem is the sync layer. */
+/* sidecar — local review server. One file, one sidecar, filesystem is the sync layer. */
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -18,7 +18,7 @@ function pwdFor(abs) {
 const sha = (s) => crypto.createHash('sha1').update(s).digest('hex').slice(0, 12);
 
 const ROOT = path.resolve(process.argv[2] || '.');
-const PORT = process.env.MARGIN_PORT || 4880;
+const PORT = process.env.SIDECAR_PORT || 4880;
 const rootIsFile = fs.existsSync(ROOT) && fs.statSync(ROOT).isFile();
 const BASE_DIR = rootIsFile ? path.dirname(ROOT) : ROOT;
 
@@ -26,9 +26,9 @@ const app = express();
 
 // Host allowlist — binding to loopback is NOT authentication: on a tailnet/LAN the port is
 // reachable, and a browser on any origin can DNS-rebind to 127.0.0.1. Reject unexpected Host
-// headers. MARGIN_HOSTS (comma-separated) is how a user opts their own tailnet hostname in.
+// headers. SIDECAR_HOSTS (comma-separated) is how a user opts their own tailnet hostname in.
 const ALLOWED_HOSTS = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`,
-  ...(process.env.MARGIN_HOSTS || '').split(',').map(s => s.trim()).filter(Boolean)]);
+  ...(process.env.SIDECAR_HOSTS || '').split(',').map(s => s.trim()).filter(Boolean)]);
 app.use((req, res, next) => ALLOWED_HOSTS.has(req.headers.host) ? next() : res.status(403).json({ error: 'host not allowed' }));
 
 app.use(express.json({ limit: '10mb' }));
@@ -61,24 +61,24 @@ function saveReview(abs, review) {
   fs.renameSync(tmp, p);
 }
 
-// ---------- `margin wait <file>` — the reactive-loop primitive (P1) ----------
+// ---------- `sidecar wait <file>` — the reactive-loop primitive (P1) ----------
 // The agent backgrounds this after posting a draft. It fs-watches the sidecar + doc (no server needed,
 // stays true to "the agent works through files") and returns the instant Alex does something: a new
 // comment/reply, an accept/reject/resolve, a direct edit, or hitting "done". Wake-per-event, and it
 // SLEEPS for free in between — the whole point (no polling, no token cost while Alex reviews). One run =
-// one wake; the agent responds in-thread, then backgrounds another `margin wait`. `session.done` ends it.
+// one wake; the agent responds in-thread, then backgrounds another `sidecar wait`. `session.done` ends it.
 function runWait(argv) {
   let file = null, timeoutSec = 900;   // 15-min backstop (Alex's call) so a background wait can't hang forever
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--timeout') timeoutSec = Number(argv[++i]) || timeoutSec;
     else if (!file) file = argv[i];
   }
-  if (!file) { console.error('usage: margin wait <file> [--timeout <seconds>]'); process.exit(2); }
+  if (!file) { console.error('usage: sidecar wait <file> [--timeout <seconds>]'); process.exit(2); }
   const abs = path.resolve(process.cwd(), file);
   // Fail loud: a relative path resolved from the wrong cwd would otherwise silently watch a nonexistent
   // file (and mis-key presence). Prefer an ABSOLUTE path; if relative, it must be relative to the served dir.
   if (!fs.existsSync(abs)) {
-    console.error(`margin wait: no file at ${abs}\nPass an absolute path, or run from the served directory.`);
+    console.error(`sidecar wait: no file at ${abs}\nPass an absolute path, or run from the served directory.`);
     process.exit(2);
   }
   const readSafe = (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return ''; } };
@@ -100,7 +100,7 @@ function runWait(argv) {
       const b = base.items[it.id];
       if (!b) {   // brand-new item since the wait began
         // A `run: true` comment gets its own RUN line so the agent can tell "act on this" from
-        // "discuss this" without parsing anything. margin makes no claim about WHAT the work is —
+        // "discuss this" without parsing anything. sidecar makes no claim about WHAT the work is —
         // that reading belongs entirely to the agent; here it's just a louder ask.
         if (it.by === 'alex') { const m = (it.thread || []).slice(-1)[0], t = m ? m.text : '';
           lines.push(it.run ? `- RUN @ “${q}”: ${t}` : `- NEW ${it.flag ? 'flag' : it.kind} @ “${q}”: ${t}`); }
@@ -112,7 +112,7 @@ function runWait(argv) {
     const done = !!(r.session && r.session.done);
     const docChanged = sha(readSafe(abs)) !== base.docHash;
     if (!lines.length && !docChanged && !done) return false;   // nothing actionable yet — keep sleeping
-    let out = lines.length ? '## margin — your turn\n' + lines.join('\n') : '## margin — Alex finished';
+    let out = lines.length ? '## sidecar — your turn\n' + lines.join('\n') : '## sidecar — Alex finished';
     if (docChanged) { let diff = ''; try { diff = execFileSync('git', ['diff', '--', path.basename(abs)], { cwd: path.dirname(abs) }).toString().trim(); } catch {} if (diff) out += '\n\n### doc changes (git diff)\n```diff\n' + diff + '\n```'; }
     out += '\n\nDONE: ' + (done ? 'true' : 'false');
     console.log(out);
@@ -121,7 +121,7 @@ function runWait(argv) {
 
   // Best-effort presence: tell a running server "Claude is here" so the browser can show it. Purely
   // decorative and server-optional — if the POST fails (server down), the wait still works.
-  const PORT = process.env.MARGIN_PORT || 4880;
+  const PORT = process.env.SIDECAR_PORT || 4880;
   const ping = (state, cb) => {   // cb fires once the POST settles (or 400ms elapses) so an exit-time ping can flush
     let settled = false; const fin = () => { if (!settled) { settled = true; cb && cb(); } };
     try {
@@ -348,7 +348,7 @@ app.post('/api/format', (req, res) => {
 });
 
 // ---------- presence (P1): "is the agent watching this file right now?" ----------
-// Ephemeral + in-memory (keyed by absolute path), written by `margin wait` via POST /api/presence and
+// Ephemeral + in-memory (keyed by absolute path), written by `sidecar wait` via POST /api/presence and
 // read back in /api/state. In-memory, NOT the sidecar, so it never contends with review writes and never
 // lands in git. A missing/stale (>40s, no heartbeat) or idle entry reads as "not here".
 const presence = {};
@@ -393,5 +393,5 @@ app.use((err, req, res, next) => { res.status(err.status || 400).json({ error: e
 
 app.listen(PORT, '127.0.0.1', () => {
   const f = rootIsFile ? `/?f=${encodeURIComponent(path.relative(BASE_DIR, ROOT))}` : '/';
-  console.log(`margin ready → http://localhost:${PORT}${f}  [code ${CODE_STAMP}]`);
+  console.log(`sidecar ready → http://localhost:${PORT}${f}  [code ${CODE_STAMP}]`);
 });

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>margin</title>
+<title>sidecar</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <script src="/anchor.js"></script>   <!-- the shared matcher; server requires the same file so both agree on occurrences -->
@@ -28,7 +28,7 @@
   header { position:sticky; top:0; z-index:20; background:var(--bg); border-bottom:1px solid var(--line); }
   .hwrap { position:relative; display:flex; align-items:center; gap:14px; max-width:1280px; margin:0 auto; padding:12px 40px; }
   header h1 { font-size:16px; margin:0; font-weight:500; letter-spacing:-.02em; display:flex; align-items:center; gap:8px; min-width:0; }
-  /* spktr/margin lockup — ghost mark + wordmark read as a terminal path (spktr is the parent, /margin the tool) */
+  /* spktr/sidecar lockup — ghost mark + wordmark read as a terminal path (spktr is the parent, /sidecar the tool) */
   header h1 .ghost { width:24px; height:24px; flex:none; }
   header h1 .wm { color:var(--fg); font-weight:500; }
   header h1 .wm .sep { color:var(--fg); font-weight:600; margin:0 1px; }
@@ -89,7 +89,7 @@
   .card .badge.suggestion { color:var(--fg); border-color:var(--fg); }
   .card .badge.flag { background:var(--accent); color:var(--accent-fg); border-color:var(--fg); }
   /* run = "act on this now". Inverted ink chip: unmistakable against comment/flag at a glance, but
-     monochrome and quiet — no stripe, no glow. margin doesn't know what the work IS; this is only a
+     monochrome and quiet — no stripe, no glow. sidecar doesn't know what the work IS; this is only a
      louder way of saying "please do this", so it must not out-shout the accent. */
   .card .badge.run { background:var(--fg); color:var(--bg); border-color:var(--fg); }
   .card.run { border-color:var(--line-strong); }
@@ -222,12 +222,12 @@
   <div class="hwrap">
     <h1 class="brand">
       <svg class="ghost" viewBox="86 84 400 400" aria-hidden="true"><g transform="translate(109.24,107.69) scale(1.55172)"><path d="M134.851 16.6635C170.473 21.437 197.917 43.2712 211.86 77.9526C216.684 90.0042 220.008 104.442 221.332 119.205C221.508 121.15 221.773 129.577 221.92 137.916C222.067 146.255 222.332 154.535 222.508 156.332C223.361 165.142 224.214 170.476 226.656 182.115C229.009 193.312 229.48 197.172 229.039 201.415C228.627 205.599 228.068 207.573 226.45 210.932C224.097 215.794 219.655 219.713 214.537 221.452C211.272 222.542 206.036 222.807 202.124 222.07C196.711 221.039 191.416 218.594 186.475 214.881C182.18 211.61 182.239 211.61 179.944 214.38C174.267 221.245 166.207 226.019 157.795 227.522C155 227.993 149.823 227.934 146.823 227.374C139.557 225.989 132.38 222.188 125.614 216.177C123.055 213.879 122.32 213.378 121.79 213.525C121.467 213.614 120.378 214.468 119.408 215.382C115.407 219.212 112.201 221.481 107.524 223.838C96.9932 229.113 86.5214 229.231 76.5202 224.251C72.0196 221.982 66.8131 217.798 63.9892 214.115C62.695 212.435 61.8713 211.993 60.93 212.494C60.6359 212.671 59.2828 213.643 57.9885 214.645C50.9582 220.037 44.1927 222.512 36.6624 222.512C28.2202 222.512 21.3076 218.328 17.6601 211.08C14.6892 205.157 14.2185 197.82 16.1893 188.42C21.4841 163.021 21.8371 160.28 22.1901 138.21C22.3371 129.695 22.5136 122.152 22.6019 121.415C22.6901 120.678 22.896 118.498 23.0725 116.553C24.1903 104.177 27.6025 89.6801 31.9559 78.6893C41.4277 54.8219 57.2825 37.0245 78.6675 26.2399C88.7863 21.1423 100.729 17.6359 111.76 16.5456C113.554 16.3688 115.407 16.1626 115.878 16.1036C118.055 15.809 131.38 16.192 134.851 16.6635Z" fill="var(--fg)" stroke="var(--fg)" stroke-width="20" stroke-linejoin="round"/></g><g transform="translate(82.24,80.69) scale(1.55172)"><path d="M134.851 16.6635C170.473 21.437 197.917 43.2712 211.86 77.9526C216.684 90.0042 220.008 104.442 221.332 119.205C221.508 121.15 221.773 129.577 221.92 137.916C222.067 146.255 222.332 154.535 222.508 156.332C223.361 165.142 224.214 170.476 226.656 182.115C229.009 193.312 229.48 197.172 229.039 201.415C228.627 205.599 228.068 207.573 226.45 210.932C224.097 215.794 219.655 219.713 214.537 221.452C211.272 222.542 206.036 222.807 202.124 222.07C196.711 221.039 191.416 218.594 186.475 214.881C182.18 211.61 182.239 211.61 179.944 214.38C174.267 221.245 166.207 226.019 157.795 227.522C155 227.993 149.823 227.934 146.823 227.374C139.557 225.989 132.38 222.188 125.614 216.177C123.055 213.879 122.32 213.378 121.79 213.525C121.467 213.614 120.378 214.468 119.408 215.382C115.407 219.212 112.201 221.481 107.524 223.838C96.9932 229.113 86.5214 229.231 76.5202 224.251C72.0196 221.982 66.8131 217.798 63.9892 214.115C62.695 212.435 61.8713 211.993 60.93 212.494C60.6359 212.671 59.2828 213.643 57.9885 214.645C50.9582 220.037 44.1927 222.512 36.6624 222.512C28.2202 222.512 21.3076 218.328 17.6601 211.08C14.6892 205.157 14.2185 197.82 16.1893 188.42C21.4841 163.021 21.8371 160.28 22.1901 138.21C22.3371 129.695 22.5136 122.152 22.6019 121.415C22.6901 120.678 22.896 118.498 23.0725 116.553C24.1903 104.177 27.6025 89.6801 31.9559 78.6893C41.4277 54.8219 57.2825 37.0245 78.6675 26.2399C88.7863 21.1423 100.729 17.6359 111.76 16.5456C113.554 16.3688 115.407 16.1626 115.878 16.1036C118.055 15.809 131.38 16.192 134.851 16.6635Z" fill="var(--accent)" stroke="var(--fg)" stroke-width="20" stroke-linejoin="round"/></g></svg>
-      <span class="wm">spktr<span class="sep">/</span>margin</span>
+      <span class="wm">spktr<span class="sep">/</span>sidecar</span>
     </h1>
     <div id="presence" class="presence away"></div>
     <div class="spacer"></div>
     <div id="turn" class="turn"></div>
-    <a class="doclink" href="https://github.com/smithavt14/margin" target="_blank" rel="noopener">docs</a>
+    <a class="doclink" href="https://github.com/smithavt14/sidecar" target="_blank" rel="noopener">docs</a>
     <div id="status">saved</div>
   </div>
 </header>
@@ -312,11 +312,11 @@ async function boot() {
     const { files, defaultFile } = await api('GET', '/api/files');
     if (defaultFile) { location.search = '?f=' + encodeURIComponent(defaultFile); return; }
     $('main').style.display = 'none'; $('filelist').style.display = 'block';
-    $('filelist').innerHTML = '<h2>margin — pick a file</h2>' + files.map(f =>
+    $('filelist').innerHTML = '<h2>sidecar — pick a file</h2>' + files.map(f =>
       `<a href="/?f=${encodeURIComponent(f.rel)}">${esc(f.rel)}${f.open ? `<span class="count">${f.open}</span>` : ''}</a>`).join('');
     return;
   }
-  document.title = 'spktr/margin · ' + FILE;
+  document.title = 'spktr/sidecar · ' + FILE;
   $('doc').contentEditable = 'true';
   await reloadFile();
   const es = new EventSource('/events');
@@ -750,7 +750,7 @@ async function flag() {
     thread: [{ by: 'alex', at: new Date().toISOString(), text: '🚩 Flagged for review.' }] });
 }
 // Run: "act on this now" — a comment carrying `run: true`, nothing more. It reuses the whole comment
-// machinery (thread, resolve, orphan), so the agent answers in the thread like any other card. margin
+// machinery (thread, resolve, orphan), so the agent answers in the thread like any other card. sidecar
 // does NOT read the anchored text, parse it, or model the work: whether that line is a task, a query,
 // or nonsense is entirely the agent's business. This is shorthand for a comment Alex could have typed.
 async function run() {
@@ -827,7 +827,7 @@ function renderSide() {
   }
   // The terminal "done reviewing" ACTION lives here, at the foot of the review column (not the nav bar) —
   // it appears once there's a review underway and you scroll to the end of it. Sets session.done → my
-  // `margin wait` returns DONE → one commit. Mainly matters on mobile, where there's no chat to say it.
+  // `sidecar wait` returns DONE → one commit. Mainly matters on mobile, where there's no chat to say it.
   const sessionDone = state.review.session && state.review.session.done;
   if (state.review.items.length && !sessionDone) {
     const f = document.createElement('button');
@@ -860,7 +860,7 @@ function renderTurn() {
   el.innerHTML = html;
 }
 // Center of the navbar — the shared "are we in the room together right now?" readout. Lit while a
-// `margin wait` is heartbeating presence; falls back to "waiting for claude" when no agent is watching.
+// `sidecar wait` is heartbeating presence; falls back to "waiting for claude" when no agent is watching.
 function renderPresence() {
   const el = $('presence'); if (!el) return;
   const st = state.presence && state.presence.state;
@@ -882,7 +882,7 @@ $('turn').addEventListener('click', (e) => {
   if (card) { card.scrollIntoView({ behavior: 'smooth', block: 'center' }); pulse([card]); }
 });
 // Terminal "done, commit it" — the one decision chat can't make redundant (and the phone's only way to
-// say it). Sets session.done; the agent's `margin wait` returns with DONE, and I make the single commit.
+// say it). Sets session.done; the agent's `sidecar wait` returns with DONE, and I make the single commit.
 async function markDone() {
   state.review.session = { state: 'idle', at: new Date().toISOString(), done: true };
   try {

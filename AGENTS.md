@@ -1,6 +1,6 @@
-# AGENTS.md: driving margin as an agent
+# AGENTS.md: driving sidecar as an agent
 
-**margin** is a local tool for reviewing a document *together with a human*. It has two sides:
+**sidecar** is a local tool for reviewing a document *together with a human*. It has two sides:
 
 - **The human** uses the browser at `http://localhost:4880`. They read, comment, accept/reject your
   suggestion cards, and edit the rich text directly.
@@ -21,9 +21,9 @@ npm install
 npm start -- /path/to/your/docs      # serves that dir at http://localhost:4880
 ```
 
-`npm start -- <file-or-directory>` points margin at a single file or a directory of markdown files. Open a
-specific file at `http://localhost:4880/?f=<path-relative-to-served-dir>`. Config: `MARGIN_PORT` (default
-4880), and `MARGIN_HOSTS` for extra allowed Host headers such as a tailnet name (see the tailscale
+`npm start -- <file-or-directory>` points sidecar at a single file or a directory of markdown files. Open a
+specific file at `http://localhost:4880/?f=<path-relative-to-served-dir>`. Config: `SIDECAR_PORT` (default
+4880), and `SIDECAR_HOSTS` for extra allowed Host headers such as a tailnet name (see the tailscale
 section).
 
 ---
@@ -94,16 +94,16 @@ The **run** control in the selection toolbar posts a comment carrying `"run": tr
 ```
 
 It is an ordinary comment with a louder badge — thread, resolve, and orphaning all behave identically.
-`margin wait` prints it as a **`RUN`** line instead of `NEW comment`, so you can tell "act on this" from
+`sidecar wait` prints it as a **`RUN`** line instead of `NEW comment`, so you can tell "act on this" from
 "discuss this" at a glance. Answer it the way you'd answer any comment: do the work, then reply in the
 thread (and resolve it, or let the human resolve it).
 
-**Scope boundary — margin does not interpret the requested work.** It never reads, parses, or classifies
+**Scope boundary — sidecar does not interpret the requested work.** It never reads, parses, or classifies
 the anchored text: it has no notion of tasks, task syntax, tags, checkboxes, links, or any external
 schema, and it models no jobs — no queue, no running/failed/cancelled states, no progress, no run
 history, no cancellation. `run: true` is purely a rendering + digest hint, exactly like `flag: true`.
 Deciding *what* the line asks for and *how* to do it is entirely yours; if your workflow needs richer
-semantics, put them in your own layer above margin, not in the sidecar.
+semantics, put them in your own layer above sidecar, not in the sidecar.
 
 ### Anchors: the one thing to get right
 
@@ -154,23 +154,23 @@ write can't drop each other's work. You should still read-modify-write.
 
 ---
 
-## Live participation — `margin wait` (react as they review)
+## Live participation — `sidecar wait` (react as they review)
 
-Instead of asking the human to come back to chat and say "done," **background `margin wait <file>` after you
+Instead of asking the human to come back to chat and say "done," **background `sidecar wait <file>` after you
 post**. It fs-watches the sidecar and **returns the instant they do anything** — a new comment/reply, a run
 request, an accept/reject, a direct edit, or hitting **done** — printing a compact digest of exactly
 what changed (run requests appear as `RUN` lines). It
 sleeps for free in between (no polling, no cost), so you can respond the moment a comment lands.
 
 ```bash
-margin wait /abs/path/to/doc.md       # blocks; prints a digest and exits on the first change (--timeout 900)
+sidecar wait /abs/path/to/doc.md       # blocks; prints a digest and exits on the first change (--timeout 900)
 ```
 
-**Use an absolute path** (or a path relative to the served directory). `margin wait` resolves the path against
+**Use an absolute path** (or a path relative to the served directory). `sidecar wait` resolves the path against
 its own cwd, so a relative path from the wrong directory would silently watch a nonexistent file. It now exits
 with an error if the path doesn't resolve to a real file.
 
-The loop: **background `margin wait` → it returns → respond in-thread → background `margin wait` again →
+The loop: **background `sidecar wait` → it returns → respond in-thread → background `sidecar wait` again →
 … until the digest says `DONE: true`, then make the single commit.** Respond by the request's nature:
 
 - **Mechanical** (cut this, fix a typo, make a list) → just **edit the file** and drop a short "done" reply
@@ -185,21 +185,21 @@ The loop: **background `margin wait` → it returns → respond in-thread → ba
 { "schema": 1, "session": { "at": "ISO", "done": false }, "items": [ ... ] }
 ```
 
-- `session.done` — the human's terminal "commit it" signal (a Done control in the UI, or chat). `margin wait`
+- `session.done` — the human's terminal "commit it" signal (a Done control in the UI, or chat). `sidecar wait`
   reports it as `DONE: true`; that's your cue to stop looping and commit once.
-- `presence` — best-effort "Claude is here" shown in their header while a `margin wait` is running (posted to
+- `presence` — best-effort "Claude is here" shown in their header while a `sidecar wait` is running (posted to
   the server, in-memory, never committed). Nothing for you to write by hand.
 
 ---
 
-## Working on margin itself
+## Working on sidecar itself
 
-If you edit margin's **own code** (`server.js`, `public/`), the running server won't pick it up until it
-restarts. The persistent LaunchAgent is `com.alex.margin` — **kickstart it before testing**, or you'll be
+If you edit sidecar's **own code** (`server.js`, `public/`), the running server won't pick it up until it
+restarts. The persistent LaunchAgent is `com.alex.sidecar` — **kickstart it before testing**, or you'll be
 reviewing against stale code:
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/com.alex.margin
+launchctl kickstart -k gui/$(id -u)/com.alex.sidecar
 ```
 
 The server logs a `[code <git-sha> · <mtime>]` stamp at boot (also on the wordmark's hover title in the UI),
@@ -209,6 +209,6 @@ so you can confirm the live instance is on current code at a glance.
 
 ## Phone / tailnet
 
-The human can review on their phone if you expose margin over their private tailnet:
-`./scripts/tailscale-serve.sh` (requires Tailscale, and adding the tailnet hostname to `MARGIN_HOSTS`).
-Keep it tailnet-only. margin has no auth, so never `tailscale funnel` it publicly.
+The human can review on their phone if you expose sidecar over their private tailnet:
+`./scripts/tailscale-serve.sh` (requires Tailscale, and adding the tailnet hostname to `SIDECAR_HOSTS`).
+Keep it tailnet-only. sidecar has no auth, so never `tailscale funnel` it publicly.
