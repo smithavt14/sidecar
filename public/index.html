@@ -99,11 +99,12 @@
   mark.anchor { background:transparent; border-bottom:2px solid var(--yellow); padding:0 1px; cursor:pointer;
     transition:background .15s ease; border-radius:1px; }
   mark.anchor.flash { background:rgba(255,235,0,.32); box-shadow:0 0 0 3px rgba(255,235,0,.3); }
-  aside { border-left:1px solid var(--line); padding:22px 20px; display:flex; flex-direction:column; gap:8px;
+  aside { border-left:1px solid var(--line); padding:22px 20px; display:flex; flex-direction:column; gap:0;
     height:calc(100vh - 51px); overflow-y:auto; position:sticky; top:51px; background:var(--bg); }
-  /* review-rail tabs: active threads ↔ archived threads. Pinned to the top of the rail as it scrolls. */
-  .tabs { position:sticky; top:-22px; z-index:2; display:flex; gap:2px; margin:-4px -2px 4px;
-    padding:4px 2px; background:var(--bg); }
+  /* review-rail tabs: active threads ↔ archived threads. Pinned to the top of the rail as it scrolls.
+     Its padding is an OPAQUE buffer (no transparent margin/gap) so scrolling cards can't crowd under it. */
+  .tabs { position:sticky; top:-22px; z-index:2; display:flex; gap:2px; margin:0 -2px;
+    padding:10px 2px 14px; background:var(--bg); }
   .tab { font:600 13px 'Geist', ui-sans-serif, sans-serif; border:none; background:none; color:var(--muted);
     padding:7px 11px; border-radius:8px; display:inline-flex; align-items:center; gap:6px; box-shadow:none; }
   .tab:hover { background:var(--fill); color:var(--fg); }
@@ -284,7 +285,7 @@
       border-left:none; border-top:1px solid var(--line); border-radius:22px 22px 0 0;
       background:var(--bg); box-shadow:0 -12px 40px rgba(20,20,15,.18);
       transform:translateY(102%); transition:transform .26s ease-out; z-index:46;
-      padding:22px 16px calc(env(safe-area-inset-bottom) + 20px); gap:12px;
+      padding:22px 16px calc(env(safe-area-inset-bottom) + 20px); gap:0;
     }
     aside::before { content:''; position:absolute; top:9px; left:50%; transform:translateX(-50%);
       width:40px; height:4px; border-radius:99px; background:var(--line-strong); }
