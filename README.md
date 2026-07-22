@@ -61,19 +61,15 @@ it publicly.
 - **Type-to-format:** `#`/`##`/`###` + space for headings, `-`/`1.` for lists, `>` for a quote, ` ``` `
   for a code block, and inline `**bold**` / `*italic*` / `` `code` `` as you type. Type `## ` in front of
   an existing heading to re-level it.
-- **Block styles:** highlight text, then the toolbar's ¶ / H1 / H2 / H3 convert the block (or turn a
-  heading back into body text).
-- Select text for a floating toolbar: bold, italic (⌘B/⌘I), link, comment, flag, run.
+- **Block styles:** highlight text, then the toolbar's text-style dropdown converts the block between body
+  text and H1 / H2 / H3.
+- Select text for a floating toolbar: bold, italic (⌘B/⌘I), link, comment.
 
-**Comment.** Select text, then comment. Threads reply and resolve. Every open comment or suggestion softly
-highlights its span in the document; tap the highlight to open its card, tap a card's quote to jump to the
-text.
-
-**Run.** Point at a line and hit **run** to tell the watching agent "act on this now." It posts an
-ordinary comment marked `run: true`, which the agent's `sidecar wait` digest shows as a `RUN` line; the
-agent does the work and answers in the thread. sidecar itself does not interpret the requested work — it
-never parses the line, knows nothing about tasks or task syntax, and tracks no jobs, queue, or run
-history. It only carries the request and the reply; the meaning lives in your agent.
+**Comment.** Select text, then comment. The comment box is draggable, so you can move it off the text you're
+commenting on. Threads reply and resolve. Every open comment or suggestion softly highlights its span in the
+document; tap the highlight to open its card, tap a card's quote to jump to the text. The review rail has two
+tabs — **active** threads (open, editable) and **archived** threads (settled, read-only) — so you can look
+back at what was resolved or decided.
 
 **Suggest** (your agent). Suggestion cards propose a replacement for a quoted span, shown as a word-level
 diff. Accept applies it to the real file; reject leaves it. Comments and suggestions anchor to quoted

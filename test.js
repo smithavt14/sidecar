@@ -687,27 +687,27 @@ test('sidecar wait --timeout exits non-zero when nothing happens', async () => {
   assert.match(out, /still watching/);
 });
 
-// ---------- run action: a comment carrying `run: true` ----------
-// sidecar stores and surfaces the request; it never interprets the anchored text. These tests assert
-// exactly that scope: the flag round-trips, the digest calls it out, and everything else (threading,
-// resolution, orphaning) behaves like the ordinary comment it is.
+// ---------- flag action: a comment carrying `flag: true` ("look here") ----------
+// sidecar stores and surfaces the flag; it never interprets the anchored text. These tests assert exactly
+// that scope: the flag round-trips, the digest calls it out, and everything else (threading, resolution,
+// orphaning) behaves like the ordinary comment it is. (The retired `run` concept was tested here before.)
 
-test('run item round-trips through review PUT with run:true intact', async () => {
-  const f = path.join(dir, 'rundoc.md');
-  fs.writeFileSync(f, '# Run\n\nDo the thing on this line.\n');
-  const item = { id: 'r1', kind: 'comment', by: 'alex', run: true, status: 'open',
+test('flag item round-trips through review PUT with flag:true intact', async () => {
+  const f = path.join(dir, 'flagdoc.md');
+  fs.writeFileSync(f, '# Flag\n\nDo the thing on this line.\n');
+  const item = { id: 'r1', kind: 'comment', by: 'alex', flag: true, status: 'open',
     anchor: { quote: 'Do the thing on this line.', occurrence: 0 },
-    thread: [{ by: 'alex', at: '2026-07-19T07:00:00Z', text: 'Run this.' }] };
-  const r = await put('/api/review', { path: 'rundoc.md', review: { schema: 1, items: [item] } });
+    thread: [{ by: 'alex', at: '2026-07-19T07:00:00Z', text: '🚩 Flagged for review.' }] };
+  const r = await put('/api/review', { path: 'flagdoc.md', review: { schema: 1, items: [item] } });
   assert.equal(r.status, 200);
   const stored = (await j(r)).review.items.find(i => i.id === 'r1');
-  assert.equal(stored.run, true, 'run flag must survive the merge');
-  assert.equal(stored.kind, 'comment', 'run is a comment — no new kind');
+  assert.equal(stored.flag, true, 'flag must survive the merge');
+  assert.equal(stored.kind, 'comment', 'flag is a comment — no new kind');
   assert.equal(stored.status, 'open');
 });
 
-test('sidecar wait digests a run request as a RUN line, distinct from a plain comment', async () => {
-  const wf = path.join(dir, 'runwait.md');
+test('sidecar wait digests a flag as a NEW flag line, distinct from a plain comment', async () => {
+  const wf = path.join(dir, 'flagwait.md');
   fs.writeFileSync(wf, '# RW\n\nShip the newsletter draft.\n\nSome other prose.\n');
   fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [] }));
   const w = spawn('node', [path.join(__dirname, 'server.js'), 'wait', wf, '--timeout', '10'],
@@ -715,70 +715,70 @@ test('sidecar wait digests a run request as a RUN line, distinct from a plain co
   let out = ''; w.stdout.on('data', (d) => out += d.toString());
   await new Promise((res) => setTimeout(res, 900));   // let the fs-watcher attach
   fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [
-    { id: 'rw1', kind: 'comment', by: 'alex', run: true, status: 'open',
+    { id: 'rw1', kind: 'comment', by: 'alex', flag: true, status: 'open',
       anchor: { quote: 'Ship the newsletter draft.', occurrence: 0 },
-      thread: [{ by: 'alex', at: '2026-07-19T07:10:00Z', text: 'Run this.' }] },
+      thread: [{ by: 'alex', at: '2026-07-19T07:10:00Z', text: '🚩 Flagged for review.' }] },
     { id: 'rw2', kind: 'comment', by: 'alex', status: 'open',
       anchor: { quote: 'Some other prose.', occurrence: 0 },
       thread: [{ by: 'alex', at: '2026-07-19T07:10:00Z', text: 'JUST-DISCUSSING' }] }] }));
   const code = await new Promise((res) => w.on('exit', res));
   assert.equal(code, 0);
-  assert.match(out, /- RUN @ “Ship the newsletter draft\.”: Run this\./, 'run request needs its own RUN line');
+  assert.match(out, /- NEW flag @ “Ship the newsletter draft\.”: 🚩 Flagged for review\./, 'a flag gets a NEW flag line');
   assert.match(out, /- NEW comment @ “Some other prose\.”: JUST-DISCUSSING/, 'a plain comment stays a NEW comment line');
 });
 
-test('agent reply threads into a run item like any comment', async () => {
-  const f = path.join(dir, 'runthread.md');
+test('agent reply threads into a flag item like any comment', async () => {
+  const f = path.join(dir, 'flagthread.md');
   fs.writeFileSync(f, '# RT\n\nRebuild the index page.\n');
   const anchor = { quote: 'Rebuild the index page.', occurrence: 0 };
-  const alexMsg = { by: 'alex', at: '2026-07-19T08:00:00Z', text: 'Run this.' };
-  await put('/api/review', { path: 'runthread.md', review: { schema: 1, items: [
-    { id: 'rt1', kind: 'comment', by: 'alex', run: true, status: 'open', anchor, thread: [alexMsg] }] } });
+  const alexMsg = { by: 'alex', at: '2026-07-19T08:00:00Z', text: '🚩 Flagged for review.' };
+  await put('/api/review', { path: 'flagthread.md', review: { schema: 1, items: [
+    { id: 'rt1', kind: 'comment', by: 'alex', flag: true, status: 'open', anchor, thread: [alexMsg] }] } });
   // the agent answers in-thread (its own read-modify-write of the sidecar, as AGENTS.md prescribes)
-  const p = path.join(dir, 'runthread.md.review.json');
+  const p = path.join(dir, 'flagthread.md.review.json');
   const onDisk = JSON.parse(fs.readFileSync(p, 'utf8'));
   onDisk.items.find(i => i.id === 'rt1').thread.push(
     { by: 'claude', at: '2026-07-19T08:05:00Z', text: 'Done — rebuilt and pushed.' });
   fs.writeFileSync(p, JSON.stringify(onDisk));
-  // a stale client PUT (pre-reply copy) must neither drop the answer nor the run flag
-  const r = await put('/api/review', { path: 'runthread.md', review: { schema: 1, items: [
-    { id: 'rt1', kind: 'comment', by: 'alex', run: true, status: 'open', anchor, thread: [alexMsg] }] } });
+  // a stale client PUT (pre-reply copy) must neither drop the answer nor the flag
+  const r = await put('/api/review', { path: 'flagthread.md', review: { schema: 1, items: [
+    { id: 'rt1', kind: 'comment', by: 'alex', flag: true, status: 'open', anchor, thread: [alexMsg] }] } });
   const rt1 = (await j(r)).review.items.find(i => i.id === 'rt1');
-  assert.equal(rt1.run, true);
+  assert.equal(rt1.flag, true);
   assert.deepEqual(rt1.thread.map(m => m.by), ['alex', 'claude'], 'agent reply survives, in order');
 });
 
-test('run item resolves like a comment (reject settles it, file untouched)', async () => {
-  const f = path.join(dir, 'runresolve.md');
+test('flag item resolves like a comment (reject settles it, file untouched)', async () => {
+  const f = path.join(dir, 'flagresolve.md');
   fs.writeFileSync(f, '# RR\n\nArchive the old posts.\n');
   fs.writeFileSync(f + '.review.json', JSON.stringify({ schema: 1, items: [
-    { id: 'rr1', kind: 'comment', by: 'alex', run: true, status: 'open',
+    { id: 'rr1', kind: 'comment', by: 'alex', flag: true, status: 'open',
       anchor: { quote: 'Archive the old posts.', occurrence: 0 },
-      thread: [{ by: 'alex', at: '2026-07-19T09:00:00Z', text: 'Run this.' }] }] }));
+      thread: [{ by: 'alex', at: '2026-07-19T09:00:00Z', text: '🚩 Flagged for review.' }] }] }));
   const before = fs.readFileSync(f, 'utf8');
-  const r = await post('/api/reject', { path: 'runresolve.md', id: 'rr1' });
+  const r = await post('/api/reject', { path: 'flagresolve.md', id: 'rr1' });
   assert.equal(r.status, 200);
   const rr1 = JSON.parse(fs.readFileSync(f + '.review.json', 'utf8')).items.find(i => i.id === 'rr1');
-  assert.equal(rr1.status, 'resolved', 'a run comment resolves, it does not "reject"');
+  assert.equal(rr1.status, 'resolved', 'a flag comment resolves, it does not "reject"');
   assert.ok(rr1.decidedAt);
-  assert.equal(fs.readFileSync(f, 'utf8'), before, 'settling a run request never touches the doc');
+  assert.equal(fs.readFileSync(f, 'utf8'), before, 'settling a flag never touches the doc');
 });
 
-test('run item orphans when its anchored text changes', async () => {
-  const f = path.join(dir, 'runorphan.md');
+test('flag item orphans when its anchored text changes', async () => {
+  const f = path.join(dir, 'flagorphan.md');
   fs.writeFileSync(f, '# RO\n\nPublish the RUNANCHOR line.\n');
   fs.writeFileSync(f + '.review.json', JSON.stringify({ schema: 1, items: [
-    { id: 'ro1', kind: 'comment', by: 'alex', run: true, status: 'open',
+    { id: 'ro1', kind: 'comment', by: 'alex', flag: true, status: 'open',
       anchor: { quote: 'Publish the RUNANCHOR line.', occurrence: 0 },
-      thread: [{ by: 'alex', at: '2026-07-19T10:00:00Z', text: 'Run this.' }] }] }));
-  const s = await fetch(`${BASE}/api/state?path=runorphan.md`).then(j);
+      thread: [{ by: 'alex', at: '2026-07-19T10:00:00Z', text: '🚩 Flagged for review.' }] }] }));
+  const s = await fetch(`${BASE}/api/state?path=flagorphan.md`).then(j);
   assert.equal(s.review.items.find(i => i.id === 'ro1').status, 'open', 'anchored text is present → open');
-  await put('/api/save', { path: 'runorphan.md', content: '# RO\n\nThe line went away.\n', baseHash: s.hash });
-  const after = await fetch(`${BASE}/api/state?path=runorphan.md`).then(j);
+  await put('/api/save', { path: 'flagorphan.md', content: '# RO\n\nThe line went away.\n', baseHash: s.hash });
+  const after = await fetch(`${BASE}/api/state?path=flagorphan.md`).then(j);
   const ro1 = after.review.items.find(i => i.id === 'ro1');
-  assert.equal(ro1.status, 'orphaned', 'a run request whose anchor vanished must orphan like any item');
+  assert.equal(ro1.status, 'orphaned', 'a flag whose anchor vanished must orphan like any item');
   assert.equal(ro1.anchor.quote, 'Publish the RUNANCHOR line.', 'original quote preserved, never re-pointed');
-  assert.equal(ro1.run, true, 'still a run request while orphaned');
+  assert.equal(ro1.flag, true, 'still a flag while orphaned');
 });
 
 test('presence: watching/working surface in /api/state; idle reads as not-here', async () => {

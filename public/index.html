@@ -101,6 +101,17 @@
   mark.anchor.flash { background:rgba(255,235,0,.32); box-shadow:0 0 0 3px rgba(255,235,0,.3); }
   aside { border-left:1px solid var(--line); padding:22px 20px; display:flex; flex-direction:column; gap:8px;
     height:calc(100vh - 51px); overflow-y:auto; position:sticky; top:51px; background:var(--bg); }
+  /* review-rail tabs: active threads ↔ archived threads. Pinned to the top of the rail as it scrolls. */
+  .tabs { position:sticky; top:-22px; z-index:2; display:flex; gap:2px; margin:-4px -2px 4px;
+    padding:4px 2px; background:var(--bg); }
+  .tab { font:600 13px 'Geist', ui-sans-serif, sans-serif; border:none; background:none; color:var(--muted);
+    padding:7px 11px; border-radius:8px; display:inline-flex; align-items:center; gap:6px; box-shadow:none; }
+  .tab:hover { background:var(--fill); color:var(--fg); }
+  .tab.on { color:var(--ink); background:var(--fill); }
+  .tab .tc { font-size:11px; font-weight:600; background:#eeeee8; color:#57574f; border-radius:20px;
+    padding:0 6px; min-width:17px; text-align:center; }
+  .tab.on .tc { background:#e4e4dc; }
+  .side-list { display:flex; flex-direction:column; gap:8px; }
   /* review card — no border; a soft depth shadow lifts it off the rail */
   .card { background:var(--bg); border-radius:14px; padding:15px 16px; font-size:13px; box-shadow:var(--shadow);
     transition:box-shadow .2s ease; }
@@ -124,11 +135,14 @@
   /* flag = "look here" from you — monochrome chip (yellow is the agent's, never yours) */
   .card .badge.flag { background:#f4f4f1; color:#57574f; border-radius:20px; padding:2px 9px;
     margin-left:8px; letter-spacing:.02em; }
-  /* run = "act on this now". Inverted ink chip: unmistakable, but monochrome — it must not out-shout
-     the agent's yellow. sidecar doesn't know what the work IS; this is just a louder "please do this". */
-  .card .badge.run { background:var(--ink); color:#fff; border-radius:20px; padding:2px 9px;
-    margin-left:8px; letter-spacing:.02em; }
   .card .badge.orphaned { color:var(--muted); }
+  /* final-status chips on archived cards — monochrome, quiet */
+  .card .badge.accepted, .card .badge.rejected, .card .badge.resolved {
+    background:#f4f4f1; color:#57574f; border-radius:20px; padding:2px 9px; letter-spacing:.02em; }
+  /* archived card — settled, recessed; a flex header so the decided-time sits at the right */
+  .card.archived { background:#fafaf8; }
+  .card.archived .quote { cursor:default; }
+  .card .chead { display:flex; align-items:center; }
   /* the anchored span the card refers to — a yellow left-rule (the agent's), quiet quoted text */
   .card .quote { color:var(--muted); font-size:12.5px; border-left:2px solid var(--yellow); padding-left:10px;
     margin:9px 0; line-height:1.4; cursor:pointer; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
@@ -342,6 +356,7 @@
 const qs = new URLSearchParams(location.search);
 let FILE = qs.get('f');
 let state = null, blocks = [], pendingSel = null;
+let sideTab = 'active';   // which review-rail tab is showing: 'active' | 'archived'
 let dirty = false, saveTimer = null, savedRange = null;
 
 // HTML → markdown serializer. Escaping off so prose keeps clean markers (no `\*` noise);
@@ -878,9 +893,9 @@ async function submitComment() {
   hidePopover();
   await pushReviewItem(item);
 }
-// flag/run were removed as selection-toolbar actions (2026-07-22). Existing flag/run items in a sidecar
-// still render (renderSide keys off it.flag / it.run), and an agent can still write them into the JSON
-// directly; there is just no longer a button to create them by hand.
+// `run` was retired entirely (2026-07-22, Alex: "run is dead as a concept") — no button, no rendering; a
+// legacy run:true item just shows as its underlying comment. `flag` lost its toolbar button the same day but
+// is still a concept: flag items render (renderActive keys off it.flag) and an agent can write one into the JSON.
 // ⌘B / ⌘I are handled natively by the contenteditable surface (fires 'input' → debounced save).
 
 // ---------- sidebar ----------
@@ -912,51 +927,25 @@ function renderSide() {
     const card = ta.closest('[data-id]');
     if (card) drafts[card.dataset.id] = { value: ta.value, focused: ta === active, start: ta.selectionStart, end: ta.selectionEnd };
   }
-  const items = state.review.items.filter(i => !['resolved','accepted','rejected'].includes(i.status));
+  const isSettled = i => ['resolved', 'accepted', 'rejected'].includes(i.status);
+  const isReplySug = i => i.kind === 'suggestion' && i.replyTo;
   // Reply suggestions render nested under their parent comment, not as their own top-level card.
   const childSug = {};
-  for (const it of state.review.items) if (it.kind === 'suggestion' && it.replyTo && ['pending','orphaned'].includes(it.status))
+  for (const it of state.review.items) if (isReplySug(it))
     (childSug[it.replyTo] = childSug[it.replyTo] || []).push(it);
-  const top = items.filter(i => !(i.kind === 'suggestion' && i.replyTo));
-  const done = state.review.items.length - items.length;
-  $('sheetCount').textContent = top.length || '';   // mobile pull-up pill count
-  side.innerHTML = top.length ? '' : `<div class="empty">no open items.${done ? ` (${done} settled)` : ''}<br>select text to comment.</div>`;
-  for (const it of top) {
-    const el = document.createElement('div');
-    el.className = 'card' + (it.run ? ' run' : '') + (it.status === 'orphaned' ? ' orphaned' : ''); el.dataset.id = it.id;
-    // run beats flag beats kind — a run request must read as "do this", not as one more comment.
-    const label = it.run ? 'run' : it.flag ? 'flag' : it.kind;
-    let head = `<span class="who ${it.by}">${it.by}</span> <span class="badge ${label}">${label}</span>`;
-    if (it.status === 'orphaned') head += ' <span class="badge orphaned">orphaned — text changed</span>';
-    // No interpolated inline handlers: the id lives on the card's data-id (set safely above) and every
-    // control carries a static data-action, dispatched by the delegated listeners on #side (see below).
-    let body = `<div class="quote" title="click to locate" data-action="locate">${esc(it.anchor.quote)}</div>`;
-    if (it.kind === 'suggestion') {
-      body += diffHtml(it.anchor.quote, it.replacement);
-      if (it.note) body += `<div class="msg"><span class="t">${esc(it.note)}</span></div>`;
-      body += `<div class="row"><button class="primary" data-action="accept">accept</button>
-               <button data-action="reject">reject</button></div>`;
-    } else {
-      body += (it.thread || []).slice().sort((a, b) => (a.at || '').localeCompare(b.at || '')).map(m => `<div class="msg"><span class="who ${m.by}">${m.by}</span> <span class="t">${esc(m.text)}</span></div>`).join('');
-      for (const sug of (childSug[it.id] || [])) body += nestedSugHtml(sug);   // my proposed edits, inline in the thread
-      body += `<div class="row"><textarea class="reply" rows="1" placeholder="reply…" oninput="autogrow(this)" data-action="reply"></textarea></div>
-               <div class="row spread"><button class="ghost" data-action="resolve">resolve</button>
-               <button class="primary" data-action="send">send</button></div>`;
-    }
-    el.innerHTML = head + body;
-    side.appendChild(el);
-  }
-  // The terminal "done reviewing" ACTION lives here, at the foot of the review column (not the nav bar) —
-  // it appears once there's a review underway and you scroll to the end of it. Sets session.done → my
-  // `sidecar wait` returns DONE → one commit. Mainly matters on mobile, where there's no chat to say it.
-  const sessionDone = state.review.session && state.review.session.done;
-  if (state.review.items.length && !sessionDone) {
-    const f = document.createElement('button');
-    f.className = 'done-foot'; f.textContent = 'done reviewing →';
-    f.title = "Finish — I'll make the single commit";
-    f.onclick = markDone;
-    side.appendChild(f);
-  }
+  const activeTop = state.review.items.filter(i => !isSettled(i) && !isReplySug(i));
+  const archivedTop = state.review.items.filter(i => isSettled(i) && !isReplySug(i));
+  $('sheetCount').textContent = activeTop.length || '';   // mobile pull-up pill count = open items
+
+  side.innerHTML = '';
+  // Tabbed rail: active threads (open, editable) ↔ archived threads (settled, read-only).
+  const tabs = document.createElement('div'); tabs.className = 'tabs';
+  const tab = (id, label, n) => `<button class="tab${sideTab === id ? ' on' : ''}" data-tab="${id}">${label}${n ? ` <span class="tc">${n}</span>` : ''}</button>`;
+  tabs.innerHTML = tab('active', 'active', activeTop.length) + tab('archived', 'archived', archivedTop.length);
+  side.appendChild(tabs);
+  const list = document.createElement('div'); list.className = 'side-list'; side.appendChild(list);
+  if (sideTab === 'active') renderActive(list, activeTop, childSug);
+  else renderArchived(list, archivedTop, childSug);
   // Restore in-progress replies captured before the rebuild (see top of renderSide).
   for (const id in drafts) {
     const card = side.querySelector('.card[data-id="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]');
@@ -969,6 +958,80 @@ function renderSide() {
   markAnchors();   // refresh the in-doc highlight cues to match the current items
   renderTurn();    // right cluster: open / orphaned counts
   renderPresence();// center: claude is here ↔ waiting for claude
+}
+// ACTIVE tab — open threads, fully interactive (accept/reject, reply, resolve). This is the working surface.
+function renderActive(list, top, childSug) {
+  if (!top.length) {
+    list.innerHTML = `<div class="empty">no active threads.<br>select text in the document to start one.</div>`;
+    return;
+  }
+  for (const it of top) {
+    const el = document.createElement('div');
+    el.className = 'card' + (it.status === 'orphaned' ? ' orphaned' : ''); el.dataset.id = it.id;
+    const label = it.flag ? 'flag' : it.kind;
+    let head = `<span class="who ${it.by}">${it.by}</span> <span class="badge ${label}">${label}</span>`;
+    if (it.status === 'orphaned') head += ' <span class="badge orphaned">orphaned — text changed</span>';
+    // No interpolated inline handlers: the id lives on the card's data-id (set safely above) and every
+    // control carries a static data-action, dispatched by the delegated listeners on #side (see below).
+    let body = `<div class="quote" title="click to locate" data-action="locate">${esc(it.anchor.quote)}</div>`;
+    if (it.kind === 'suggestion') {
+      body += diffHtml(it.anchor.quote, it.replacement);
+      if (it.note) body += `<div class="msg"><span class="t">${esc(it.note)}</span></div>`;
+      body += `<div class="row"><button class="primary" data-action="accept">accept</button>
+               <button data-action="reject">reject</button></div>`;
+    } else {
+      body += threadHtml(it.thread);
+      for (const sug of (childSug[it.id] || [])) if (['pending', 'orphaned'].includes(sug.status)) body += nestedSugHtml(sug);
+      body += `<div class="row"><textarea class="reply" rows="1" placeholder="reply…" oninput="autogrow(this)" data-action="reply"></textarea></div>
+               <div class="row spread"><button class="ghost" data-action="resolve">resolve</button>
+               <button class="primary" data-action="send">send</button></div>`;
+    }
+    el.innerHTML = head + body;
+    list.appendChild(el);
+  }
+  // Terminal "done reviewing" — sets session.done → my `sidecar wait` returns DONE → one commit. Lives at
+  // the foot of the active column (mainly matters on mobile, where there's no chat to say it).
+  const sessionDone = state.review.session && state.review.session.done;
+  if (state.review.items.length && !sessionDone) {
+    const f = document.createElement('button');
+    f.className = 'done-foot'; f.textContent = 'done reviewing →';
+    f.title = "Finish — I'll make the single commit";
+    f.onclick = markDone;
+    list.appendChild(f);
+  }
+}
+// ARCHIVED tab — settled threads, READ-ONLY. What was decided and how: accepted/rejected suggestions with
+// their diff, resolved comment threads. No actions; this is a record, not a workspace.
+function renderArchived(list, archived, childSug) {
+  if (!archived.length) {
+    list.innerHTML = `<div class="empty">no archived threads yet.<br>resolved comments and decided suggestions land here.</div>`;
+    return;
+  }
+  const sorted = archived.slice().sort((a, b) => (b.decidedAt || '').localeCompare(a.decidedAt || ''));   // newest-decided first
+  for (const it of sorted) {
+    const el = document.createElement('div');
+    el.className = 'card archived'; el.dataset.id = it.id;
+    const when = it.decidedAt ? `<span class="when">${esc(timeAgo(Date.parse(it.decidedAt)))}</span>` : '';
+    let body = `<div class="chead"><span class="who ${it.by}">${it.by}</span> <span class="badge ${it.status}">${it.status}</span>${when}</div>`;
+    body += `<div class="quote">${esc(it.anchor.quote)}</div>`;
+    if (it.kind === 'suggestion') {
+      body += diffHtml(it.anchor.quote, it.replacement);
+      if (it.note) body += `<div class="msg"><span class="t">${esc(it.note)}</span></div>`;
+    } else {
+      body += threadHtml(it.thread);
+      for (const sug of (childSug[it.id] || [])) if (['accepted', 'rejected'].includes(sug.status))
+        body += `<div class="subcard"><span class="who claude">claude</span> <span class="badge ${sug.status}">${sug.status}</span>`
+              + diffHtml(sug.anchor.quote, sug.replacement)
+              + (sug.note ? `<div class="msg"><span class="t">${esc(sug.note)}</span></div>` : '') + `</div>`;
+    }
+    el.innerHTML = body;
+    list.appendChild(el);
+  }
+}
+// A comment thread's messages, oldest-first — shared by the active and archived renderers.
+function threadHtml(thread) {
+  return (thread || []).slice().sort((a, b) => (a.at || '').localeCompare(b.at || ''))
+    .map(m => `<div class="msg"><span class="who ${m.by}">${m.by}</span> <span class="t">${esc(m.text)}</span></div>`).join('');
 }
 // Right cluster — pure STATUS: the open + orphaned counts (no actions, no presence).
 function renderTurn() {
@@ -1038,6 +1101,8 @@ async function decide(id, verb) {
 // the item id off its .card[data-id] — no id ever interpolated into markup. reply/send find the card's
 // own .reply textarea via closest('.card'). (autogrow stays on the textarea's static oninput.)
 $('side').addEventListener('click', (e) => {
+  const tabEl = e.target.closest('[data-tab]');
+  if (tabEl) { if (sideTab !== tabEl.dataset.tab) { sideTab = tabEl.dataset.tab; renderSide(); } return; }
   const el = e.target.closest('[data-action]');
   if (!el || !$('side').contains(el)) return;
   // Nearest data-id, so a nested suggestion's accept/reject targets the suggestion (its .subcard[data-id]),

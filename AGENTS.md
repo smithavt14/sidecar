@@ -77,32 +77,12 @@ suggestion then renders **nested inside that comment's thread** (diff + accept/r
 The human replies, which appends a `{ "by": "alex", ... }` entry to `thread`. They click **resolve** to set
 `status: resolved`. Add `"flag": true` to render it as a flag badge (a "look here" with no question).
 
-### Run request: "act on this now"
+### Scope boundary — sidecar does not interpret the requested work
 
-The **run** control in the selection toolbar posts a comment carrying `"run": true`:
-
-```json
-{
-  "id": "r-1753000000000",
-  "kind": "comment",
-  "by": "alex",
-  "anchor": { "quote": "Ship the newsletter draft.", "occurrence": 0 },
-  "run": true,
-  "status": "open",
-  "thread": [{ "by": "alex", "at": "2026-07-19T07:00:00Z", "text": "Run this." }]
-}
-```
-
-It is an ordinary comment with a louder badge — thread, resolve, and orphaning all behave identically.
-`sidecar wait` prints it as a **`RUN`** line instead of `NEW comment`, so you can tell "act on this" from
-"discuss this" at a glance. Answer it the way you'd answer any comment: do the work, then reply in the
-thread (and resolve it, or let the human resolve it).
-
-**Scope boundary — sidecar does not interpret the requested work.** It never reads, parses, or classifies
-the anchored text: it has no notion of tasks, task syntax, tags, checkboxes, links, or any external
-schema, and it models no jobs — no queue, no running/failed/cancelled states, no progress, no run
-history, no cancellation. `run: true` is purely a rendering + digest hint, exactly like `flag: true`.
-Deciding *what* the line asks for and *how* to do it is entirely yours; if your workflow needs richer
+sidecar never reads, parses, or classifies the anchored text: it has no notion of tasks, task syntax, tags,
+checkboxes, links, or any external schema, and it models no jobs — no queue, no running/failed states, no
+progress and no history. A comment (optionally `flag: true`, a "look here") carries a request and its reply;
+deciding *what* the line asks for and *how* to act on it is entirely yours. If your workflow needs richer
 semantics, put them in your own layer above sidecar, not in the sidecar.
 
 ### Anchors: the one thing to get right
