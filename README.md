@@ -1,4 +1,7 @@
-# sidecar
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="brand/sidecar-horizontal-dark.svg">
+  <img alt="sidecar" src="brand/sidecar-horizontal.svg" width="380">
+</picture>
 
 [![test](https://github.com/smithavt14/sidecar/actions/workflows/test.yml/badge.svg)](https://github.com/smithavt14/sidecar/actions/workflows/test.yml)
 
