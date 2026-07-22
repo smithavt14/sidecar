@@ -13,163 +13,216 @@
 <script src="/lib/turndown/dist/turndown.js"></script>
 <script src="/lib/turndown-plugin-gfm/dist/turndown-plugin-gfm.js"></script>
 <style>
-  /* spktr design language: monochrome cream/ink canvas, one electric-yellow accent, Geist,
-     lowercase chrome, neo-brutalist hard-shadow lift. Source: spktr/design.md + globals.css. */
+  /* sidecar design system — clean, modern, single-user. Distinct from the spktr neo-brutalist look:
+     hairlines + soft depth shadows, no hard offset borders. One rule holds it together —
+     YELLOW = THE AGENT. #ffeb00 appears only on claude's presence, its diffs, its anchors, and
+     open-item dots. Never on you, never on a primary button. Ink does the work; chrome is lowercase.
+     Source: claude.ai/design "Sidecar Review" spec. */
   @font-face { font-family:'Geist'; font-weight:100 900; font-display:swap;
     src:url('/fonts/geist-latin.woff2') format('woff2'), url('/fonts/geist-latin-ext.woff2') format('woff2'); }
-  :root { --bg:#fbfbf7; --fg:#0f0f0c; --muted:#6f6f68; --line:rgba(15,15,12,.14);
-    --line-strong:rgba(15,15,12,.28); --card:#ffffff; --accent:#ffeb00; --accent-fg:#0a0a0a;
-    --dark:#0a0900; --ring:0 0 0 3px rgba(255,235,0,.55); color-scheme:light; }
+  :root {
+    --bg:#ffffff;            /* page surface */
+    --fill:#faf9f4;          /* recessed wells: code, diffs, icon holders */
+    --ink:#141410;           /* headings, structure, your identity */
+    --ink-btn:#1b1a15;       /* primary button */
+    --fg:#33332c;            /* body copy */
+    --muted:#8a8a82;         /* labels, secondary */
+    --faint:#a3a39b;         /* timestamps, quiet quotes */
+    --fainter:#b0b0a8;       /* mono meta, em-dash */
+    --line:rgba(20,20,15,.08);      /* hairline */
+    --line-2:rgba(20,20,15,.14);    /* quote rule, table cell */
+    --line-strong:rgba(20,20,15,.16); /* button outline, input */
+    --yellow:#ffeb00;        /* THE AGENT — nothing else */
+    --yellow-ring:rgba(190,172,0,.65);
+    --chip:#fffce0;          /* claude chip tint */
+    --chip-fg:#2b2a20;
+    --dark:#1b1a15;          /* toast surface */
+    --shadow:0 1px 2px rgba(20,20,15,.05), 0 10px 30px -20px rgba(20,20,15,.35);
+    --ring:0 0 0 3px rgba(20,20,15,.08);   /* focus — ink-tinted, not yellow (yellow is the agent's) */
+    color-scheme:light;
+  }
   * { box-sizing: border-box; }
   body { margin:0; font:15px/1.6 'Geist', ui-sans-serif, system-ui, sans-serif; background:var(--bg);
     color:var(--fg); -webkit-font-smoothing:antialiased; }
-  ::selection { background:var(--accent); color:var(--accent-fg); }
-  /* header — cream chrome, lowercase wordmark, hairline rule (the site's calm, not the yellow hero) */
+  ::selection { background:var(--yellow); color:var(--chip-fg); }
+  /* header — white chrome, lowercase wordmark, hairline rule */
   header { position:sticky; top:0; z-index:20; background:var(--bg); border-bottom:1px solid var(--line); }
-  .hwrap { position:relative; display:flex; align-items:center; gap:14px; max-width:1280px; margin:0 auto; padding:12px 40px; }
-  header h1 { font-size:16px; margin:0; font-weight:500; letter-spacing:-.02em; display:flex; align-items:center; gap:8px; min-width:0; }
-  /* spktr/sidecar lockup — ghost mark + wordmark read as a terminal path (spktr is the parent, /sidecar the tool) */
-  header h1 .ghost { width:24px; height:24px; flex:none; }
-  header h1 .wm { color:var(--fg); font-weight:500; }
-  header h1 .wm .sep { color:var(--fg); font-weight:600; margin:0 1px; }
+  .hwrap { position:relative; display:flex; align-items:center; gap:13px; max-width:1280px; margin:0 auto; padding:14px 40px; }
+  header h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:-.02em; display:flex; align-items:center; gap:9px; min-width:0; }
+  header h1 .mark { height:22px; width:auto; flex:none; display:block; }
+  header h1 .wm { color:var(--ink); font-weight:600; }
   header h1 #fname { color:var(--muted); font-weight:400; letter-spacing:0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .spacer { flex:1; }
-  #status { font-size:12px; color:var(--muted); min-width:70px; text-align:right; }
-  /* buttons — the spktr signature: 2px border, hard offset shadow, lift on hover */
-  button { font:inherit; font-size:13px; font-weight:600; padding:5px 13px; border:1.5px solid var(--fg);
-    border-radius:6px; background:var(--card); color:var(--fg); cursor:pointer; box-shadow:3px 3px 0 0 var(--fg);
-    transition:transform .15s ease-out, box-shadow .15s ease-out, background .15s ease-out; }
-  button:hover { transform:translate(-1px,-1px); box-shadow:4px 4px 0 0 var(--fg); }
-  button:active { transform:translate(1px,1px); box-shadow:1px 1px 0 0 var(--fg); }
-  button.primary { background:var(--accent); color:var(--accent-fg); }
-  button.ghost { border:none; background:none; box-shadow:none; color:var(--muted); font-weight:500; }
-  button.ghost:hover { transform:none; box-shadow:none; color:var(--fg); background:none; }
+  #status { font-size:12.5px; color:var(--faint); min-width:64px; text-align:right; }
+  /* buttons — ink primary, thin-outline secondary, text ghost. Depth, not weight. */
+  button { font:600 13px 'Geist', ui-sans-serif, sans-serif; padding:8px 16px; border:1px solid var(--line-strong);
+    border-radius:9px; background:var(--bg); color:var(--fg); cursor:pointer;
+    transition:background .15s ease, border-color .15s ease, box-shadow .15s ease; }
+  button:hover { background:var(--fill); }
+  button.primary { background:var(--ink-btn); color:#fff; border-color:var(--ink-btn); padding:8px 18px; }
+  button.primary:hover { background:#000; }
+  button.ghost { border:none; background:none; color:var(--muted); font-weight:500; padding:8px 4px; }
+  button.ghost:hover { color:var(--fg); background:none; }
   main { display:grid; grid-template-columns: minmax(0,1fr) 372px; gap:0; max-width:1280px; margin:0 auto; }
   /* The document itself is the editor: edit rich text in place, no mode switch, no chrome. */
   /* pwd — the document's path as a terminal breadcrumb, sitting above the doc title */
-  #pwd { padding:30px 40px 0; min-width:0; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  #pwd { padding:34px 44px 0; min-width:0; font-family:'Geist Mono', ui-monospace,SFMono-Regular,Menlo,monospace;
     font-size:12.5px; letter-spacing:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  #pwd .dir { color:var(--muted); }
-  #pwd .file { color:var(--fg); font-weight:500; }
+  #pwd .dir { color:var(--faint); }
+  #pwd .file { color:#57574f; font-weight:500; }
   #pwd:empty { display:none; }
-  #doc { padding:10px 40px 40vh; min-width:0; outline:none; caret-color:var(--fg); }
+  #doc { padding:8px 44px 40vh; min-width:0; outline:none; caret-color:var(--ink); color:var(--fg); }
   #doc:focus, #doc *:focus { outline:none; }
-  #doc h1 { font-size:1.7em; font-weight:500; letter-spacing:-.025em; }
-  #doc h2 { font-size:1.3em; font-weight:500; letter-spacing:-.02em; border-bottom:1px solid var(--line); padding-bottom:5px; }
-  #doc h3 { font-weight:600; letter-spacing:-.01em; }
-  #doc pre { background:rgba(15,15,12,.05); padding:12px 16px; border-radius:10px; overflow-x:auto;
-    font:13px/1.5 ui-monospace, Menlo, monospace; }
-  #doc code { background:rgba(15,15,12,.06); padding:1px 5px; border-radius:4px; font-size:.9em;
-    font-family:ui-monospace, Menlo, monospace; }
+  #doc h1 { font-size:31px; font-weight:600; letter-spacing:-.03em; color:var(--ink); margin:.2em 0 .55em; }
+  #doc h2 { font-size:20px; font-weight:600; letter-spacing:-.02em; color:var(--ink);
+    border-bottom:1px solid var(--line); padding-bottom:7px; margin:1.1em 0 .4em; }
+  #doc h3 { font-size:16px; font-weight:600; letter-spacing:-.01em; color:var(--ink); }
+  #doc p, #doc li { line-height:1.62; }
+  #doc pre { background:var(--fill); padding:12px 16px; border-radius:10px; overflow-x:auto;
+    font:13px/1.55 'Geist Mono', ui-monospace, Menlo, monospace; }
+  #doc code { background:var(--fill); padding:1px 5px; border-radius:4px; font-size:.9em;
+    font-family:'Geist Mono', ui-monospace, Menlo, monospace; }
   #doc pre code { padding:0; background:none; }
-  #doc table { border-collapse:collapse; } #doc td, #doc th { border:1px solid var(--line); padding:6px 11px; font-size:14px; }
-  #doc blockquote { border-left:2px solid var(--accent); margin-left:0; padding-left:14px; color:var(--muted); }
-  #doc a { color:var(--fg); text-decoration:none; border-bottom:2px solid var(--accent); }
+  #doc table { border-collapse:collapse; } #doc td, #doc th { border:1px solid var(--line-2); padding:6px 11px; font-size:14px; }
+  /* a document blockquote is CONTENT, not the agent — keep it monochrome (yellow is reserved) */
+  #doc blockquote { border-left:2px solid var(--line-2); margin-left:0; padding-left:14px; color:var(--muted); }
+  /* an in-doc hyperlink is distinct from an agent anchor (2px yellow underline) — ink, quiet underline */
+  #doc a { color:var(--ink); text-decoration:underline; text-decoration-color:var(--line-strong);
+    text-underline-offset:2px; }
+  #doc a:hover { text-decoration-color:var(--ink); }
   .block { position:relative; }
   .block > :first-child { margin-top:.4em; } .block > :last-child { margin-bottom:.4em; }
-  /* persistent cue: commented/suggested text stays softly highlighted + underlined, tappable */
-  mark.anchor { background:rgba(255,235,0,.32); border-radius:2px; padding:0 .5px; cursor:pointer;
-    box-shadow:inset 0 -1.5px 0 rgba(198,180,0,.9); transition:background .15s, box-shadow .15s; }
-  mark.anchor.flash { background:var(--accent); box-shadow:var(--ring); }   /* brief pulse when located */
-  aside { border-left:1px solid var(--line); padding:20px 18px; display:flex; flex-direction:column; gap:12px;
-    height:calc(100vh - 50px); overflow-y:auto; position:sticky; top:50px; background:var(--bg); }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:14px 16px; font-size:13px;
-    transition:box-shadow .2s ease, border-color .2s ease; }
-  .card.flash { border-color:var(--fg); box-shadow:0 0 0 3px rgba(255,235,0,.7); }
-  /* provenance stays monochrome: ink dot = alex, yellow dot = claude (the AI carries the accent) */
-  .card .who { font-weight:600; }
-  .card .who::before { content:''; display:inline-block; width:7px; height:7px; border-radius:50%;
-    margin-right:6px; vertical-align:baseline; }
-  .who.alex::before { background:var(--fg); }
-  .who.claude::before { background:var(--accent); box-shadow:0 0 0 1px var(--fg); }
-  .card .quote { color:var(--muted); font-size:12px; border-left:2px solid var(--accent); padding-left:9px;
-    margin:8px 0; cursor:pointer; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
-  .card .badge { font-size:10.5px; letter-spacing:.02em; padding:2px 8px; border-radius:6px;
-    border:1px solid var(--line-strong); color:var(--muted); }
-  .card .badge.suggestion { color:var(--fg); border-color:var(--fg); }
-  .card .badge.flag { background:var(--accent); color:var(--accent-fg); border-color:var(--fg); }
-  /* run = "act on this now". Inverted ink chip: unmistakable against comment/flag at a glance, but
-     monochrome and quiet — no stripe, no glow. sidecar doesn't know what the work IS; this is only a
-     louder way of saying "please do this", so it must not out-shout the accent. */
-  .card .badge.run { background:var(--fg); color:var(--bg); border-color:var(--fg); }
-  .card.run { border-color:var(--line-strong); }
-  .card .badge.orphaned { color:var(--muted); border-color:var(--muted); }
-  .msg { margin:7px 0; } .msg .t { color:var(--fg); }
-  /* diffs stay monochrome+yellow: additions get the electric highlight, deletions a muted strike */
-  .diffbox { font:12.5px/1.55 ui-monospace, Menlo, monospace; background:rgba(15,15,12,.04); border-radius:9px;
-    padding:9px 11px; margin:8px 0; white-space:pre-wrap; word-break:break-word; border:1px solid var(--line); }
-  .diffbox del { color:var(--muted); text-decoration:line-through; }
-  .diffbox ins { background:var(--accent); color:var(--accent-fg); text-decoration:none; border-radius:2px; }
-  .row { display:flex; gap:8px; margin-top:10px; align-items:center; }
+  /* persistent cue: an open item softly underlines its span in the agent's yellow, tappable */
+  mark.anchor { background:transparent; border-bottom:2px solid var(--yellow); padding:0 1px; cursor:pointer;
+    transition:background .15s ease; border-radius:1px; }
+  mark.anchor.flash { background:rgba(255,235,0,.32); box-shadow:0 0 0 3px rgba(255,235,0,.3); }
+  aside { border-left:1px solid var(--line); padding:22px 20px; display:flex; flex-direction:column; gap:8px;
+    height:calc(100vh - 51px); overflow-y:auto; position:sticky; top:51px; background:var(--bg); }
+  /* review card — no border; a soft depth shadow lifts it off the rail */
+  .card { background:var(--bg); border-radius:14px; padding:15px 16px; font-size:13px; box-shadow:var(--shadow);
+    transition:box-shadow .2s ease; }
+  .card.flash { box-shadow:var(--shadow), 0 0 0 3px rgba(255,235,0,.55); }
+  /* orphaned: the anchor text is gone — greyed surface, muted identity */
+  .card.orphaned { background:#fafaf8; }
+  /* identity — claude is a yellow chip (the agent's color); you are an ink dot + name */
+  .card .who { font-weight:600; display:inline-flex; align-items:center; }
+  .who.claude { gap:5px; font-size:12px; color:var(--chip-fg); background:var(--chip);
+    border-radius:6px; padding:2px 8px; }
+  .who.claude::before { content:''; width:6px; height:6px; border-radius:50%; background:var(--yellow);
+    box-shadow:0 0 0 1px var(--yellow-ring); }
+  .who.alex { gap:6px; font-size:13px; color:var(--ink); }
+  .who.alex::before { content:''; width:8px; height:8px; border-radius:50%; background:var(--ink); }
+  .card.orphaned .who.claude { color:#57574f; background:#f2f2ee; }
+  .card.orphaned .who.claude::before { background:#c2c2ba; box-shadow:none; }
+  /* kind label — quiet uppercase text, not a bordered badge */
+  .card .badge { font-size:10.5px; font-weight:600; letter-spacing:.03em; text-transform:uppercase;
+    color:var(--muted); margin-left:8px; }
+  .card .badge.suggestion { color:var(--muted); }
+  /* flag = "look here" from you — monochrome chip (yellow is the agent's, never yours) */
+  .card .badge.flag { background:#f4f4f1; color:#57574f; border-radius:20px; padding:2px 9px;
+    margin-left:8px; letter-spacing:.02em; }
+  /* run = "act on this now". Inverted ink chip: unmistakable, but monochrome — it must not out-shout
+     the agent's yellow. sidecar doesn't know what the work IS; this is just a louder "please do this". */
+  .card .badge.run { background:var(--ink); color:#fff; border-radius:20px; padding:2px 9px;
+    margin-left:8px; letter-spacing:.02em; }
+  .card .badge.orphaned { color:var(--muted); }
+  /* the anchored span the card refers to — a yellow left-rule (the agent's), quiet quoted text */
+  .card .quote { color:var(--muted); font-size:12.5px; border-left:2px solid var(--yellow); padding-left:10px;
+    margin:9px 0; line-height:1.4; cursor:pointer; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+  .card.orphaned .quote { border-left-color:var(--line-2); color:var(--faint); text-decoration:line-through; }
+  .card .when { font-size:11px; color:var(--fainter); margin-left:auto; }
+  /* thread messages — bold name (no chip, no dot; the header carries identity) + body */
+  .msg { margin:8px 0; font-size:13px; line-height:1.5; color:var(--fg); }
+  .msg .who { background:none; padding:0; color:inherit; font-size:13px; }
+  .msg .who::before { display:none; }
+  .msg .who.claude, .msg .who.alex { margin-right:5px; }
+  .msg .t { color:var(--fg); }
+  /* word-level diff — mono well; deletions strike out muted, insertions carry the agent's yellow */
+  .diffbox { font:12.5px/1.6 'Geist Mono', ui-monospace, Menlo, monospace; background:var(--fill); border-radius:10px;
+    padding:10px 12px; margin:9px 0; white-space:pre-wrap; word-break:break-word; color:#57574f; }
+  .diffbox del { color:var(--faint); text-decoration:line-through; }
+  .diffbox ins { background:var(--yellow); color:var(--chip-fg); text-decoration:none; border-radius:3px; padding:0 2px; }
+  .row { display:flex; gap:8px; margin-top:11px; align-items:center; }
   .row.spread { justify-content:space-between; }
-  .reply { width:100%; font:inherit; font-size:13px; border:1px solid var(--line-strong); border-radius:8px;
-    padding:6px 10px; background:var(--card); resize:none; overflow:hidden; line-height:1.45;
-    min-height:34px; max-height:40vh; overflow-y:auto; }
-  .reply:focus { outline:none; border-color:rgba(15,15,12,.6); box-shadow:var(--ring); }
-  /* floating selection toolbar — a neo-brutalist light card, hover fills yellow */
-  #seltool { position:absolute; display:none; z-index:30; background:var(--card); border:1.5px solid var(--fg);
-    border-radius:8px; box-shadow:3px 3px 0 0 var(--fg); padding:3px; align-items:center; gap:1px;
+  .reply { width:100%; font:inherit; font-size:13px; border:1px solid var(--line-2); border-radius:9px;
+    padding:8px 11px; background:var(--bg); color:var(--fg); resize:none; overflow:hidden; line-height:1.45;
+    min-height:36px; max-height:40vh; overflow-y:auto; }
+  .reply::placeholder { color:var(--faint); }
+  .reply:focus { outline:none; border-color:var(--ink-btn); box-shadow:var(--ring); }
+  /* floating selection toolbar — a soft light card; hover fills grey (your actions stay monochrome) */
+  #seltool { position:absolute; display:none; z-index:30; background:var(--bg); border:1px solid var(--line-2);
+    border-radius:10px; box-shadow:var(--shadow); padding:4px; align-items:center; gap:1px;
     flex-wrap:wrap; max-width:calc(100vw - 16px); }
-  #seltool button { background:none; border:none; box-shadow:none; color:var(--fg); padding:5px 10px;
-    border-radius:5px; font-size:13px; font-weight:600; line-height:1; }
-  #seltool button:hover { background:var(--accent); color:var(--accent-fg); transform:none; box-shadow:none; }
+  #seltool button { background:none; border:none; box-shadow:none; color:var(--fg); padding:6px 11px;
+    border-radius:7px; font-size:13px; font-weight:600; line-height:1; }
+  #seltool button:hover { background:var(--fill); color:var(--ink); }
   #seltool b { font-weight:800; } #seltool i { font-style:italic; font-family:Georgia,serif; }
-  #seltool .tsep { width:1px; height:16px; background:var(--line-strong); margin:0 3px; }
-  #seltool input { background:var(--card); border:1px solid var(--line-strong); color:var(--fg); border-radius:6px;
-    font:inherit; font-size:13px; padding:5px 9px; width:230px; outline:none; }
-  #seltool input:focus { border-color:rgba(15,15,12,.6); box-shadow:var(--ring); }
-  #popover { position:absolute; display:none; z-index:31; background:var(--card); border:1.5px solid var(--fg);
-    border-radius:12px; box-shadow:4px 4px 0 0 var(--fg); padding:12px; width:300px; }
+  #seltool .tsep { width:1px; height:16px; background:var(--line-2); margin:0 3px; }
+  #seltool input { background:var(--bg); border:1px solid var(--line-2); color:var(--fg); border-radius:7px;
+    font:inherit; font-size:13px; padding:6px 10px; width:230px; outline:none; }
+  #seltool input:focus { border-color:var(--ink-btn); box-shadow:var(--ring); }
+  #popover { position:absolute; display:none; z-index:31; background:var(--bg); border:1px solid var(--line-2);
+    border-radius:12px; box-shadow:var(--shadow); padding:13px; width:300px; }
   #popover textarea { width:100%; min-height:66px; max-height:40vh; overflow-y:auto; font:inherit; font-size:13px;
-    border:1px solid var(--line-strong); border-radius:8px; padding:7px 9px; resize:vertical; outline:none; background:var(--bg); }
-  #popover textarea:focus { border-color:rgba(15,15,12,.6); box-shadow:var(--ring); }
+    border:1px solid var(--line-2); border-radius:9px; padding:8px 10px; resize:vertical; outline:none;
+    background:var(--bg); color:var(--fg); }
+  #popover textarea::placeholder { color:var(--faint); }
+  #popover textarea:focus { border-color:var(--ink-btn); box-shadow:var(--ring); }
   #popover .row { justify-content:flex-end; }
-  /* toast — the one near-black surface (spktr's email/print tone), yellow action */
+  /* toast — the one dark surface; light action buttons (your decisions stay monochrome) */
   #banner { display:none; position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:var(--dark);
-    color:#fbfbf7; padding:12px 18px; border-radius:12px; z-index:40; font-size:13.5px; box-shadow:5px 5px 0 0 rgba(10,9,0,.35); }
-  #banner button { margin-left:10px; background:var(--accent); color:var(--accent-fg); border-color:var(--dark);
-    box-shadow:2px 2px 0 0 rgba(10,9,0,.5); font-size:12px; padding:4px 10px; }
-  #banner button:hover { transform:translate(-1px,-1px); box-shadow:3px 3px 0 0 rgba(10,9,0,.5); }
+    color:#faf9f4; padding:13px 18px; border-radius:12px; z-index:40; font-size:13.5px;
+    box-shadow:0 1px 2px rgba(0,0,0,.2), 0 18px 40px -18px rgba(0,0,0,.5); }
+  #banner button { margin-left:10px; background:#fff; color:var(--ink); border:none; font-size:12.5px; padding:6px 12px; }
+  #banner button:hover { background:#f0f0ea; }
   /* quiet docs link — a text link in the header chrome, never a CTA */
   .doclink { color:var(--muted); font-size:13px; font-weight:500; text-decoration:none;
     border-bottom:1.5px solid transparent; }
-  .doclink:hover { color:var(--fg); border-bottom-color:var(--accent); }
-  /* P1: turn/presence chip, threaded suggestion, done control */
+  .doclink:hover { color:var(--fg); }
   /* right cluster: the open/orphaned COUNT — ambient status, not a control */
-  .turn { font-size:12px; color:var(--muted); display:flex; align-items:center; gap:5px; white-space:nowrap; }
+  .turn { font-size:12.5px; color:var(--faint); display:flex; align-items:center; gap:5px; white-space:nowrap; }
   .turn:empty { display:none; }
-  .turn .orphan { color:var(--fg); border-bottom:1.5px solid var(--accent); cursor:pointer; }
+  .turn .orphan { color:var(--fg); border-bottom:1.5px solid var(--yellow); cursor:pointer; }
   /* center of the navbar: the shared "are we in the room together?" readout — here ↔ waiting */
   .presence { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); pointer-events:none;
     display:flex; align-items:center; gap:6px; font-size:12.5px; white-space:nowrap; }
   .presence .dot { width:7px; height:7px; border-radius:50%; flex:none; }
-  .presence.here { color:var(--fg); font-weight:500; }
-  .presence.here .dot { background:var(--accent); box-shadow:0 0 0 1px var(--fg); }
+  .presence.here { color:#6b6b64; font-weight:500; }
+  .presence.here .dot { background:var(--yellow); box-shadow:0 0 0 1px var(--yellow-ring); }
   .presence.away { color:var(--muted); font-weight:500; }
   .presence.away .dot { background:transparent; border:1.5px solid var(--line-strong); }
   .presence.sent { color:var(--muted); font-weight:500; }            /* review handed off — a settled, filled dot */
   .presence.sent .dot { background:var(--muted); box-shadow:none; }
   @keyframes presPulse { 0%,100%{opacity:.35} 50%{opacity:1} }
-  .presence.working .dot { animation:presPulse 1s ease-in-out infinite; }
+  .presence.working .dot { animation:presPulse 1.4s ease-in-out infinite; }
   /* docs is a LINK (leaves the page) — mark it as one so it reads differently from status + actions */
-  .doclink::after { content:'\2197'; font-size:.82em; margin-left:1px; opacity:.6; }
-  /* "done reviewing" is a review ACTION → it lives at the foot of the review column, not the nav bar.
-     A quiet full-width control under the last card, where you arrive when you've been through everything. */
+  .doclink::after { content:'\2197'; font-size:.82em; margin-left:2px; opacity:.6; }
+  /* "done reviewing" is a review ACTION → it lives at the foot of the review column, not the nav bar. */
   .done-foot { display:block; width:100%; margin-top:8px; padding:14px 0 4px; text-align:center;
     font-size:12.5px; font-weight:500; color:var(--muted); background:none; border:none; box-shadow:none;
     border-top:1px solid var(--line); border-radius:0; }
-  .done-foot:hover { color:var(--fg); background:none; transform:none; box-shadow:none; }
-  /* a suggestion nested inside the comment thread it answers (replyTo) — a quiet recessed panel,
-     NOT a left-accent callout; the accent lives in the diff's <ins> highlights + the claude dot */
-  .subcard { margin:9px 0 5px; padding:11px 13px; border:1px solid var(--line-strong);
-    border-radius:12px; background:rgba(15,15,12,.025); }
+  .done-foot:hover { color:var(--fg); background:none; }
+  /* a suggestion nested inside the comment thread it answers (replyTo) — a quiet recessed panel */
+  .subcard { margin:10px 0 5px; padding:12px 13px; border:1px solid var(--line-2);
+    border-radius:12px; background:var(--fill); }
   .subcard .who { font-weight:600; }
   #filelist { padding:48px 40px; max-width:760px; margin:0 auto; }
-  #filelist h2 { font-weight:500; letter-spacing:-.02em; }
-  #filelist a { display:flex; justify-content:space-between; padding:11px 14px; border-bottom:1px solid var(--line);
-    text-decoration:none; color:var(--fg); } #filelist a:hover { background:var(--card); }
-  .count { background:var(--accent); color:var(--accent-fg); border-radius:99px; font-size:11.5px; padding:1px 9px; font-weight:600; }
-  .empty { color:var(--muted); font-size:13px; text-align:center; padding:28px 0; }
+  #filelist .h { font-size:22px; font-weight:600; letter-spacing:-.02em; color:var(--ink); margin:0 0 4px; }
+  #filelist .sub { font-size:13.5px; color:var(--muted); margin:0 0 26px; }
+  #filelist .sub code { font-family:'Geist Mono', ui-monospace, monospace; font-size:12.5px; color:#57574f; }
+  #filelist a { display:flex; align-items:center; gap:12px; padding:14px 12px; border-bottom:1px solid var(--line);
+    text-decoration:none; color:var(--ink); border-radius:9px; }
+  #filelist a:hover { background:var(--fill); }
+  #filelist a .nm { font-size:14.5px; font-weight:500; }
+  #filelist a .ext { font-family:'Geist Mono', ui-monospace, monospace; font-size:11px; color:var(--fainter); }
+  #filelist a .sp { flex:1; }
+  #filelist a .none { font-size:12px; color:#c2c2ba; }
+  /* open-count pill — grey chip carrying a single yellow dot (the agent has notes waiting) */
+  .count { display:inline-flex; align-items:center; gap:6px; background:#f6f6f2; color:#57574f;
+    border-radius:20px; font-size:12px; padding:3px 10px; font-weight:600; }
+  .count::before { content:''; width:6px; height:6px; border-radius:50%; background:var(--yellow);
+    box-shadow:0 0 0 1px var(--yellow-ring); }
+  .empty { color:var(--muted); font-size:13px; text-align:center; padding:40px 0; line-height:1.55; }
 
   /* --- mobile: single-column doc, review panel becomes a pull-up bottom sheet --- */
   #sheetToggle, #sheetBackdrop { display:none; }
@@ -178,10 +231,10 @@
     #doc pre { max-width:100%; }
     #pwd { padding:16px 18px 0; font-size:12px; }
     #doc { padding: 8px 18px 42vh; font-size: 16px; line-height:1.62; }
-    #doc h1 { font-size:1.45em; } #doc h2 { font-size:1.18em; }
+    #doc h1 { font-size:25px; } #doc h2 { font-size:18px; }
     .hwrap { padding:11px 18px; gap:10px; }
     header h1 { font-size:15px; max-width:56vw; }
-    header h1 .ghost { width:22px; height:22px; }
+    header h1 .mark { height:19px; }
     #status { min-width:0; }
     .presence { display:none; }   /* absolute-center collides with the cramped mobile header — TODO: reposition for mobile */
     #filelist { padding:28px 18px; }
@@ -192,25 +245,25 @@
     /* the sidebar, reframed as a bottom sheet */
     aside {
       position:fixed; left:0; right:0; bottom:0; top:auto; height:76vh;
-      border-left:none; border-top:1.5px solid var(--fg); border-radius:20px 20px 0 0;
-      background:var(--bg); box-shadow:0 -10px 34px rgba(10,9,0,.20);
+      border-left:none; border-top:1px solid var(--line); border-radius:22px 22px 0 0;
+      background:var(--bg); box-shadow:0 -12px 40px rgba(20,20,15,.18);
       transform:translateY(102%); transition:transform .26s ease-out; z-index:46;
-      padding:22px 16px calc(env(safe-area-inset-bottom) + 20px); gap:14px;
+      padding:22px 16px calc(env(safe-area-inset-bottom) + 20px); gap:12px;
     }
     aside::before { content:''; position:absolute; top:9px; left:50%; transform:translateX(-50%);
       width:40px; height:4px; border-radius:99px; background:var(--line-strong); }
     body.sheet-open aside { transform:translateY(0); }
 
-    #sheetBackdrop { display:block; position:fixed; inset:0; background:rgba(10,9,0,.30); z-index:45;
+    #sheetBackdrop { display:block; position:fixed; inset:0; background:rgba(20,20,15,.28); z-index:45;
       opacity:0; pointer-events:none; transition:opacity .26s; }
     body.sheet-open #sheetBackdrop { opacity:1; pointer-events:auto; }
 
-    /* the pull-up pill — neo-brutalist, shows the open-item count */
-    #sheetToggle { display:inline-flex; align-items:center; gap:7px; position:fixed;
+    /* the pull-up pill — ink surface, the open-item count in the agent's yellow */
+    #sheetToggle { display:inline-flex; align-items:center; gap:8px; position:fixed;
       right:16px; bottom:calc(env(safe-area-inset-bottom) + 16px); z-index:44;
-      background:var(--card); color:var(--fg); border:1.5px solid var(--fg); box-shadow:3px 3px 0 0 var(--fg);
-      border-radius:99px; padding:10px 16px; font-weight:600; font-size:14px; }
-    #sheetToggle .n { background:var(--accent); color:var(--accent-fg); border-radius:99px;
+      background:var(--ink-btn); color:#fff; border:none; box-shadow:0 8px 20px -6px rgba(20,20,15,.4);
+      border-radius:99px; padding:11px 18px; font-weight:600; font-size:14px; }
+    #sheetToggle .n { background:var(--yellow); color:var(--chip-fg); border-radius:99px;
       min-width:20px; text-align:center; padding:0 6px; font-size:12.5px; }
     #sheetToggle .n:empty { display:none; }
     body.sheet-open #sheetToggle { display:none; }
@@ -221,8 +274,8 @@
 <header>
   <div class="hwrap">
     <h1 class="brand">
-      <svg class="ghost" viewBox="86 84 400 400" aria-hidden="true"><g transform="translate(109.24,107.69) scale(1.55172)"><path d="M134.851 16.6635C170.473 21.437 197.917 43.2712 211.86 77.9526C216.684 90.0042 220.008 104.442 221.332 119.205C221.508 121.15 221.773 129.577 221.92 137.916C222.067 146.255 222.332 154.535 222.508 156.332C223.361 165.142 224.214 170.476 226.656 182.115C229.009 193.312 229.48 197.172 229.039 201.415C228.627 205.599 228.068 207.573 226.45 210.932C224.097 215.794 219.655 219.713 214.537 221.452C211.272 222.542 206.036 222.807 202.124 222.07C196.711 221.039 191.416 218.594 186.475 214.881C182.18 211.61 182.239 211.61 179.944 214.38C174.267 221.245 166.207 226.019 157.795 227.522C155 227.993 149.823 227.934 146.823 227.374C139.557 225.989 132.38 222.188 125.614 216.177C123.055 213.879 122.32 213.378 121.79 213.525C121.467 213.614 120.378 214.468 119.408 215.382C115.407 219.212 112.201 221.481 107.524 223.838C96.9932 229.113 86.5214 229.231 76.5202 224.251C72.0196 221.982 66.8131 217.798 63.9892 214.115C62.695 212.435 61.8713 211.993 60.93 212.494C60.6359 212.671 59.2828 213.643 57.9885 214.645C50.9582 220.037 44.1927 222.512 36.6624 222.512C28.2202 222.512 21.3076 218.328 17.6601 211.08C14.6892 205.157 14.2185 197.82 16.1893 188.42C21.4841 163.021 21.8371 160.28 22.1901 138.21C22.3371 129.695 22.5136 122.152 22.6019 121.415C22.6901 120.678 22.896 118.498 23.0725 116.553C24.1903 104.177 27.6025 89.6801 31.9559 78.6893C41.4277 54.8219 57.2825 37.0245 78.6675 26.2399C88.7863 21.1423 100.729 17.6359 111.76 16.5456C113.554 16.3688 115.407 16.1626 115.878 16.1036C118.055 15.809 131.38 16.192 134.851 16.6635Z" fill="var(--fg)" stroke="var(--fg)" stroke-width="20" stroke-linejoin="round"/></g><g transform="translate(82.24,80.69) scale(1.55172)"><path d="M134.851 16.6635C170.473 21.437 197.917 43.2712 211.86 77.9526C216.684 90.0042 220.008 104.442 221.332 119.205C221.508 121.15 221.773 129.577 221.92 137.916C222.067 146.255 222.332 154.535 222.508 156.332C223.361 165.142 224.214 170.476 226.656 182.115C229.009 193.312 229.48 197.172 229.039 201.415C228.627 205.599 228.068 207.573 226.45 210.932C224.097 215.794 219.655 219.713 214.537 221.452C211.272 222.542 206.036 222.807 202.124 222.07C196.711 221.039 191.416 218.594 186.475 214.881C182.18 211.61 182.239 211.61 179.944 214.38C174.267 221.245 166.207 226.019 157.795 227.522C155 227.993 149.823 227.934 146.823 227.374C139.557 225.989 132.38 222.188 125.614 216.177C123.055 213.879 122.32 213.378 121.79 213.525C121.467 213.614 120.378 214.468 119.408 215.382C115.407 219.212 112.201 221.481 107.524 223.838C96.9932 229.113 86.5214 229.231 76.5202 224.251C72.0196 221.982 66.8131 217.798 63.9892 214.115C62.695 212.435 61.8713 211.993 60.93 212.494C60.6359 212.671 59.2828 213.643 57.9885 214.645C50.9582 220.037 44.1927 222.512 36.6624 222.512C28.2202 222.512 21.3076 218.328 17.6601 211.08C14.6892 205.157 14.2185 197.82 16.1893 188.42C21.4841 163.021 21.8371 160.28 22.1901 138.21C22.3371 129.695 22.5136 122.152 22.6019 121.415C22.6901 120.678 22.896 118.498 23.0725 116.553C24.1903 104.177 27.6025 89.6801 31.9559 78.6893C41.4277 54.8219 57.2825 37.0245 78.6675 26.2399C88.7863 21.1423 100.729 17.6359 111.76 16.5456C113.554 16.3688 115.407 16.1626 115.878 16.1036C118.055 15.809 131.38 16.192 134.851 16.6635Z" fill="var(--accent)" stroke="var(--fg)" stroke-width="20" stroke-linejoin="round"/></g></svg>
-      <span class="wm">spktr<span class="sep">/</span>sidecar</span>
+      <img class="mark" src="/mark.svg" alt="" aria-hidden="true">
+      <span class="wm">sidecar</span>
     </h1>
     <div id="presence" class="presence away"></div>
     <div class="spacer"></div>
@@ -312,11 +365,14 @@ async function boot() {
     const { files, defaultFile } = await api('GET', '/api/files');
     if (defaultFile) { location.search = '?f=' + encodeURIComponent(defaultFile); return; }
     $('main').style.display = 'none'; $('filelist').style.display = 'block';
-    $('filelist').innerHTML = '<h2>sidecar — pick a file</h2>' + files.map(f =>
-      `<a href="/?f=${encodeURIComponent(f.rel)}">${esc(f.rel)}${f.open ? `<span class="count">${f.open}</span>` : ''}</a>`).join('');
+    const ext = (p) => { const b = p.split('/').pop(); const i = b.lastIndexOf('.'); return i > 0 ? b.slice(i + 1) : ''; };
+    $('filelist').innerHTML = '<div class="h">pick a file</div><div class="sub">select a document to review.</div>' + files.map(f =>
+      `<a href="/?f=${encodeURIComponent(f.rel)}"><span class="ext">${esc(ext(f.rel))}</span>` +
+      `<span class="nm">${esc(f.rel)}</span><span class="sp"></span>` +
+      (f.open ? `<span class="count">${f.open}</span>` : `<span class="none">—</span>`) + `</a>`).join('');
     return;
   }
-  document.title = 'spktr/sidecar · ' + FILE;
+  document.title = 'sidecar · ' + FILE;
   $('doc').contentEditable = 'true';
   await reloadFile();
   const es = new EventSource('/events');
@@ -802,7 +858,7 @@ function renderSide() {
   side.innerHTML = top.length ? '' : `<div class="empty">no open items.${done ? ` (${done} settled)` : ''}<br>select text to comment.</div>`;
   for (const it of top) {
     const el = document.createElement('div');
-    el.className = 'card' + (it.run ? ' run' : ''); el.dataset.id = it.id;
+    el.className = 'card' + (it.run ? ' run' : '') + (it.status === 'orphaned' ? ' orphaned' : ''); el.dataset.id = it.id;
     // run beats flag beats kind — a run request must read as "do this", not as one more comment.
     const label = it.run ? 'run' : it.flag ? 'flag' : it.kind;
     let head = `<span class="who ${it.by}">${it.by}</span> <span class="badge ${label}">${label}</span>`;
