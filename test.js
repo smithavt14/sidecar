@@ -1092,9 +1092,12 @@ test('orphan reason distinguishes never-matched from text-changed', () => {
   assert.equal(was_good.items[0].orphanReason, 'text-changed');
 });
 
-test('CLI and browser writing concurrently do not drop each other', async () => {
-  // The CLI merges in-process; the server merges on PUT. Both go through lib/review.js mergeItem,
-  // so an interleaved pair must end with both items present.
+test('a CLI write and a browser PUT each survive the other (sequential, not racing)', async () => {
+  // The CLI merges in-process; the server merges on PUT. Both go through lib/review.js mergeItem, so
+  // an interleaved pair ends with both items present. NOTE this is sequential by construction — it
+  // proves merge-on-load, NOT concurrency. Both writers are unlocked read-modify-write, so genuinely
+  // simultaneous writes can still lose an item; that window is one synchronous tick and predates the
+  // CLI. Don't read this test as covering it.
   fs.writeFileSync(path.join(dir, 'concurrent.md'), 'Alpha line.\n\nBeta line.\n');
   execFileSync('node', [BIN, 'comment', 'concurrent.md', '--quote', 'Alpha line.', '--text', 'from the CLI'],
     { cwd: dir, encoding: 'utf8' });
