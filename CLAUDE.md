@@ -16,6 +16,32 @@ No build step. Six files carry the whole tool:
 | `public/index.html` | The entire frontend: rendering, contenteditable editor, review rail. |
 | `public/anchor.js` | The ONE content-anchor matcher, loaded by both the browser and Node. |
 
+## What sidecar actually promises
+
+**100% local. You own it.** That's the whole pitch — nothing leaves the machine, no account, no
+upload, and the document and its review are files on your disk that you can read, diff, and delete
+without sidecar's help.
+
+It is *not* a rule about transport. Earlier drafts of this file said "the agent works through the
+filesystem, never the HTTP API," which described an implementation detail and then got treated as a
+principle — it made a local CLI talking to a local server over loopback look like a violation of
+something, when it violates nothing. If a change keeps everything on the machine and in the user's own
+files, it is faithful to the design. Don't defend the transport.
+
+## Two writers, one lock
+
+The document has two writers and only one of them checks. The browser saves with a `baseHash`
+optimistic lock and handles both conflict directions (external change while dirty → banner; stale
+save → 409 → banner), so **the human never silently loses work**. The agent edits the document with
+ordinary file writes and no check at all, so an agent write CAN silently overwrite something the human
+just saved.
+
+What actually prevents that is **turn-taking**: the `sidecar wait` → respond → re-arm loop keeps the
+two writers temporally separated, and the agent should only touch the document while it holds the
+turn. That is the real concurrency model and it is a convention, not an enforced property — worth
+knowing before you assume the locking is symmetric. The expensive fix, if this ever actually bites, is
+routing document edits through sidecar so they take the same lock; it has not bitten yet.
+
 `public/anchor.js` and `lib/review.js` are shared on purpose. A second implementation of matching or
 merging is a second set of bugs, and the two sides must agree byte-for-byte — a matcher that
 normalised differently on each side once made the highlight point at one duplicate while accept

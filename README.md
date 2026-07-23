@@ -87,7 +87,10 @@ untouched block keeps its exact original bytes, so `git diff` shows just what ch
 
 ## Safety model
 
-sidecar is a single-user, local, no-auth tool, hardened for that threat model:
+sidecar is a single-user, **single-machine**, local, no-auth tool, hardened for that threat model.
+(Single-machine matters: two clones of a repo with an in-flight `<file>.review.json` can diverge in
+ways merge-by-id cannot reconcile — it merges concurrent writes to one file, not two histories.
+Finishing a review before syncing avoids it, which the commit-once-at-the-end convention already does.)
 
 - Binds to `127.0.0.1` and validates the `Host` header (an allowlist; add hosts via `SIDECAR_HOSTS`).
   Loopback binding alone doesn't stop DNS-rebinding, so the Host check is enforced.

@@ -1276,3 +1276,35 @@ test('CLI suggest refuses the same replacement at write time', () => {
   assert.equal(sc(d).items.length, 1);
   fs.rmSync(d, { recursive: true, force: true });
 });
+
+test('CLI refuses non-markdown files', () => {
+  const d = cliDir();
+  fs.writeFileSync(path.join(d, 'code.js'), 'const x = 1;\n# not a heading\n- not a list\n');
+  const e = cliFails(d, 'show', 'code.js');
+  assert.equal(e.status, 2);
+  assert.match(e.stderr, /reviews markdown/);
+  // .markdown and friends are still accepted.
+  fs.writeFileSync(path.join(d, 'other.markdown'), '# Doc\n\nText here.\n');
+  cli(d, 'comment', 'other.markdown', '--quote', 'Text here.', '--text', 'ok');
+  assert.ok(fs.existsSync(path.join(d, 'other.markdown.review.json')));
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('a partial update never erases the status of the item it merges into', () => {
+  const d = cliDir();
+  cli(d, 'comment', 'doc.md', '--quote', 'Success metrics', '--text', 'first');
+  const id = sc(d).items[0].id;
+  cli(d, 'reply', 'doc.md', id, 'a plain reply, no --resolve');
+  assert.equal(sc(d).items[0].status, 'open', 'reply must not blank the status');
+  assert.equal(sc(d).items[0].thread.length, 2);
+  // …and `show` has to survive whatever is on disk regardless.
+  assert.match(cli(d, 'show', 'doc.md'), /OPEN/);
+
+  // Same at the merge layer, directly: incoming carries no opinion about status.
+  const { mergeItem } = require('./lib/review.js');
+  const merged = mergeItem(
+    { id: 'x', kind: 'comment', status: 'resolved', decidedAt: '2026-01-01T00:00:00Z', thread: [] },
+    { id: 'x', thread: [{ by: 'claude', at: '2026-01-02T00:00:00Z', text: 'late reply' }] });
+  assert.equal(merged.status, 'resolved', 'a partial update must not regress a decided status');
+  fs.rmSync(d, { recursive: true, force: true });
+});
