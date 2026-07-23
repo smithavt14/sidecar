@@ -1216,3 +1216,63 @@ test('add cannot author items as the human', () => {
   assert.equal(it.by, 'claude', 'item author is whoever ran the command');
   assert.equal(it.thread[0].by, 'claude', 'thread message author too');
 });
+
+/* Both halves of the splice problem, found by a second audit pass: spliceRisk validated the bytes
+   being REMOVED and only caught doubled markers, so single-character emphasis slipped through — and
+   nothing at all validated the bytes being INSERTED. */
+
+test('spliceRisk catches single-character marker runs without refusing arithmetic', () => {
+  const { spliceRisk } = require('./lib/review.js');
+  const Anchor = require('./public/anchor.js');
+  const risk = (raw, q) => { const h = Anchor.findNth(raw, q, 0); return h && spliceRisk(raw, h.start, h.end); };
+
+  assert.match(risk('*ital* text here', 'ital text here'), /dangling marker/);
+  assert.match(risk('_under_ text here', 'under text here'), /dangling marker/);
+  assert.match(risk('~~struck~~ text', 'struck text'), /dangling marker/);
+
+  // Must NOT refuse: replacing the interior of a marked run, arithmetic, a whole marked span.
+  assert.equal(risk('a **b** c', 'b'), null, 'replacing inside a bold run is fine');
+  assert.equal(risk('2 * 3 equals 6', '2 * 3'), null, 'an unpaired * is multiplication, not emphasis');
+  assert.equal(risk('with **bold** text', '**bold** text'), null);
+  assert.equal(risk('snake_case here', 'snake_case here'), null);
+});
+
+test('replacementRisk refuses structure injected mid-block, allows a whole-block rewrite', () => {
+  const { replacementRisk } = require('./lib/review.js');
+  const Anchor = require('./public/anchor.js');
+  const risk = (raw, q, rep) => { const h = Anchor.findNth(raw, q, 0); return replacementRisk(raw, h.start, h.end, rep); };
+
+  const list = 'Intro para.\n\n- item one\n- item two\n';
+  assert.match(risk(list, 'item one', 'one\n\n## Injected\n\nmore'), /list item|split/);
+
+  const para = 'Alpha paragraph here.\n\nBeta.\n';
+  assert.equal(risk(para, 'Alpha paragraph here.', 'One.\n\nTwo.'), null,
+    'a whole paragraph may become two — this is the documented heredoc case');
+  assert.match(risk(para, 'paragraph', 'x\n\n- a\n- b'), /part of a line/);
+  assert.match(risk(para, 'Alpha paragraph here.', 'has **one opener'), /unbalanced/);
+});
+
+test('accept refuses a replacement that would inject a heading into a list item', async () => {
+  const md = '# T\n\nIntro.\n\n- item one\n- item two\n';
+  fs.writeFileSync(path.join(dir, 'inject.md'), md);
+  execFileSync('node', [BIN, 'add', 'inject.md', '--force'], { cwd: dir, encoding: 'utf8',
+    input: JSON.stringify([{ id: 's-inject', quote: 'item one', replacement: 'one\n\n## Injected\n\nmore' }]),
+    stdio: ['pipe', 'pipe', 'pipe'] });
+  const r = await post('/api/accept', { path: 'inject.md', id: 's-inject' });
+  assert.equal(r.status, 409);
+  assert.equal(fs.readFileSync(path.join(dir, 'inject.md'), 'utf8'), md, 'file untouched');
+});
+
+test('CLI suggest refuses the same replacement at write time', () => {
+  const d = cliDir();
+  // A PART of a line — replacing it with block structure would split the paragraph around it.
+  const e = cliFails(d, 'suggest', 'doc.md', '--quote', 'Success metrics',
+    '--replacement', 'Metrics.\n\n## New Section\n\nBody.');
+  assert.ok(e);
+  assert.match(e.stderr, /block structure/);
+  // The whole line, on the other hand, may legitimately become several blocks.
+  cli(d, 'suggest', 'doc.md', '--quote', 'Success metrics are not defined yet.',
+    '--replacement', 'Metrics.\n\n## Targets\n\n200 signups by March.');
+  assert.equal(sc(d).items.length, 1);
+  fs.rmSync(d, { recursive: true, force: true });
+});

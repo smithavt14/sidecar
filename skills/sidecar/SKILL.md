@@ -26,6 +26,13 @@ sidecar has two sides.
 
 You never call the HTTP API, and you never hand-edit the sidecar JSON. Every action is one command.
 
+**What your items look like to them.** A suggestion renders as a card showing a word-level diff of the
+quoted text against your replacement, with accept and reject buttons; `--note` appears as one line
+underneath. A comment renders as a thread they can reply to or resolve. An `answer` nests inside the
+thread it responds to, so the diff sits right under their question. Every open item softly highlights
+its span in the document. Keep replacements short enough to read as a diff — a card is not a good place
+for three paragraphs.
+
 ---
 
 ## Start here
@@ -136,12 +143,17 @@ markdown-tolerant, so it can be either the raw markdown (`**bold**`) or the visi
 for a **comment** it may span soft line breaks and block boundaries — a quote taken from the rendered
 document, running across two list items, still anchors. The occurrence index is resolved for you.
 
-**A suggestion is stricter, because accepting one rewrites those exact bytes.** A card is refused if
-its span crosses a block boundary or a blank line, or starts and ends inside inline markup — replacing
-such a span would eat a list marker or leave a dangling `**`, and the human would have approved a clean
-diff and received mangled markdown. Quote within a single block, and quote the raw markdown (`**bold**
-text`, not `bold text`) when the span touches emphasis or code. If you want to point at something
-spanning blocks, use a comment: comments only anchor, so they are unrestricted.
+**A suggestion is stricter, because accepting one rewrites those exact bytes.** Both sides are checked.
+The span is refused if it crosses a block boundary or a blank line, or starts or ends inside inline
+markup — replacing such a span eats a list marker or leaves a dangling `*`. The *replacement* is
+refused if it carries block structure (a blank line, heading, or list marker) into a span that is only
+part of a line, or into a list item — that splits the block around it. In both cases the word-diff
+would have looked clean while the file came out mangled.
+
+So: quote within a single block, quote the raw markdown (`**bold** text`, not `bold text`) when the
+span touches emphasis or code, and only introduce new blocks when your quote covers a whole
+paragraph. To point at something spanning blocks, use a comment — comments only anchor, so they are
+unrestricted.
 
 **What is left to your judgment is choosing a quote that identifies exactly one span.** Everything
 else is enforced:
@@ -154,6 +166,11 @@ else is enforced:
 If an item does orphan because the human rewrote that passage, `sidecar reanchor` it onto the new
 text, or `sidecar drop` it.
 
+**About `--force`.** The refusal messages mention it, so: it exists for the narrow case of seeding an
+anchor onto text you are about to write, before that text exists. It is never the right answer to a
+refusal you do not understand — a forced item lands `orphaned`, or worse, applies a splice the check
+was trying to prevent. Fix the quote instead.
+
 ---
 
 ## The loop
@@ -161,7 +178,10 @@ text, or `sidecar drop` it.
 1. **Draft** the document (the first version is usually yours).
 2. **Suggest** — cards and comments anchored to real text.
 3. **Hand over both URLs**, then background `sidecar wait <file>` (absolute path). It fs-watches and
-   returns the instant they do anything, sleeping for free in between.
+   returns the instant they do anything, sleeping for free in between. *If your harness cannot run a
+   command in the background and wake you when it exits*, run it in the foreground with a short
+   `--timeout` (say 60) and treat a timeout exit as "nothing yet, run it again" — do not leave a
+   15-minute default blocking the session.
 4. **When it returns, run `sidecar show`** — see below. Then read `git diff <file>` for what they
    accepted or hand-edited.
 5. **Respond**, then background `sidecar wait` again.
@@ -210,9 +230,10 @@ wrong) and real timestamps, both filled in for you.
 
 ## Reviewing from a phone
 
-`./scripts/tailscale-serve.sh` proxies sidecar onto a private [Tailscale](https://tailscale.com)
-tailnet, so the human can review from their phone with the machine awake. Add the tailnet hostname to
-`SIDECAR_HOSTS`. Keep it tailnet-only: sidecar has no authentication, so never `tailscale funnel` it
+`tailscale serve --bg 4880` proxies sidecar onto a private [Tailscale](https://tailscale.com) tailnet,
+so the human can review from their phone with the machine awake (the repo wraps this as
+`./scripts/tailscale-serve.sh`). Add the tailnet hostname to `SIDECAR_HOSTS` so the Host allowlist
+accepts it. Keep it tailnet-only: sidecar has no authentication, so never `tailscale funnel` it
 publicly.
 
 ---
