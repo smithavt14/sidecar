@@ -1308,3 +1308,162 @@ test('a partial update never erases the status of the item it merges into', () =
   assert.equal(merged.status, 'resolved', 'a partial update must not regress a decided status');
   fs.rmSync(d, { recursive: true, force: true });
 });
+
+/* ---------------------------------------------------------------------------
+   P2 — the persistent last-seen cursor: `sidecar digest` and `wait` over it
+   (lib/digest.js). Same real-binary + temp-fixture pattern as the CLI block.
+   --------------------------------------------------------------------------- */
+
+// env-passing variant of cli() — the cursor is keyed by SIDECAR_AGENT.
+const cliE = (d, env, ...args) => execFileSync('node', [BIN, ...args],
+  { cwd: d, encoding: 'utf8', env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
+// Patch the on-disk review the way the browser/server would (add a human item, a reply, a decision).
+const patchReview = (d, fn) => { const p = path.join(d, 'doc.md.review.json');
+  const r = JSON.parse(fs.readFileSync(p, 'utf8')); fn(r); fs.writeFileSync(p, JSON.stringify(r, null, 2)); };
+const seen = (d) => { const p = path.join(d, 'doc.md.review.seen.json');
+  return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : null; };
+// Run `sidecar wait` as a real background process; `onReady` fires once the watcher is up so a test
+// can trigger an fs event. No server on SIDECAR_PORT here — presence pings just fail fast (400ms).
+function spawnWait(d, { agent = 'claude', timeout = 10, onReady, readyDelay = 800 } = {}) {
+  return new Promise((resolve) => {
+    const p = spawn('node', [BIN, 'wait', 'doc.md', '--timeout', String(timeout)],
+      { cwd: d, env: { ...process.env, SIDECAR_AGENT: agent, SIDECAR_PORT: '4993' } });
+    let out = ''; p.stdout.on('data', c => (out += c));
+    p.on('exit', (code) => resolve({ code, out }));
+    if (onReady) setTimeout(() => onReady(p), readyDelay);
+  });
+}
+
+test('digest: no cursor → flagged full summary, cursor written; second digest says nothing new', () => {
+  const d = cliDir();
+  cli(d, 'suggest', 'doc.md', '--quote', 'We will ship all six features in week one.', '--replacement', 'Week one ships three.');
+  const first = cli(d, 'digest', 'doc.md');
+  assert.match(first, /no last-seen marker/, 'first look is flagged as a full replay');
+  assert.match(first, /NEW suggestion @ .*Week one ships three|NEW suggestion @/, 'the seeded card shows');
+  assert.ok(seen(d).claude, 'cursor written under the agent key');
+  assert.match(cli(d, 'digest', 'doc.md'), /nothing new since/, 'second look is empty');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('digest: comment + reply + accept stacked between two looks → ONE digest reports all three', () => {
+  const d = cliDir();
+  cli(d, 'suggest', 'doc.md', '--quote', 'We will ship all six features in week one.', '--replacement', 'Week one ships three.');
+  cli(d, 'comment', 'doc.md', '--quote', 'Success metrics', '--text', 'targets?');
+  cli(d, 'digest', 'doc.md');                       // establish the cursor
+  // Human, off-screen: accepts the suggestion (doc spliced + status), replies to the comment, adds a new one.
+  fs.writeFileSync(path.join(d, 'doc.md'),
+    fs.readFileSync(path.join(d, 'doc.md'), 'utf8').replace('We will ship all six features in week one.', 'Week one ships three.'));
+  patchReview(d, (r) => {
+    const sug = r.items.find(i => i.kind === 'suggestion'); sug.status = 'accepted'; sug.decidedAt = '2026-07-23T00:00:00Z';
+    const com = r.items.find(i => i.kind === 'comment'); com.by = 'alex';
+    com.thread.push({ by: 'alex', at: '2026-07-23T00:00:01Z', text: 'yes, three concrete ones' });
+    r.items.push({ id: 'c-new-human', kind: 'comment', by: 'alex', status: 'open',
+      anchor: { quote: 'Repeated line here.', occurrence: 0 },
+      thread: [{ by: 'alex', at: '2026-07-23T00:00:02Z', text: 'is this duplicated on purpose?' }] });
+  });
+  const out = cli(d, 'digest', 'doc.md');
+  assert.match(out, /ACCEPTED/, 'the accept');
+  assert.match(out, /REPLY .*yes, three concrete ones/, 'the reply, in full');
+  assert.match(out, /NEW comment .*is this duplicated on purpose\?/, 'the new comment, in full');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('digest --peek reports the delta but does NOT advance the cursor', () => {
+  const d = cliDir();
+  cli(d, 'suggest', 'doc.md', '--quote', 'Success metrics', '--replacement', 'Success metrics (defined below)');
+  cli(d, 'digest', 'doc.md');                       // cursor at pending
+  patchReview(d, (r) => { const s = r.items[0]; s.status = 'rejected'; s.decidedAt = '2026-07-23T00:00:00Z'; });
+  const before = JSON.stringify(seen(d));
+  assert.match(cli(d, 'digest', 'doc.md', '--peek'), /REJECTED/, 'peek still reports the change');
+  assert.equal(JSON.stringify(seen(d)), before, 'peek left the cursor untouched');
+  assert.match(cli(d, 'digest', 'doc.md', '--peek'), /REJECTED/, 'so a second peek reports it again');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('digest --json emits the structured delta and round-trips', () => {
+  const d = cliDir();
+  cli(d, 'comment', 'doc.md', '--quote', 'Success metrics', '--text', 'targets?');
+  const parsed = JSON.parse(cli(d, 'digest', 'doc.md', '--json'));
+  assert.ok(parsed.snapshot && parsed.snapshot.items, 'carries the snapshot to advance to');
+  assert.equal(parsed.noMarker, true, 'first look, no marker');
+  assert.ok(Array.isArray(parsed.news), 'structured sections present');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('digest: two SIDECAR_AGENT values hold independent cursors', () => {
+  const d = cliDir();
+  cli(d, 'comment', 'doc.md', '--quote', 'Success metrics', '--text', 'targets?');
+  cliE(d, { SIDECAR_AGENT: 'claude' }, 'digest', 'doc.md');   // advances claude only
+  const s = seen(d);
+  assert.ok(s.claude && !s.gpt, 'only claude has a cursor so far');
+  assert.match(cliE(d, { SIDECAR_AGENT: 'gpt' }, 'digest', 'doc.md'), /no last-seen marker/, 'gpt still sees a full replay');
+  assert.match(cliE(d, { SIDECAR_AGENT: 'claude' }, 'digest', 'doc.md'), /nothing new/, 'claude is caught up');
+  assert.ok(seen(d).claude && seen(d).gpt, 'both cursors coexist in one file');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('digest: corrupt or deleted seen file → no crash, treated as a full replay', () => {
+  const d = cliDir();
+  cli(d, 'comment', 'doc.md', '--quote', 'Success metrics', '--text', 'targets?');
+  fs.writeFileSync(path.join(d, 'doc.md.review.seen.json'), '{ this is not json');
+  const out = cli(d, 'digest', 'doc.md');            // must not throw
+  assert.match(out, /no last-seen marker/, 'corrupt cursor degrades to full replay');
+  fs.rmSync(path.join(d, 'doc.md.review.seen.json'));
+  assert.match(cli(d, 'digest', 'doc.md'), /no last-seen marker/, 'a deleted cursor replays too');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('digest: reject + human reply carries the reason text IN FULL', () => {
+  const d = cliDir();
+  cli(d, 'suggest', 'doc.md', '--quote', 'We will ship all six features in week one.', '--replacement', 'Week one ships three.');
+  cli(d, 'digest', 'doc.md');
+  const reason = 'no — leadership already committed to six externally, keep it';
+  patchReview(d, (r) => { const s = r.items[0]; s.status = 'rejected'; s.decidedAt = '2026-07-23T00:00:00Z';
+    s.thread = [{ by: 'alex', at: '2026-07-23T00:00:01Z', text: reason }]; });
+  const out = cli(d, 'digest', 'doc.md');
+  assert.match(out, /REJECTED/);
+  assert.ok(out.includes(reason), 'the full rejection reason is present, unclipped');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('wait: a pre-existing unseen backlog exits immediately and advances the cursor', async () => {
+  const d = cliDir();
+  cli(d, 'suggest', 'doc.md', '--quote', 'We will ship all six features in week one.', '--replacement', 'Week one ships three.');
+  cli(d, 'digest', 'doc.md');                        // cursor at threadLen 0
+  patchReview(d, (r) => { r.items[0].thread = [{ by: 'alex', at: '2026-07-23T00:00:00Z', text: 'why only three?' }]; });
+  const t0 = Date.now();
+  const { code, out } = await spawnWait(d, { timeout: 30 });   // no onReady — must exit on its own
+  assert.ok(Date.now() - t0 < 5000, 'returned well before the 30s timeout');
+  assert.equal(code, 0, 'digest-emitting exit');
+  assert.match(out, /REPLY .*why only three\?/, 'reports the backlog it had not seen');
+  assert.equal(seen(d).claude.items[Object.keys(seen(d).claude.items)[0]].threadLen, 1, 'cursor advanced past the reply');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('wait: a timeout exit does NOT advance the cursor', async () => {
+  const d = cliDir();
+  cli(d, 'comment', 'doc.md', '--quote', 'Success metrics', '--text', 'targets?');
+  cli(d, 'digest', 'doc.md');                        // cursor == current state
+  const before = JSON.stringify(seen(d));
+  const { code, out } = await spawnWait(d, { timeout: 1 });   // nothing happens → times out
+  assert.equal(code, 1, 'timeout exit code');
+  assert.match(out, /still watching/);
+  assert.equal(JSON.stringify(seen(d)), before, 'a timeout must not move the cursor');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('wait: an accept prints the digest exactly once (double-print regression)', async () => {
+  const d = cliDir();
+  cli(d, 'suggest', 'doc.md', '--quote', 'We will ship all six features in week one.', '--replacement', 'Week one ships three.');
+  // No cursor → baseline is current state → wait sleeps until a real change.
+  const { code, out } = await spawnWait(d, { timeout: 10, onReady: () => {
+    // An accept touches BOTH files (doc splice + status write) → two chokidar events in quick succession.
+    fs.writeFileSync(path.join(d, 'doc.md'),
+      fs.readFileSync(path.join(d, 'doc.md'), 'utf8').replace('We will ship all six features in week one.', 'Week one ships three.'));
+    patchReview(d, (r) => { r.items[0].status = 'accepted'; r.items[0].decidedAt = '2026-07-23T00:00:00Z'; });
+  } });
+  assert.equal(code, 0);
+  assert.equal((out.match(/## sidecar — your turn/g) || []).length, 1, 'exactly one digest header');
+  assert.equal((out.match(/ACCEPTED/g) || []).length, 1, 'exactly one ACCEPTED line');
+  fs.rmSync(d, { recursive: true, force: true });
+});
