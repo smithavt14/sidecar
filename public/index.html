@@ -509,6 +509,8 @@ function renderDoc() {
     const el = document.createElement('div');
     el.className = 'block'; el.dataset.i = i;
     el.innerHTML = renderMd([b.token]);   // sanitized before it hits the DOM; .block wrapper added after, structure intact
+    // Surface a link's destination on hover — inside a contenteditable the href is otherwise invisible.
+    el.querySelectorAll('a[href]').forEach(a => { if (!a.title) a.title = a.getAttribute('href'); });
     doc.appendChild(el);
     b.md0 = toMd(el);   // baseline for tight-diff change detection
   });
@@ -1211,6 +1213,17 @@ function pulse(nodes) { nodes.forEach(m => m.classList.add('flash')); setTimeout
 $('doc').addEventListener('click', (e) => {
   const m = e.target.closest && e.target.closest('mark.anchor');
   if (m && m.dataset.id) openReview(m.dataset.id);
+});
+// Cmd/Ctrl+click opens a link. A PLAIN click must keep placing the caret: this is a contenteditable,
+// so hijacking every click would make the text around a link uneditable.
+$('doc').addEventListener('click', (e) => {
+  if (!(e.metaKey || e.ctrlKey)) return;
+  const a = e.target.closest && e.target.closest('a[href]');
+  if (!a) return;
+  const href = a.getAttribute('href') || '';
+  if (!/^https?:\/\//i.test(href)) return;   // outbound http(s) only — never javascript:/file paths
+  e.preventDefault();
+  window.open(href, '_blank', 'noopener,noreferrer');
 });
 function openReview(id) {
   toggleSheet(true);

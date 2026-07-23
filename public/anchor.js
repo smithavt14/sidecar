@@ -19,11 +19,31 @@
   // Normalize `text`, returning the normalized string plus map[i] = index in `text` of norm[i].
   // A collapsed whitespace run maps to the first raw char of the run; since callers trim the needle,
   // a match never begins or ends on a collapsed space, so start/end map back exactly.
+  // Does an inline link `[text](url)` start at `i`? Returns true only for a COMPLETE link, so a bare
+  // `[` (a task-list `- [ ]`, a wikilink, a stray bracket) is left untouched.
+  function linkStartsAt(text, i) {
+    if (text[i] !== '[') return false;
+    let j = i + 1, depth = 1;
+    while (j < text.length && depth) { if (text[j] === '[') depth++; else if (text[j] === ']') depth--; if (!depth) break; j++; }
+    return depth === 0 && text[j] === ']' && text[j + 1] === '(' && skipParens(text, j + 1) !== -1;
+  }
+  // Index just past the ')' closing the paren run that opens at `i`, or -1 if unbalanced.
+  function skipParens(text, i) {
+    let j = i, depth = 0;
+    while (j < text.length) { if (text[j] === '(') depth++; else if (text[j] === ')') { depth--; if (!depth) return j + 1; } j++; }
+    return -1;
+  }
+
   function normalize(text, strip) {
     const chars = [], map = [];
-    let i = 0;
+    let i = 0, inLink = 0;
     while (i < text.length) {
       const ch = text[i];
+      // Inline links: drop the wrapper, keep the visible text. Without this a quote taken from the
+      // RENDERED view ("model of social prescription,") can never match its source, which contains
+      // "model of [social prescription](https://…)," — the URL sits in the middle. Orphaned anchor.
+      if (strip && ch === '[' && linkStartsAt(text, i)) { inLink++; i++; continue; }
+      if (strip && inLink && ch === ']' && text[i + 1] === '(') { const end = skipParens(text, i + 1); if (end !== -1) { inLink--; i = end; continue; } }
       if (strip && MD.includes(ch)) { i++; continue; }
       if (/\s/.test(ch)) { const run = i; while (i < text.length && /\s/.test(text[i])) i++; chars.push(' '); map.push(run); continue; }
       chars.push(ch); map.push(i); i++;
