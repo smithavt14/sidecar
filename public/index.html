@@ -824,16 +824,57 @@ function exec(op, url) {
   dirty = true; setStatus('editing…'); scheduleSave();
 }
 
-// Link: swap the toolbar into a URL field in place, apply on Enter.
+// The <a> the selection sits inside, if any — so the link button can edit or remove an existing
+// link rather than only ever adding one.
+function selectedLink() {
+  const r = savedRange || (getSelection().rangeCount ? getSelection().getRangeAt(0) : null);
+  if (!r) return null;
+  let n = r.commonAncestorContainer;
+  if (n.nodeType === 3) n = n.parentNode;
+  return n && n.closest ? n.closest('#doc a') : null;
+}
+
+function unlink() {
+  const a = selectedLink();
+  restoreSelection();
+  if (a) {                       // unwrap directly: execCommand('unlink') needs the whole <a> selected
+    const p = a.parentNode;
+    while (a.firstChild) p.insertBefore(a.firstChild, a);
+    p.removeChild(a); p.normalize();
+  } else {
+    document.execCommand('unlink');
+  }
+  hideTool();
+  dirty = true; setStatus('editing…'); scheduleSave();
+}
+
+// Link: swap the toolbar into a URL field in place, apply on Enter. If the selection is already
+// inside a link, prefill it and offer removal — submitting an empty field unlinks, which is the way
+// back out of a link you didn't mean to make.
 function openLinkInput() {
   const st = $('seltool');
+  const existing = selectedLink();
   st.innerHTML = '';
   const input = document.createElement('input');
-  input.type = 'url'; input.placeholder = 'https://…  (Enter to add)';
+  input.type = 'url';
+  input.placeholder = existing ? 'Enter to update · empty to remove' : 'https://…  (Enter to add)';
+  if (existing) input.value = existing.getAttribute('href') || '';
   st.appendChild(input);
-  input.focus();
+  if (existing) {
+    const rm = document.createElement('button');
+    rm.textContent = 'unlink';
+    rm.addEventListener('mousedown', (e) => { e.preventDefault(); unlink(); });
+    st.appendChild(rm);
+  }
+  input.focus(); input.select();
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); const u = input.value.trim(); if (u) exec('link', u); else hideTool(); }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const u = input.value.trim();
+      if (u) exec('link', u);
+      else if (existing) unlink();
+      else hideTool();
+    }
     if (e.key === 'Escape') hideTool();
   });
 }
