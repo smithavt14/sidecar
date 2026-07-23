@@ -1,13 +1,13 @@
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="brand/sidecar-horizontal-dark.svg">
-  <img alt="sidecar" src="brand/sidecar-horizontal.svg" width="380">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/smithavt14/sidecar/main/brand/sidecar-horizontal-dark.svg">
+  <img alt="sidecar" src="https://raw.githubusercontent.com/smithavt14/sidecar/main/brand/sidecar-horizontal.svg" width="380">
 </picture>
 
 [![test](https://github.com/smithavt14/sidecar/actions/workflows/test.yml/badge.svg)](https://github.com/smithavt14/sidecar/actions/workflows/test.yml)
 
 **A better way to work on documents with your AI agent.**
 
-![Reviewing a document in sidecar: a suggestion card with a word-level diff, and a comment thread](docs/example.png)
+![Reviewing a document in sidecar: a suggestion card with a word-level diff, and a comment thread](https://raw.githubusercontent.com/smithavt14/sidecar/main/docs/example.png)
 
 Reviewing a document with an AI usually means pasting it back and forth. A few web tools do this well,
 with comment threads and tracked suggestions.
@@ -31,6 +31,8 @@ file.
   in place.
 - **Your agent** (Claude Code, Cursor, Codex, …) edits the markdown file and writes review items into
   `<file>.review.json`. It needs no special client, just the filesystem. See [AGENTS.md](AGENTS.md).
+  (It also keeps a `<file>.review.seen.json` cursor tracking what it has already read — local agent
+  state, not review content; leave it out of git.)
 
 ## Who it's for
 
@@ -42,14 +44,22 @@ to review it on their own machine, owning their files.
 ## Quickstart
 
 ```bash
-git clone https://github.com/smithavt14/sidecar && cd sidecar
-npm install
-npm start -- ~/path/to/your/docs      # → http://localhost:4880
+npm i -g @spktr/sidecar
+sidecar ~/path/to/your/docs      # → http://localhost:4880
+```
+
+Or without installing: `npx @spktr/sidecar ~/path/to/your/docs`. It serves a single file or a whole
+directory.
+
+Give your agent the skill so it knows the commands:
+
+```bash
+npx skills add smithavt14/sidecar
 ```
 
 Then tell your agent: *"review draft.md in sidecar."* It writes the sidecar; you review in the browser.
 
-**Review on your phone** (optional): `./scripts/tailscale-serve.sh` proxies sidecar onto your private
+**Review on your phone** (optional): `tailscale serve --bg 4880` proxies sidecar onto your private
 [Tailscale](https://tailscale.com) tailnet. Tailnet-only: sidecar has no auth, so never `tailscale funnel`
 it publicly.
 
@@ -104,8 +114,13 @@ It has no authentication, so keep it on localhost or a private tailnet and don't
 
 ## Development
 
+To hack on sidecar itself, clone and run from source:
+
 ```bash
-npm test      # end-to-end tests against a real server + temp fixture repo, plus round-trip/anchor units
+git clone https://github.com/smithavt14/sidecar && cd sidecar
+npm install
+npm start -- ~/path/to/your/docs      # → http://localhost:4880
+npm test                              # end-to-end tests against a real server + temp fixture repo, plus round-trip/anchor units
 ```
 
 No build step: `public/index.html` is the whole frontend, `server.js` the whole backend. The shared
