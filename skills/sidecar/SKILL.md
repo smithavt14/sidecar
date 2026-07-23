@@ -119,6 +119,7 @@ JSON
 sidecar show doc.md                # the COMPLETE current state — items, statuses, threads, diff, done
 sidecar show doc.md --needs-reply  # just the threads whose last message is theirs
 sidecar show doc.md --json         # same, machine-readable
+sidecar wait doc.md --timeout 900  # block until they act (default 900s backstop)
 sidecar check doc.md               # lint every anchor in the sidecar
 sidecar check doc.md --quote "…"   # pre-flight one quote before you write it
 ```
@@ -132,7 +133,15 @@ follows; if it disappears, the item goes `orphaned` — loudly — rather than e
 
 The commands handle the mechanics. `--quote` is matched against the file, whitespace-normalised and
 markdown-tolerant, so it can be either the raw markdown (`**bold**`) or the visible text (`bold`), and
-it may span soft line breaks and block boundaries. The occurrence index is resolved for you.
+for a **comment** it may span soft line breaks and block boundaries — a quote taken from the rendered
+document, running across two list items, still anchors. The occurrence index is resolved for you.
+
+**A suggestion is stricter, because accepting one rewrites those exact bytes.** A card is refused if
+its span crosses a block boundary or a blank line, or starts and ends inside inline markup — replacing
+such a span would eat a list marker or leave a dangling `**`, and the human would have approved a clean
+diff and received mangled markdown. Quote within a single block, and quote the raw markdown (`**bold**
+text`, not `bold text`) when the span touches emphasis or code. If you want to point at something
+spanning blocks, use a comment: comments only anchor, so they are unrestricted.
 
 **What is left to your judgment is choosing a quote that identifies exactly one span.** Everything
 else is enforced:

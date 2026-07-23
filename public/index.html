@@ -1037,6 +1037,7 @@ function renderArchived(list, archived, childSug) {
   for (const it of sorted) {
     const el = document.createElement('div');
     el.className = 'card archived'; el.dataset.id = it.id;
+    try {
     const when = it.decidedAt ? `<span class="when">${esc(timeAgo(Date.parse(it.decidedAt)))}</span>` : '';
     let body = `<div class="chead"><span class="who ${it.by}">${it.by}</span> <span class="badge ${it.status}">${it.status}</span>${when}</div>`;
     body += `<div class="quote">${esc(it.anchor.quote)}</div>`;
@@ -1051,6 +1052,11 @@ function renderArchived(list, archived, childSug) {
               + (sug.note ? `<div class="msg"><span class="t">${esc(sug.note)}</span></div>` : '') + `</div>`;
     }
     el.innerHTML = body;
+    } catch (e) {
+      console.error('sidecar: failed to render archived item', it.id, e);
+      el.innerHTML = `<div class="chead"><span class="badge orphaned">could not render — see console</span></div>`
+        + `<div class="quote">${esc((it.anchor && it.anchor.quote) || it.id)}</div>`;
+    }
     list.appendChild(el);
   }
 }
@@ -1228,7 +1234,10 @@ function markAnchors() {
   for (const it of state.review.items) {
     if (!['open', 'pending'].includes(it.status)) continue;
     if (it.kind === 'suggestion' && it.replyTo) continue;   // shares its parent comment's span — don't double-wrap
-    wrapAnchor(it.anchor.quote, it.anchor.occurrence || 0, it.id);
+    // Guarded per item: a throw here used to abandon every REMAINING highlight, so the document
+    // silently lost its cues while the cards still listed them.
+    try { wrapAnchor(it.anchor.quote, it.anchor.occurrence || 0, it.id); }
+    catch (e) { console.error('sidecar: failed to highlight', it.id, e); }
   }
 }
 function pulse(nodes) { nodes.forEach(m => m.classList.add('flash')); setTimeout(() => nodes.forEach(m => m.classList.remove('flash')), 1400); }

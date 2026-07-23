@@ -5,7 +5,7 @@ For *driving* sidecar as an agent (reviewing a document with a human), see
 
 ## Shape
 
-No build step. Four files carry the whole tool:
+No build step. Six files carry the whole tool:
 
 | File | What it is |
 |---|---|

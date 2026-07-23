@@ -45,10 +45,24 @@ Closing paragraph.
 `;
 
 const j = (r) => r.json();
-const state = () => fetch(`${BASE}/api/state?path=doc.md`).then(j);
-const put = (url, body) => fetch(`${BASE}${url}`, { method: 'PUT',
+// Retry once on a CONNECTION-level failure. undici keeps sockets alive between requests, but Node's
+// server closes an idle connection after keepAliveTimeout (5s) — so the first fetch following a long
+// stretch of non-HTTP tests (the CLI block runs for seconds without touching the server) reuses a
+// socket the server has already closed and gets ECONNRESET. Nothing to do with the code under test:
+// it moved when the tests were reordered, always landing on whichever HTTP test came first after the
+// gap. Retrying establishes a fresh connection. Only connection errors retry; a real HTTP response,
+// including a 4xx/5xx, is returned untouched.
+async function fetchRetry(url, init) {
+  try { return await fetch(url, init); }
+  catch (e) {
+    if (!/fetch failed/.test(e.message)) throw e;
+    return fetch(url, init);
+  }
+}
+const state = () => fetchRetry(`${BASE}/api/state?path=doc.md`).then(j);
+const put = (url, body) => fetchRetry(`${BASE}${url}`, { method: 'PUT',
   headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-const post = (url, body) => fetch(`${BASE}${url}`, { method: 'POST',
+const post = (url, body) => fetchRetry(`${BASE}${url}`, { method: 'POST',
   headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 // Raw GET so we can set an arbitrary Host header (fetch/undici normalizes it to the target).
 const rawGet = (pathname, host) => new Promise((resolve, reject) => {
@@ -245,15 +259,36 @@ test('accept with occurrence targets the right duplicate', async () => {
   assert.ok(a !== -1 && b !== -1 && a < b, 'first stayed, second replaced');
 });
 
-test('tolerant anchor: quote without markdown tokens still matches', async () => {
+// A visible-text quote MATCHES its marked-up source — that tolerance is the point, and comments rely
+// on it. But it must not be SPLICED: the file has "**bold** text", so the quote "bold text" resolves to
+// the raw span `bold** text`, which begins inside the bold run. Replacing it used to write
+// "****bold** prose" — four asterisks, broken emphasis. This test asserted only /\*\*bold\*\* prose/,
+// which the corrupted string also satisfies, so it passed for the whole time the bug existed.
+test('tolerant anchor matches visible text, but accept refuses to splice a half-marked span', async () => {
+  const before = fs.readFileSync(path.join(dir, 'doc.md'), 'utf8');
   const review = JSON.parse(fs.readFileSync(path.join(dir, 'doc.md.review.json'), 'utf8'));
-  // file has "**bold** text"; quote it as visible text "bold text"
   review.items.push({ id: 'sug3', kind: 'suggestion', by: 'claude', status: 'pending',
     anchor: { quote: 'bold text', occurrence: 0 }, replacement: '**bold** prose' });
   fs.writeFileSync(path.join(dir, 'doc.md.review.json'), JSON.stringify(review));
+
+  // It still resolves — the matcher is unchanged.
+  const Anchor = require('./public/anchor.js');
+  assert.ok(Anchor.findNth(before, 'bold text', 0), 'visible-text quote still matches');
+
   const r = await post('/api/accept', { path: 'doc.md', id: 'sug3' });
-  assert.equal(r.status, 200);
-  assert.match(fs.readFileSync(path.join(dir, 'doc.md'), 'utf8'), /\*\*bold\*\* prose/);
+  assert.equal(r.status, 409);
+  assert.match((await r.json()).error, /unbalanced/);
+  assert.equal(fs.readFileSync(path.join(dir, 'doc.md'), 'utf8'), before, 'file untouched');
+
+  // Quoting the raw markdown gives a splice-safe span, and that applies cleanly.
+  review.items.push({ id: 'sug3b', kind: 'suggestion', by: 'claude', status: 'pending',
+    anchor: { quote: '**bold** text', occurrence: 0 }, replacement: '**bold** prose' });
+  fs.writeFileSync(path.join(dir, 'doc.md.review.json'), JSON.stringify(review));
+  const r2 = await post('/api/accept', { path: 'doc.md', id: 'sug3b' });
+  assert.equal(r2.status, 200);
+  const after = fs.readFileSync(path.join(dir, 'doc.md'), 'utf8');
+  assert.match(after, /with \*\*bold\*\* prose and/);
+  assert.ok(!/\*\*\*\*/.test(after), 'no doubled markers');
 });
 
 test('accept on a vanished anchor 409s and orphans the card, file untouched', async () => {
@@ -1071,4 +1106,110 @@ test('CLI and browser writing concurrently do not drop each other', async () => 
   const texts = after.items.flatMap(i => (i.thread || []).map(m => m.text));
   assert.ok(texts.includes('from the CLI'), 'CLI item survived the browser PUT');
   assert.ok(texts.includes('from the browser'), 'browser item survived');
+});
+
+/* ---------------------------------------------------------------------------
+   Splice safety — the gap an audit of 0fda7d2 found.
+
+   Making the matcher block-tolerant (so a quote taken from the rendered document can span list items)
+   silently widened what `accept` would SPLICE. A suggestion quoting across two list items resolved to
+   a raw span starting inside `**` and swallowing the `2. `, so accepting wrote corrupted markdown that
+   the word-diff never showed. Match loosely, splice strictly.
+   --------------------------------------------------------------------------- */
+
+test('spliceRisk: rejects spans that cross block structure, allows ordinary ones', () => {
+  const { spliceRisk } = require('./lib/review.js');
+  const Anchor = require('./public/anchor.js');
+  const list = '1. **Read** the sidecar.\n2. **Merge** by id.\n';
+  const hit = Anchor.findNth(list, 'Read the sidecar. Merge by id.', 0);
+  assert.ok(hit, 'the matcher still finds it (comments need that)');
+  assert.match(spliceRisk(list, hit.start, hit.end), /crosses a block boundary/);
+
+  // A soft line break inside one paragraph stays splice-safe — that has always been supported.
+  const para = 'One sentence that\nwraps softly here.\n';
+  const soft = Anchor.findNth(para, 'sentence that wraps softly', 0);
+  assert.equal(spliceRisk(para, soft.start, soft.end), null);
+
+  // Balanced inline markup inside the span is fine; a span ending mid-`**` is not.
+  const bold = 'Some **bold text** here.\n';
+  const whole = Anchor.findNth(bold, '**bold text**', 0);
+  assert.equal(spliceRisk(bold, whole.start, whole.end), null);
+  assert.match(spliceRisk(bold, bold.indexOf('bold'), bold.indexOf(' here')), /unbalanced/);
+
+  // Crossing a blank line is two blocks.
+  const two = 'Alpha para.\n\nBeta para.\n';
+  const across = Anchor.findNth(two, 'Alpha para. Beta para.', 0);
+  assert.match(spliceRisk(two, across.start, across.end), /blank line/);
+});
+
+test('CLI suggest refuses a cross-block span; comment on the same quote is allowed', () => {
+  const d = cliDir();
+  const e = cliFails(d, 'suggest', 'doc.md', '--quote', 'Read the sidecar. Merge by id.', '--replacement', 'One step.');
+  assert.ok(e, 'suggestion should be refused');
+  assert.match(e.stderr, /crosses a block boundary/);
+  assert.ok(!fs.existsSync(path.join(d, 'doc.md.review.json')), 'nothing written');
+  // The same quote is fine as a comment — comments anchor, they never splice.
+  cli(d, 'comment', 'doc.md', '--quote', 'Read the sidecar. Merge by id.', '--text', 'anchoring is fine');
+  assert.equal(sc(d).items.length, 1);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('accept refuses to splice a cross-block span, and the file is untouched', async () => {
+  const md = '# T\n\n1. **Read** the sidecar.\n2. **Merge** by id.\n3. Write it back.\n';
+  fs.writeFileSync(path.join(dir, 'splice.md'), md);
+  // Written with --force so the card exists despite the CLI's own refusal: accept is the last line of
+  // defence and has to hold on its own, for items that reached the sidecar by any route.
+  execFileSync('node', [BIN, 'add', 'splice.md', '--force'], { cwd: dir, encoding: 'utf8',
+    input: JSON.stringify([{ id: 's-cross', quote: 'Read the sidecar. Merge by id.', replacement: 'REPLACED.' }]),
+    stdio: ['pipe', 'pipe', 'pipe'] });
+  const r = await post('/api/accept', { path: 'splice.md', id: 's-cross' });
+  assert.equal(r.status, 409);
+  assert.match((await r.json()).error, /refusing to apply/);
+  assert.equal(fs.readFileSync(path.join(dir, 'splice.md'), 'utf8'), md, 'file must be byte-identical');
+});
+
+test('accept still applies a normal single-block suggestion', async () => {
+  fs.writeFileSync(path.join(dir, 'ok.md'), '# T\n\nWe ship all six features.\n');
+  execFileSync('node', [BIN, 'suggest', 'ok.md', '--quote', 'We ship all six features.',
+    '--replacement', 'We ship three features.'], { cwd: dir, encoding: 'utf8' });
+  const id = JSON.parse(fs.readFileSync(path.join(dir, 'ok.md.review.json'), 'utf8')).items[0].id;
+  const r = await post('/api/accept', { path: 'ok.md', id });
+  assert.equal(r.status, 200);
+  assert.match(fs.readFileSync(path.join(dir, 'ok.md'), 'utf8'), /We ship three features\./);
+});
+
+test('CLI requires --quote rather than crashing with a stack trace', () => {
+  const d = cliDir();
+  for (const verb of ['comment', 'flag']) {
+    const e = cliFails(d, verb, 'doc.md', '--text', 'no quote given');
+    assert.equal(e.status, 2, `${verb} should exit 2`);
+    assert.match(e.stderr, /usage:/);
+    assert.ok(!/TypeError|at Object/.test(e.stderr), `${verb} must not dump a stack`);
+  }
+  const e = cliFails(d, 'suggest', 'doc.md', '--replacement', 'x');
+  assert.equal(e.status, 2);
+  assert.ok(!/TypeError/.test(e.stderr));
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('suggest --id revises an existing card, inheriting its anchor', () => {
+  const d = cliDir();
+  cli(d, 'suggest', 'doc.md', '--quote', 'Success metrics are not defined yet.', '--replacement', 'first try');
+  const before = sc(d).items[0];
+  cli(d, 'suggest', 'doc.md', '--id', before.id, '--replacement', 'second try');
+  const after = sc(d).items[0];
+  assert.equal(sc(d).items.length, 1, 'revises in place, does not add');
+  assert.equal(after.replacement, 'second try');
+  assert.deepEqual(after.anchor, before.anchor, 'anchor inherited, not blanked');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('add cannot author items as the human', () => {
+  const d = cliDir();
+  cliStdin(d, JSON.stringify([
+    { by: 'alex', quote: 'Success metrics', text: 'pretending to be them' },
+  ]), 'add', 'doc.md');
+  const it = sc(d).items[0];
+  assert.equal(it.by, 'claude', 'item author is whoever ran the command');
+  assert.equal(it.thread[0].by, 'claude', 'thread message author too');
 });

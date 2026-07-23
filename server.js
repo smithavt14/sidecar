@@ -8,7 +8,7 @@ const os = require('os');
 const { execFileSync } = require('child_process');
 const chokidar = require('chokidar');
 // Review-file load/save/merge lives in lib/review.js so the CLI runs the SAME logic (see lib/cli.js).
-const { sidecarPath, loadReview, saveReview, findAnchor, annotateOrphans, mergeItem } = require('./lib/review.js');
+const { sidecarPath, loadReview, saveReview, findAnchor, annotateOrphans, spliceRisk, mergeItem } = require('./lib/review.js');
 
 // A terminal-style pwd for the doc: absolute path with $HOME collapsed to ~.
 function pwdFor(abs) {
@@ -152,6 +152,10 @@ app.post('/api/accept', (req, res) => {
   if (it.status !== 'pending') return res.status(409).json({ error: 'already decided' });
   const hit = findAnchor(raw, it.anchor.quote, it.anchor.occurrence || 0);
   if (!hit) { it.status = 'orphaned'; saveReview(abs, review); return res.status(409).json({ error: 'anchor not found — orphaned' }); }
+  // Last line of defence before bytes change. The matcher is block-tolerant so comments can anchor
+  // across blocks; splicing across one destroys structure the human never saw in the diff.
+  const risk = spliceRisk(raw, hit.start, hit.end);
+  if (risk) return res.status(409).json({ error: `refusing to apply — ${risk}. Re-anchor this suggestion to a single block.` });
   const next = raw.slice(0, hit.start) + it.replacement + raw.slice(hit.end);
   fs.writeFileSync(abs, next);
   it.status = 'accepted'; it.decidedAt = new Date().toISOString();
