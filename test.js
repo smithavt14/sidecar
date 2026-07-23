@@ -861,6 +861,11 @@ function cliFails(d, ...args) {
   try { execFileSync('node', [BIN, ...args], { cwd: d, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }); return null; }
   catch (e) { return e; }
 }
+// Same, but feeds stdin — for the `add` refusal paths, which take a JSON payload on stdin.
+function cliFailsStdin(d, input, ...args) {
+  try { execFileSync('node', [BIN, ...args], { cwd: d, encoding: 'utf8', input, stdio: ['pipe', 'pipe', 'pipe'] }); return null; }
+  catch (e) { return e; }
+}
 const sc = (d) => JSON.parse(fs.readFileSync(path.join(d, 'doc.md.review.json'), 'utf8'));
 
 test('CLI comment: flat input expands to a full item — id, by, at, status, nested anchor', () => {
@@ -1163,9 +1168,10 @@ test('accept refuses to splice a cross-block span, and the file is untouched', a
   // Written with --force so the card exists despite the CLI's own refusal: accept is the last line of
   // defence and has to hold on its own, for items that reached the sidecar by any route.
   execFileSync('node', [BIN, 'add', 'splice.md', '--force'], { cwd: dir, encoding: 'utf8',
-    input: JSON.stringify([{ id: 's-cross', quote: 'Read the sidecar. Merge by id.', replacement: 'REPLACED.' }]),
+    input: JSON.stringify([{ quote: 'Read the sidecar. Merge by id.', replacement: 'REPLACED.' }]),
     stdio: ['pipe', 'pipe', 'pipe'] });
-  const r = await post('/api/accept', { path: 'splice.md', id: 's-cross' });
+  const scId = JSON.parse(fs.readFileSync(path.join(dir, 'splice.md.review.json'), 'utf8')).items[0].id;
+  const r = await post('/api/accept', { path: 'splice.md', id: scId });
   assert.equal(r.status, 409);
   assert.match((await r.json()).error, /refusing to apply/);
   assert.equal(fs.readFileSync(path.join(dir, 'splice.md'), 'utf8'), md, 'file must be byte-identical');
@@ -1207,14 +1213,16 @@ test('suggest --id revises an existing card, inheriting its anchor', () => {
   fs.rmSync(d, { recursive: true, force: true });
 });
 
-test('add cannot author items as the human', () => {
+test('add refuses `by` outright — it cannot author items as the human', () => {
   const d = cliDir();
-  cliStdin(d, JSON.stringify([
+  const e = cliFailsStdin(d, JSON.stringify([
     { by: 'alex', quote: 'Success metrics', text: 'pretending to be them' },
   ]), 'add', 'doc.md');
-  const it = sc(d).items[0];
-  assert.equal(it.by, 'claude', 'item author is whoever ran the command');
-  assert.equal(it.thread[0].by, 'claude', 'thread message author too');
+  assert.ok(e, 'add with a `by` key is refused');
+  assert.match(e.stderr, /"by"/);
+  assert.match(e.stderr, /whoever ran the command/);
+  assert.ok(!fs.existsSync(path.join(d, 'doc.md.review.json')), 'nothing written');
+  fs.rmSync(d, { recursive: true, force: true });
 });
 
 /* Both halves of the splice problem, found by a second audit pass: spliceRisk validated the bytes
@@ -1256,9 +1264,10 @@ test('accept refuses a replacement that would inject a heading into a list item'
   const md = '# T\n\nIntro.\n\n- item one\n- item two\n';
   fs.writeFileSync(path.join(dir, 'inject.md'), md);
   execFileSync('node', [BIN, 'add', 'inject.md', '--force'], { cwd: dir, encoding: 'utf8',
-    input: JSON.stringify([{ id: 's-inject', quote: 'item one', replacement: 'one\n\n## Injected\n\nmore' }]),
+    input: JSON.stringify([{ quote: 'item one', replacement: 'one\n\n## Injected\n\nmore' }]),
     stdio: ['pipe', 'pipe', 'pipe'] });
-  const r = await post('/api/accept', { path: 'inject.md', id: 's-inject' });
+  const injId = JSON.parse(fs.readFileSync(path.join(dir, 'inject.md.review.json'), 'utf8')).items[0].id;
+  const r = await post('/api/accept', { path: 'inject.md', id: injId });
   assert.equal(r.status, 409);
   assert.equal(fs.readFileSync(path.join(dir, 'inject.md'), 'utf8'), md, 'file untouched');
 });
@@ -1306,5 +1315,185 @@ test('a partial update never erases the status of the item it merges into', () =
     { id: 'x', kind: 'comment', status: 'resolved', decidedAt: '2026-01-01T00:00:00Z', thread: [] },
     { id: 'x', thread: [{ by: 'claude', at: '2026-01-02T00:00:00Z', text: 'late reply' }] });
   assert.equal(merged.status, 'resolved', 'a partial update must not regress a decided status');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+/* ---------------------------------------------------------------------------
+   Matcher pinning — the block-tolerant matcher has secondary match surfaces the 2026-07-23 audit
+   found (prose+code, table cells, spaced rules). The decision record chose to PIN these with tests
+   rather than make the matcher fence-aware — adding fence-state tracking to normalize(), which also
+   maintains the offset map accept splices against, is complexity in the single most safety-critical
+   function to fix a cosmetic ambiguity count. Behaviour that is accidental AND untested is how a
+   matcher silently changes under you. These lock HEAD's behaviour so a future edit has to face it.
+   Pure Anchor.findAll / spliceRisk units — no server, no matcher change.
+   --------------------------------------------------------------------------- */
+
+test('matcher pin: a quote spans prose into an indented code block, and spliceRisk refuses that splice', () => {
+  const Anchor = require('./public/anchor.js');
+  const { spliceRisk } = require('./lib/review.js');
+  // Indented code block after a prose line: the 4-space indent is whitespace, collapsed like any run,
+  // so the tolerant pass matches across it. Match loosely — but the span crosses the blank line, so a
+  // suggestion over it is refused before accept can splice structure away.
+  const raw = 'Prose start.\n\n    not a list, code\n';
+  const hits = Anchor.findAll(raw, 'Prose start. not a list, code');
+  assert.equal(hits.length, 1, 'prose+indented-code matches (pinned)');
+  const hit = Anchor.findNth(raw, 'Prose start. not a list, code', 0);
+  assert.match(spliceRisk(raw, hit.start, hit.end), /blank line/, 'and a splice over it is refused');
+});
+
+test('matcher pin: a quote does NOT span prose into a FENCED code block', () => {
+  const Anchor = require('./public/anchor.js');
+  // HEAD behaviour, run before pinning: the ``` fence lines strip to nothing on the tolerant pass, but
+  // the two collapsed whitespace runs around them leave a DOUBLE space in the haystack that the
+  // single-spaced needle can't match. Fence-crossing quotes miss — the same "accident" as the spaced
+  // rule below. Pinned so the accident becomes a contract; a fence-aware matcher was rejected.
+  const raw = 'Prose line.\n\n```\ncode line\n```\n';
+  assert.equal(Anchor.findAll(raw, 'Prose line. code line').length, 0, 'no cross-fence match (pinned)');
+});
+
+test('matcher pin: `- -` matches the delimiter cells of a table row', () => {
+  const Anchor = require('./public/anchor.js');
+  // The tolerant pass is fence/table-unaware, so `| - | - |` exposes two `- ` "matches" the human
+  // can neither see nor select. Verified count, not assumed: two hits, one per delimiter cell.
+  const row = '| - | - |';
+  assert.equal(Anchor.findAll(row, '- -').length, 2, 'two delimiter-cell hits (verified)');
+  const table = '| a | b |\n| - | - |\n| c | d |\n';
+  assert.equal(Anchor.findAll(table, '- -').length, 2, 'same inside a full table');
+});
+
+test('matcher pin: a quote does NOT match across a spaced horizontal rule `- - -`', () => {
+  const Anchor = require('./public/anchor.js');
+  // Audit 1: the stacked block-marker loop strips `- - -` down to a single leftover `-`, so text on
+  // either side of the rule stays separated by that `-` and a cross-rule quote misses. Called an
+  // "accident" in the audit; the decision record pins it as a contract.
+  const raw = 'Alpha text\n\n- - -\n\nBeta text\n';
+  assert.equal(Anchor.findAll(raw, 'Alpha text Beta text').length, 0, 'no cross-rule match (pinned)');
+});
+
+test('matcher pin: a comment can still anchor to text inside a fenced code block', () => {
+  const d = cliDir();
+  fs.writeFileSync(path.join(d, 'fence.md'), '# Doc\n\nIntro.\n\n```js\nconst x = 1;\n```\n');
+  // Match-loosely stays half intact: the code content is selectable text, so a COMMENT (which only
+  // anchors, never splices) resolves and writes. This is what the "restrict, don't rewrite the matcher"
+  // call preserves — highlighting a fence is fine; only splicing across one is refused.
+  cli(d, 'comment', 'fence.md', '--quote', 'const x = 1;', '--text', 'anchoring into a fence is allowed');
+  const it = JSON.parse(fs.readFileSync(path.join(d, 'fence.md.review.json'), 'utf8')).items[0];
+  assert.equal(it.kind, 'comment');
+  assert.equal(it.anchor.quote, 'const x = 1;');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+/* ---------------------------------------------------------------------------
+   Safety guards — the 2026-07-23 decision record's "the one that matters": accept/reject are absent
+   from the CLI on purpose (the human decides), but three commands routed around it — `add` passing a
+   status/thread wholesale, and `resolve` / `reply --resolve` settling a suggestion. Each forged a
+   decision the human never made. These close all three and prove the happy paths are unchanged.
+   --------------------------------------------------------------------------- */
+
+test('add refuses a fabricated decision (status + thread) and writes nothing', () => {
+  const d = cliDir();
+  // The decision record's probe, generalised: an agent tries to seed a card already "accepted", with a
+  // human-looking thread. Both keys are the human's; add refuses by name and leaves no sidecar.
+  const e = cliFailsStdin(d, JSON.stringify([
+    { quote: 'Success metrics', text: 'looks settled', status: 'accepted',
+      thread: [{ by: 'alex', at: '2026-01-01T00:00:00Z', text: 'forged approval' }] },
+  ]), 'add', 'doc.md');
+  assert.ok(e, 'refused');
+  assert.equal(e.status, 1);
+  assert.match(e.stderr, /status/);
+  assert.match(e.stderr, /thread/);
+  assert.match(e.stderr, /belong to the human/);
+  assert.ok(!fs.existsSync(path.join(d, 'doc.md.review.json')), 'sidecar untouched — nothing written');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('add refuses the decision-record heredoc verbatim (id + status:"accepted")', () => {
+  const d = cliDir();
+  // The exact payload from the audit disposition. It forges an id AND a decision; both are refused.
+  const e = cliFailsStdin(d,
+    '[{"id":"s-fake","quote":"Alpha line here.","replacement":"Beta.","status":"accepted"}]',
+    'add', 'doc.md');
+  assert.ok(e, 'refused');
+  assert.match(e.stderr, /"id"/);
+  assert.match(e.stderr, /"status"/);
+  assert.match(e.stderr, /suggest --id/, 'points the agent at the real revise path');
+  assert.ok(!fs.existsSync(path.join(d, 'doc.md.review.json')), 'sidecar untouched');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('add refuses `anchor` passthrough, naming the fields to use instead', () => {
+  const d = cliDir();
+  const e = cliFailsStdin(d, JSON.stringify([
+    { anchor: { quote: 'Success metrics', occurrence: 0 }, text: 'hi' },
+  ]), 'add', 'doc.md');
+  assert.ok(e);
+  assert.match(e.stderr, /"anchor"/);
+  assert.match(e.stderr, /quote/);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('add --force does NOT bypass the key allow-list (it is a boundary, not a warning)', () => {
+  const d = cliDir();
+  const e = cliFailsStdin(d, JSON.stringify([{ quote: 'Success metrics', text: 'x', status: 'accepted' }]),
+    'add', 'doc.md', '--force');
+  assert.ok(e, 'still refused with --force');
+  assert.match(e.stderr, /status/);
+  assert.ok(!fs.existsSync(path.join(d, 'doc.md.review.json')), 'nothing written');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('resolve refuses a suggestion, pointing at the browser and drop; still resolves a comment', () => {
+  const d = cliDir();
+  cli(d, 'suggest', 'doc.md', '--quote', 'Success metrics are not defined yet.', '--replacement', 'Target: 200 signups.');
+  const sug = sc(d).items[0];
+  const e = cliFails(d, 'resolve', 'doc.md', sug.id);
+  assert.ok(e, 'suggestion resolve refused');
+  assert.equal(e.status, 1);
+  assert.match(e.stderr, /suggestion/);
+  assert.match(e.stderr, /drop/);
+  assert.equal(sc(d).items[0].status, 'pending', 'the card was not settled');
+
+  // A comment resolve is unchanged.
+  cli(d, 'comment', 'doc.md', '--quote', 'week one', '--text', 'closing this');
+  const com = sc(d).items.find(i => i.kind === 'comment');
+  cli(d, 'resolve', 'doc.md', com.id);
+  assert.equal(sc(d).items.find(i => i.id === com.id).status, 'resolved');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('reply --resolve refuses a suggestion; a plain reply on it stays legal', () => {
+  const d = cliDir();
+  cli(d, 'suggest', 'doc.md', '--quote', 'Success metrics are not defined yet.', '--replacement', 'Target: 200 signups.');
+  const id = sc(d).items[0].id;
+  const e = cliFails(d, 'reply', 'doc.md', id, 'settling it', '--resolve');
+  assert.ok(e, 'reply --resolve on a suggestion refused');
+  assert.equal(e.status, 1);
+  assert.match(e.stderr, /suggestion/);
+  assert.equal(sc(d).items[0].status, 'pending', 'not settled');
+  assert.equal((sc(d).items[0].thread || []).length, 0, 'the refused message was not appended either');
+
+  // A plain reply (a message, no status) is allowed on a suggestion.
+  cli(d, 'reply', 'doc.md', id, 'one more thought');
+  assert.equal(sc(d).items[0].status, 'pending');
+  assert.equal(sc(d).items[0].thread[0].text, 'one more thought');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('add happy paths unchanged: replyTo, flag, and kind inference all pass through', () => {
+  const d = cliDir();
+  cli(d, 'comment', 'doc.md', '--quote', 'Success metrics', '--text', 'parent comment');
+  const parent = sc(d).items[0];
+  cliStdin(d, JSON.stringify([
+    { quote: 'week one', text: 'a flagged concern', flag: true },
+    { quote: 'Success metrics are not defined yet.', replacement: 'Target: 200 signups.', replyTo: parent.id },
+  ]), 'add', 'doc.md');
+  const items = sc(d).items;
+  const flagged = items.find(i => i.flag);
+  assert.ok(flagged, 'flag passes through');
+  assert.equal(flagged.kind, 'comment', 'no replacement → comment');
+  const answer = items.find(i => i.replyTo === parent.id);
+  assert.ok(answer, 'replyTo passes through');
+  assert.equal(answer.kind, 'suggestion', 'replacement present → suggestion');
+  assert.equal(answer.by, 'claude');
   fs.rmSync(d, { recursive: true, force: true });
 });
