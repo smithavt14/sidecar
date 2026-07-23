@@ -825,6 +825,51 @@ test('presence: watching/working surface in /api/state; idle reads as not-here',
   assert.equal((await state()).presence, null, 'idle presence reads as not-here');
 });
 
+test('presence keys by realpath — a ping via a symlinked path surfaces on the real path', async () => {
+  // The same file reached two ways (an alias symlink, mirroring /tmp vs /private/tmp on macOS): the
+  // ping arrives via the alias, the browser reads via the real name. Without realpath-keying they land
+  // in different buckets and the dot silently never lights.
+  const alias = path.join(dir, 'aliasdoc.md');
+  fs.symlinkSync(path.join(dir, 'doc.md'), alias);
+  try {
+    const r = await post('/api/presence', { path: 'aliasdoc.md', state: 'watching' });
+    assert.equal((await r.json()).ok, true);
+    const s = await state();   // reads ?path=doc.md — the real file
+    assert.ok(s.presence, 'a ping via the symlinked alias must surface when reading the real path');
+    assert.equal(s.presence.state, 'watching');
+  } finally {
+    await post('/api/presence', { path: 'doc.md', state: 'idle' });   // leave presence clean for later reads
+    fs.rmSync(alias, { force: true });
+  }
+});
+
+test('SIDECAR_USER / SIDECAR_AGENT are surfaced in /api/state (default and override)', async () => {
+  const boot = (env) => new Promise((res, rej) => {
+    const p = spawn('node', [path.join(__dirname, 'server.js'), dir], { env, stdio: 'pipe' });
+    p.stdout.on('data', (d) => { if (d.toString().includes('ready')) res(p); });
+    p.on('exit', () => rej(new Error('server died')));
+    setTimeout(() => rej(new Error('server never became ready')), 8000);
+  });
+  const read = (port) => fetch(`http://127.0.0.1:${port}/api/state?path=doc.md`).then(j);
+
+  // default: no env set → user 'you', agent 'claude'
+  const defEnv = { ...process.env }; delete defEnv.SIDECAR_USER; delete defEnv.SIDECAR_AGENT;
+  const p1 = await boot({ ...defEnv, SIDECAR_PORT: String(PORT + 11) });
+  try {
+    const s = await read(PORT + 11);
+    assert.equal(s.user, 'you', 'default human name is "you"');
+    assert.equal(s.agent, 'claude', 'default agent name is "claude"');
+  } finally { p1.kill(); }
+
+  // override: SIDECAR_USER=pat, SIDECAR_AGENT=robo
+  const p2 = await boot({ ...process.env, SIDECAR_PORT: String(PORT + 12), SIDECAR_USER: 'pat', SIDECAR_AGENT: 'robo' });
+  try {
+    const s = await read(PORT + 12);
+    assert.equal(s.user, 'pat', 'SIDECAR_USER overrides the human name in /api/state');
+    assert.equal(s.agent, 'robo', 'SIDECAR_AGENT is surfaced too');
+  } finally { p2.kill(); }
+});
+
 /* ---------------------------------------------------------------------------
    CLI — `sidecar <verb> <file>` (lib/cli.js)
 

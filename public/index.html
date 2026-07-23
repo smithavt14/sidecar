@@ -122,16 +122,17 @@
   .card.flash { box-shadow:var(--shadow), 0 0 0 3px rgba(255,235,0,.55); }
   /* orphaned: the anchor text is gone — greyed surface, muted identity */
   .card.orphaned { background:#fafaf8; }
-  /* identity — claude is a yellow chip (the agent's color); you are an ink dot + name */
+  /* identity — the agent is a yellow chip (its color); the human is an ink dot + name. Classed
+     .agent / .human, not by literal name, so any SIDECAR_USER / SIDECAR_AGENT colors correctly. */
   .card .who { font-weight:600; display:inline-flex; align-items:center; }
-  .who.claude { gap:5px; font-size:12px; color:var(--chip-fg); background:var(--chip);
+  .who.agent { gap:5px; font-size:12px; color:var(--chip-fg); background:var(--chip);
     border-radius:6px; padding:2px 8px; }
-  .who.claude::before { content:''; width:6px; height:6px; border-radius:50%; background:var(--yellow);
+  .who.agent::before { content:''; width:6px; height:6px; border-radius:50%; background:var(--yellow);
     box-shadow:0 0 0 1px var(--yellow-ring); }
-  .who.alex { gap:6px; font-size:13px; color:var(--ink); }
-  .who.alex::before { content:''; width:8px; height:8px; border-radius:50%; background:var(--ink); }
-  .card.orphaned .who.claude { color:#57574f; background:#f2f2ee; }
-  .card.orphaned .who.claude::before { background:#c2c2ba; box-shadow:none; }
+  .who.human { gap:6px; font-size:13px; color:var(--ink); }
+  .who.human::before { content:''; width:8px; height:8px; border-radius:50%; background:var(--ink); }
+  .card.orphaned .who.agent { color:#57574f; background:#f2f2ee; }
+  .card.orphaned .who.agent::before { background:#c2c2ba; box-shadow:none; }
   /* kind label — quiet uppercase text, not a bordered badge */
   .card .badge { font-size:10.5px; font-weight:600; letter-spacing:.03em; text-transform:uppercase;
     color:var(--muted); margin-left:8px; }
@@ -156,7 +157,7 @@
   .msg { margin:8px 0; font-size:13px; line-height:1.5; color:var(--fg); }
   .msg .who { background:none; padding:0; color:inherit; font-size:13px; }
   .msg .who::before { display:none; }
-  .msg .who.claude, .msg .who.alex { margin-right:5px; }
+  .msg .who.agent, .msg .who.human { margin-right:5px; }
   .msg .t { color:var(--fg); }
   /* word-level diff — mono well; deletions strike out muted, insertions carry the agent's yellow */
   .diffbox { font:12.5px/1.6 'Geist Mono', ui-monospace, Menlo, monospace; background:var(--fill); border-radius:10px;
@@ -276,7 +277,12 @@
     header h1 { font-size:15px; max-width:56vw; }
     header h1 .mark { height:20px; }
     #status { min-width:0; }
-    .presence { display:none; }   /* absolute-center collides with the cramped mobile header — TODO: reposition for mobile */
+    /* the absolute-center readout collides with the cramped mobile header, so drop it into the flow
+       as a compact dot-only chip beside the title — the dot's color/pulse still carries the state
+       (yellow=here, outline=away, filled=sent, pulsing=working); the label is hidden to save width. */
+    .presence { position:static; transform:none; gap:0; padding:5px; margin-left:-2px;
+      background:var(--fill); border-radius:99px; }
+    .presence .lbl { display:none; }
     #filelist { padding:28px 18px; }
     #popover { width:min(300px, calc(100vw - 24px)); }
     /* iOS Safari zooms into any focused input with font-size <16px (and won't zoom back). Pin to 16px. */
@@ -934,9 +940,9 @@ async function submitComment() {
   const body = $('pobody').value.trim();
   if (!body || !pendingSel) return hidePopover();
   await flushSave();  // anchor must match what's on disk
-  const item = { id: 'c' + Date.now(), kind: 'comment', by: 'alex',
+  const item = { id: 'c' + Date.now(), kind: 'comment', by: state.user,
     anchor: { quote: pendingSel, occurrence: occurrenceFor(pendingSel, pendingSelBlock, pendingSelOffset) }, status: 'open',
-    thread: [{ by: 'alex', at: new Date().toISOString(), text: body }] };
+    thread: [{ by: state.user, at: new Date().toISOString(), text: body }] };
   hidePopover();
   await pushReviewItem(item);
 }
@@ -947,6 +953,11 @@ async function submitComment() {
 
 // ---------- sidebar ----------
 function esc(s) { return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+// Identity class for a card/thread author — the agent (its own name, default 'claude') gets the
+// yellow chip; everyone else (the human, whatever SIDECAR_USER is) gets the ink dot. Keyed off the
+// agent name from /api/state, never a literal, so legacy 'alex', the default 'you', and any custom
+// name all color as the human.
+function whoCls(by) { return (state && by === state.agent) ? 'agent' : 'human'; }
 // A suggestion's inner word-level diff (old → new), monochrome+accent.
 function diffHtml(quote, replacement) {
   return '<div class="diffbox">' + Diff.diffWords(quote, replacement).map(p =>
@@ -964,7 +975,7 @@ const orphanLabel = (it) => it.orphanReason === 'never-matched'
 // carrying its own data-id so the delegated dispatcher targets the suggestion, not the parent comment.
 function nestedSugHtml(sug) {
   const orphan = sug.status === 'orphaned' ? ` <span class="badge orphaned">${orphanLabel(sug)}</span>` : '';
-  return `<div class="subcard" data-id="${esc(sug.id)}"><span class="who claude">claude</span> <span class="badge suggestion">suggestion</span>${orphan}`
+  return `<div class="subcard" data-id="${esc(sug.id)}"><span class="who agent">claude</span> <span class="badge suggestion">suggestion</span>${orphan}`
     + diffHtml(sug.anchor.quote, sug.replacement)
     + (sug.note ? `<div class="msg"><span class="t">${esc(sug.note)}</span></div>` : '')
     + `<div class="row"><button class="primary" data-action="accept">accept</button>
@@ -1029,7 +1040,7 @@ function renderActive(list, top, childSug) {
     // must still render, and the broken one must be VISIBLE rather than absent.
     try {
     const label = it.flag ? 'flag' : it.kind;
-    let head = `<span class="who ${it.by}">${it.by}</span> <span class="badge ${label}">${label}</span>`;
+    let head = `<span class="who ${whoCls(it.by)}">${esc(it.by)}</span> <span class="badge ${label}">${label}</span>`;
     if (it.status === 'orphaned') head += ` <span class="badge orphaned">${orphanLabel(it)}</span>`;
     // No interpolated inline handlers: the id lives on the card's data-id (set safely above) and every
     // control carries a static data-action, dispatched by the delegated listeners on #side (see below).
@@ -1050,7 +1061,7 @@ function renderActive(list, top, childSug) {
     } catch (e) {
       console.error('sidecar: failed to render item', it.id, e);
       el.className = 'card orphaned';
-      el.innerHTML = `<div class="chead"><span class="who ${esc(it.by || '?')}">${esc(it.by || '?')}</span>`
+      el.innerHTML = `<div class="chead"><span class="who ${whoCls(it.by)}">${esc(it.by || '?')}</span>`
         + ` <span class="badge orphaned">could not render — see console</span></div>`
         + `<div class="quote">${esc((it.anchor && it.anchor.quote) || it.id)}</div>`;
     }
@@ -1080,7 +1091,7 @@ function renderArchived(list, archived, childSug) {
     el.className = 'card archived'; el.dataset.id = it.id;
     try {
     const when = it.decidedAt ? `<span class="when">${esc(timeAgo(Date.parse(it.decidedAt)))}</span>` : '';
-    let body = `<div class="chead"><span class="who ${it.by}">${it.by}</span> <span class="badge ${it.status}">${it.status}</span>${when}</div>`;
+    let body = `<div class="chead"><span class="who ${whoCls(it.by)}">${esc(it.by)}</span> <span class="badge ${it.status}">${it.status}</span>${when}</div>`;
     body += `<div class="quote">${esc(it.anchor.quote)}</div>`;
     if (it.kind === 'suggestion') {
       body += diffHtml(it.anchor.quote, it.replacement);
@@ -1088,7 +1099,7 @@ function renderArchived(list, archived, childSug) {
     } else {
       body += threadHtml(it.thread);
       for (const sug of (childSug[it.id] || [])) if (['accepted', 'rejected'].includes(sug.status))
-        body += `<div class="subcard"><span class="who claude">claude</span> <span class="badge ${sug.status}">${sug.status}</span>`
+        body += `<div class="subcard"><span class="who agent">claude</span> <span class="badge ${sug.status}">${sug.status}</span>`
               + diffHtml(sug.anchor.quote, sug.replacement)
               + (sug.note ? `<div class="msg"><span class="t">${esc(sug.note)}</span></div>` : '') + `</div>`;
     }
@@ -1108,7 +1119,7 @@ function renderArchived(list, archived, childSug) {
 // thread merge preserves the same order.
 function threadHtml(thread) {
   return (thread || [])
-    .map(m => `<div class="msg"><span class="who ${m.by}">${m.by}</span> <span class="t">${esc(m.text)}</span></div>`).join('');
+    .map(m => `<div class="msg"><span class="who ${whoCls(m.by)}">${esc(m.by)}</span> <span class="t">${esc(m.text)}</span></div>`).join('');
 }
 // Right cluster — pure STATUS: the open + orphaned counts (no actions, no presence).
 function renderTurn() {
@@ -1132,7 +1143,7 @@ function renderPresence() {
   else if (done) { cls = 'sent'; txt = 'sent to claude'; }                       // review handed off, not "waiting"
   else { cls = 'away'; txt = 'waiting for claude'; }
   el.className = 'presence ' + cls;
-  el.innerHTML = '<span class="dot"></span>' + txt;
+  el.innerHTML = '<span class="dot"></span><span class="lbl">' + txt + '</span>';
 }
 // Header orphan cue → open the sidebar and flash the orphaned cards (the doc-side fix for §6a: orphaned
 // items have no in-doc highlight, so they must never go silently missing).
@@ -1157,7 +1168,7 @@ function autogrow(el) { el.style.height = 'auto'; el.style.height = el.scrollHei
 async function reply(id, input) {
   if (!input.value.trim()) return;
   const it = state.review.items.find(i => i.id === id);
-  it.thread.push({ by: 'alex', at: new Date().toISOString(), text: input.value.trim() });
+  it.thread.push({ by: state.user, at: new Date().toISOString(), text: input.value.trim() });
   input.value = '';   // clear before any re-render so the capture/restore above doesn't repopulate the sent text
   const r = await api('PUT', '/api/review', { path: FILE, review: state.review });
   state.review = r.review;

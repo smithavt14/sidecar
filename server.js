@@ -23,6 +23,12 @@ const PORT = process.env.SIDECAR_PORT || 4880;
 const rootIsFile = fs.existsSync(ROOT) && fs.statSync(ROOT).isFile();
 const BASE_DIR = rootIsFile ? path.dirname(ROOT) : ROOT;
 
+// Identity names — same env family as the CLI's SIDECAR_AGENT (lib/cli.js). AGENT is the name
+// stamped on the agent's own cards; USER is the human's, stamped by the browser on comments/replies.
+// The UI colors identity by these (agent = yellow, the human = ink), so both ride /api/state.
+const AGENT = process.env.SIDECAR_AGENT || 'claude';
+const USER = process.env.SIDECAR_USER || 'you';
+
 const app = express();
 
 // Host allowlist — binding to loopback is NOT authentication: on a tailnet/LAN the port is
@@ -100,7 +106,7 @@ app.get('/api/state', (req, res) => {
   // execFileSync + args array: no shell is spawned, so a filename with $(...) or backticks can't inject.
   try { diff = execFileSync('git', ['diff', '--', path.basename(abs)], { cwd: path.dirname(abs), stdio: ['ignore', 'pipe', 'ignore'] }).toString(); } catch {}
   res.json({ path: req.query.path, pwd: pwdFor(abs), markdown, review, diff, hash: sha(markdown),
-    presence: presenceFor(abs), code: CODE_STAMP });
+    presence: presenceFor(abs), code: CODE_STAMP, user: USER, agent: AGENT });
 });
 
 app.put('/api/save', (req, res) => {
@@ -221,15 +227,21 @@ const presence = {};
 const PRESENCE_TTL = 40000;    // "watching" is heartbeated every 15s, so a short TTL keeps it honest
 const WORKING_TTL = 180000;    // "working" has NO heartbeat (the wait already exited while the agent composes),
                                // so give it a generous window; it's overwritten by the next "watching"/"idle".
+// Key presence by the file's REAL path: the wait-side ping and the browser-side read can reach the
+// same doc under different spellings of one file (a symlinked /tmp vs /private/tmp on macOS, or an
+// aliased dir). Without collapsing them to the canonical path they land in different buckets and the
+// presence dot silently never lights. realpathSync throws if the file doesn't exist yet — fall back
+// to the resolved path so a not-yet-created doc still keys consistently on both sides.
+function realKey(abs) { try { return fs.realpathSync(abs); } catch { return abs; } }
 function presenceFor(abs) {
-  const p = presence[abs];
+  const p = presence[realKey(abs)];
   if (!p || p.state === 'idle') return null;
   const ttl = p.state === 'working' ? WORKING_TTL : PRESENCE_TTL;
   return Date.now() - p.at < ttl ? { state: p.state, at: p.at } : null;
 }
 app.post('/api/presence', (req, res) => {
   let abs; try { abs = safePath(req.body.path); } catch { return res.json({ ok: true }); }   // unknown file → ignore (fail-safe)
-  presence[abs] = { state: req.body.state || 'watching', at: Date.now() };
+  presence[realKey(abs)] = { state: req.body.state || 'watching', at: Date.now() };
   const rel = path.relative(BASE_DIR, abs);
   for (const c of clients) c.write(`data: ${JSON.stringify({ event: 'presence', rel })}\n\n`);
   res.json({ ok: true });
