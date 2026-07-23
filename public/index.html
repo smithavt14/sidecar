@@ -93,6 +93,9 @@
   #doc a { color:var(--ink); text-decoration:underline; text-decoration-color:var(--line-strong);
     text-underline-offset:2px; }
   #doc a:hover { text-decoration-color:var(--ink); }
+  /* A link is only *clickable* while Cmd/Ctrl is held (a plain click has to place the caret in a
+     contenteditable), so show the pointer exactly then — same convention as an editor's ctrl+click. */
+  #doc.mod a[href] { cursor:pointer; text-decoration-color:var(--accent, var(--ink)); }
   .block { position:relative; }
   .block > :first-child { margin-top:.4em; } .block > :last-child { margin-bottom:.4em; }
   /* persistent cue: an open item softly underlines its span in the agent's yellow, tappable */
@@ -1225,6 +1228,12 @@ $('doc').addEventListener('click', (e) => {
   e.preventDefault();
   window.open(href, '_blank', 'noopener,noreferrer');
 });
+// While Cmd/Ctrl is held, mark the doc so links show a pointer (see #doc.mod a[href]). Cleared on
+// keyup AND on window blur — otherwise Cmd+Tab away leaves the modifier stuck "held" on return.
+const setModHeld = (on) => $('doc').classList.toggle('mod', on);
+window.addEventListener('keydown', (e) => { if (e.key === 'Meta' || e.key === 'Control') setModHeld(true); });
+window.addEventListener('keyup', (e) => { if (e.key === 'Meta' || e.key === 'Control') setModHeld(false); });
+window.addEventListener('blur', () => setModHeld(false));
 function openReview(id) {
   toggleSheet(true);
   document.querySelectorAll('.flash').forEach(m => m.classList.remove('flash'));
