@@ -187,7 +187,7 @@ test('review PUT same-id merge unions threads — a stale client PUT cannot drop
   assert.ok(texts.includes('second human note'), 'human reply was dropped');
   assert.ok(texts.includes('first human note'));
   assert.equal(thread.length, 3, 'exactly the three distinct messages, no dupes');
-  assert.deepEqual(texts, ['first human note', 'agent reply', 'second human note'], 'chronological by at');
+  assert.deepEqual(texts, ['first human note', 'agent reply', 'second human note'], 'insertion order: on-disk (human1, agent reply) then the incoming new one (human2)');
 });
 
 test('review PUT same-id merge does not regress a decided status back to open', async () => {

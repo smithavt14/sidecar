@@ -1029,9 +1029,13 @@ function renderArchived(list, archived, childSug) {
     list.appendChild(el);
   }
 }
-// A comment thread's messages, oldest-first — shared by the active and archived renderers.
+// A comment thread's messages in insertion order (oldest first) — shared by the active and archived
+// renderers. We render the array as-is rather than sorting by `at`: a reply is always appended last, so
+// insertion order IS chronological, and it can't be scrambled by a wrong timestamp. (An agent stamping a
+// guessed `at` reordered a thread on 2026-07-22 — reply above the comment it answered.) The server's
+// thread merge preserves the same order.
 function threadHtml(thread) {
-  return (thread || []).slice().sort((a, b) => (a.at || '').localeCompare(b.at || ''))
+  return (thread || [])
     .map(m => `<div class="msg"><span class="who ${m.by}">${m.by}</span> <span class="t">${esc(m.text)}</span></div>`).join('');
 }
 // Right cluster — pure STATUS: the open + orphaned counts (no actions, no presence).

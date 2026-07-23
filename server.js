@@ -192,11 +192,13 @@ function mergeItem(existing, incoming) {
   const merged = { ...existing, ...incoming };
   // Thread UNION — the crux: concurrent human+agent writes each carry their own reply, and a stale
   // client PUT would otherwise overwrite the on-disk thread and silently drop the other side's
-  // message. Messages have no id, so dedupe by the (by, at, text) tuple; stable-sort by `at`.
+  // message. Messages have no id, so dedupe by the (by, at, text) tuple and keep INSERTION ORDER —
+  // existing (already on disk) first, then the incoming new ones. A fresh reply is always appended last,
+  // so insertion order is chronological WITHOUT trusting `at`, which an agent can stamp wrong (a guessed
+  // timestamp put a reply above the comment it answered, 2026-07-22). Render order matches (threadHtml).
   const seen = new Set();
   const thread = [...(existing.thread || []), ...(incoming.thread || [])]
-    .filter(m => { const k = JSON.stringify([m.by, m.at, m.text]); return seen.has(k) ? false : (seen.add(k), true); })
-    .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));   // V8 sort is stable → chrono, ties keep insertion order
+    .filter(m => { const k = JSON.stringify([m.by, m.at, m.text]); return seen.has(k) ? false : (seen.add(k), true); });
   merged.thread = thread;
   // Status + its timestamp, carried together from whichever side won.
   const win = reconcileStatus(existing, incoming);
