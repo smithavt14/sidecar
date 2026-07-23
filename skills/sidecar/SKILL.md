@@ -135,13 +135,22 @@ JSON
 ### Reading
 
 ```bash
+sidecar wait doc.md --timeout 900  # block until they act, then print the digest since your last look
+sidecar digest doc.md              # the delta since your last look — re-check mid-turn without a full show
+sidecar digest doc.md --peek       # …without advancing the cursor
 sidecar show doc.md                # the COMPLETE current state — items, statuses, threads, diff, done
 sidecar show doc.md --needs-reply  # just the threads whose last message is theirs
 sidecar show doc.md --json         # same, machine-readable
-sidecar wait doc.md --timeout 900  # block until they act (default 900s backstop)
 sidecar check doc.md               # lint every anchor in the sidecar
 sidecar check doc.md --quote "…"   # pre-flight one quote before you write it
 ```
+
+`wait` and `digest` share a persistent last-seen cursor (a sibling `foo.md.review.seen.json`, keyed by
+your `SIDECAR_AGENT`), so each reports only what changed since the last time you looked and advances the
+marker. `wait` blocks until there IS a change and returns that digest; `digest` reports the delta right
+now. Both print ids, so you can `reply`/`answer` straight off a digest without a `show`. `--peek` reads
+without advancing. The cursor is agent workspace state — never commit it (it's git-ignored); delete it to
+replay everything.
 
 ---
 
@@ -194,18 +203,22 @@ was trying to prevent. Fix the quote instead.
    command in the background and wake you when it exits*, run it in the foreground with a short
    `--timeout` (say 60) and treat a timeout exit as "nothing yet, run it again" — do not leave a
    15-minute default blocking the session.
-4. **When it returns, run `sidecar show`** — see below. Then read `git diff <file>` for what they
-   accepted or hand-edited.
+4. **When it returns, act on its digest.** In steady state that is enough — the digest is everything
+   that changed since your last look (decisions with their reasons, new comments and replies in full,
+   orphans, the doc diff), not just the one event that woke it. Reach for `sidecar digest` to re-check
+   mid-turn, and `sidecar show` for the full picture when the delta isn't enough context: the first pass
+   of a session, after an error, or before the final commit.
 5. **Respond**, then background `sidecar wait` again.
 6. Repeat until the digest says `DONE: true`, then make **one commit**.
 
 Accepting a card leaves the tree dirty on purpose — the dirty diff *is* the review state. Don't
 auto-commit mid-review.
 
-**Read the whole state each pass, not just the digest.** `sidecar wait` reports only the single event
-that woke it; anything the human does while you are composing stacks up unreported. Run `sidecar show`
-every time the watcher returns and act on every item awaiting you. Skipping this silently buries their
-comments — it is the single most common way to mishandle a review.
+**The digest is complete since your last look — trust it, don't skip it.** It is baselined on a
+persistent cursor, so anything the human does while you are composing is still there on the next `wait`
+or `digest`, not lost. This is what the earlier in-memory delta got wrong: it reported only the event
+that woke it, and five stacked comments were silently buried that way on 2026-07-22. Act on every item
+the digest lists; when in doubt about older context, `sidecar show`.
 
 Respond according to what they asked for:
 
