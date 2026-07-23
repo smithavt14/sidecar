@@ -34,18 +34,46 @@
     return -1;
   }
 
+  // Block-level markers at a LINE START: `## `, `- `, `* `, `+ `, `1. `, `> `. Unlike the inline
+  // markers these are not in the rendered text at all — the browser draws a list bullet from the <li>,
+  // it isn't characters the user can select. So a quote taken from a selection SPANNING two blocks
+  // ("Read the sidecar. Merge by id.") could never match its source ("1. Read the sidecar.\n2. Merge
+  // by id."), because the `2.` sits mid-needle with nothing to correspond to. Such a comment orphaned
+  // itself the instant it was created, and the card then blamed the human for a text change they
+  // never made. Only stripped on the tolerant pass, and only at line starts, so a hyphen or a numbered
+  // reference mid-sentence is untouched.
+  const BLOCK_MARKER = /^(?:#{1,6}|[-*+]|\d+\.|>)[ \t]/;
+  function blockMarkerAt(text, i) {
+    const m = BLOCK_MARKER.exec(text.slice(i, i + 12));
+    return m ? m[0].length : 0;
+  }
+
   function normalize(text, strip) {
     const chars = [], map = [];
-    let i = 0, inLink = 0;
+    let i = 0, inLink = 0, atLineStart = true;
     while (i < text.length) {
       const ch = text[i];
+      // Block markers, and any that stack (a blockquoted list item: "> - item").
+      if (strip && atLineStart && blockMarkerAt(text, i)) {
+        let n;
+        while ((n = blockMarkerAt(text, i))) i += n;
+        atLineStart = false;
+        continue;
+      }
+      if (!/\s/.test(ch)) atLineStart = false;
       // Inline links: drop the wrapper, keep the visible text. Without this a quote taken from the
       // RENDERED view ("model of social prescription,") can never match its source, which contains
       // "model of [social prescription](https://…)," — the URL sits in the middle. Orphaned anchor.
       if (strip && ch === '[' && linkStartsAt(text, i)) { inLink++; i++; continue; }
       if (strip && inLink && ch === ']' && text[i + 1] === '(') { const end = skipParens(text, i + 1); if (end !== -1) { inLink--; i = end; continue; } }
       if (strip && MD.includes(ch)) { i++; continue; }
-      if (/\s/.test(ch)) { const run = i; while (i < text.length && /\s/.test(text[i])) i++; chars.push(' '); map.push(run); continue; }
+      if (/\s/.test(ch)) {
+        const run = i;
+        let sawNewline = false;
+        while (i < text.length && /\s/.test(text[i])) { if (text[i] === '\n') sawNewline = true; i++; }
+        atLineStart = sawNewline;   // a collapsed run that crossed a newline puts us at a line start
+        chars.push(' '); map.push(run); continue;
+      }
       chars.push(ch); map.push(i); i++;
     }
     return { norm: chars.join(''), map };

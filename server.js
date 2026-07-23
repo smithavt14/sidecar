@@ -7,7 +7,8 @@ const crypto = require('crypto');
 const os = require('os');
 const { execFileSync } = require('child_process');
 const chokidar = require('chokidar');
-const Anchor = require('./public/anchor.js');   // the ONE shared content-anchor matcher (client loads the same file)
+// Review-file load/save/merge lives in lib/review.js so the CLI runs the SAME logic (see lib/cli.js).
+const { sidecarPath, loadReview, saveReview, findAnchor, annotateOrphans, mergeItem } = require('./lib/review.js');
 
 // A terminal-style pwd for the doc: absolute path with $HOME collapsed to ~.
 function pwdFor(abs) {
@@ -45,107 +46,13 @@ function safePath(rel) {
   if (abs !== BASE_DIR && !abs.startsWith(BASE_DIR + path.sep)) throw new Error('path escapes root');
   return abs;
 }
-function sidecarPath(abs) { return abs + '.review.json'; }
-function loadReview(abs) {
-  const p = sidecarPath(abs);
-  if (!fs.existsSync(p)) return { schema: 1, items: [] };   // genuinely absent → empty review
-  // Present-but-unparseable must NOT masquerade as empty: a merge/write would then clobber a
-  // corrupt sidecar with a subset and destroy items. Throw so callers surface it instead.
-  return JSON.parse(fs.readFileSync(p, 'utf8'));
-}
-function saveReview(abs, review) {
-  const p = sidecarPath(abs);
-  // Atomic write: a crash mid-write must not leave a truncated (corrupt) sidecar. Temp in same dir.
-  const tmp = p + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(review, null, 2));
-  fs.renameSync(tmp, p);
-}
 
-// ---------- `sidecar wait <file>` — the reactive-loop primitive (P1) ----------
-// The agent backgrounds this after posting a draft. It fs-watches the sidecar + doc (no server needed,
-// stays true to "the agent works through files") and returns the instant Alex does something: a new
-// comment/reply, an accept/reject/resolve, a direct edit, or hitting "done". Wake-per-event, and it
-// SLEEPS for free in between — the whole point (no polling, no token cost while Alex reviews). One run =
-// one wake; the agent responds in-thread, then backgrounds another `sidecar wait`. `session.done` ends it.
-function runWait(argv) {
-  let file = null, timeoutSec = 900;   // 15-min backstop (Alex's call) so a background wait can't hang forever
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--timeout') timeoutSec = Number(argv[++i]) || timeoutSec;
-    else if (!file) file = argv[i];
-  }
-  if (!file) { console.error('usage: sidecar wait <file> [--timeout <seconds>]'); process.exit(2); }
-  const abs = path.resolve(process.cwd(), file);
-  // Fail loud: a relative path resolved from the wrong cwd would otherwise silently watch a nonexistent
-  // file (and mis-key presence). Prefer an ABSOLUTE path; if relative, it must be relative to the served dir.
-  if (!fs.existsSync(abs)) {
-    console.error(`sidecar wait: no file at ${abs}\nPass an absolute path, or run from the served directory.`);
-    process.exit(2);
-  }
-  const readSafe = (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return ''; } };
-  const loadSafe = () => { try { return loadReview(abs); } catch { return { items: [] }; } };
-
-  // Fixed baseline snapshot; every event is diffed against it. We exit on the first real delta, so a
-  // fixed base is correct (no need to advance it).
-  const base = (() => {
-    const r = loadSafe(), items = {};
-    for (const it of (r.items || [])) items[it.id] = { status: it.status, threadLen: (it.thread || []).length };
-    return { items, docHash: sha(readSafe(abs)) };
-  })();
-
-  const clip = (s) => (s || '').replace(/\s+/g, ' ').trim().slice(0, 60);
-  function emitDelta() {   // returns true (and prints a digest) iff there's something for the agent to act on
-    const r = loadSafe(), lines = [];
-    for (const it of (r.items || [])) {
-      const q = clip(it.anchor && it.anchor.quote);
-      const b = base.items[it.id];
-      if (!b) {   // brand-new item since the wait began
-        // A `flag: true` comment reads as a flag rather than a plain comment — a "look here" the agent
-        // can spot without parsing anything. (The retired `run` concept had its own line here; gone now.)
-        if (it.by === 'alex') { const m = (it.thread || []).slice(-1)[0], t = m ? m.text : '';
-          lines.push(`- NEW ${it.flag ? 'flag' : it.kind} @ “${q}”: ${t}`); }
-        continue;
-      }
-      for (const m of (it.thread || []).slice(b.threadLen)) if (m.by === 'alex') lines.push(`- REPLY @ “${q}”: ${m.text}`);
-      if (b.status !== it.status && ['accepted', 'rejected', 'resolved'].includes(it.status)) lines.push(`- ${it.status.toUpperCase()} @ “${q}”`);
-    }
-    const done = !!(r.session && r.session.done);
-    const docChanged = sha(readSafe(abs)) !== base.docHash;
-    if (!lines.length && !docChanged && !done) return false;   // nothing actionable yet — keep sleeping
-    let out = lines.length ? '## sidecar — your turn\n' + lines.join('\n') : '## sidecar — Alex finished';
-    if (docChanged) { let diff = ''; try { diff = execFileSync('git', ['diff', '--', path.basename(abs)], { cwd: path.dirname(abs) }).toString().trim(); } catch {} if (diff) out += '\n\n### doc changes (git diff)\n```diff\n' + diff + '\n```'; }
-    out += '\n\nDONE: ' + (done ? 'true' : 'false');
-    console.log(out);
-    return true;
-  }
-
-  // Best-effort presence: tell a running server "Claude is here" so the browser can show it. Purely
-  // decorative and server-optional — if the POST fails (server down), the wait still works.
-  const PORT = process.env.SIDECAR_PORT || 4880;
-  const ping = (state, cb) => {   // cb fires once the POST settles (or 400ms elapses) so an exit-time ping can flush
-    let settled = false; const fin = () => { if (!settled) { settled = true; cb && cb(); } };
-    try {
-      const body = JSON.stringify({ path: abs, state });
-      const req = require('http').request({ host: '127.0.0.1', port: PORT, path: '/api/presence', method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), Host: `127.0.0.1:${PORT}` },
-        }, (res) => { res.on('data', () => {}); res.on('end', fin); });
-      req.on('error', fin); req.end(body); setTimeout(fin, 400);
-    } catch { fin(); }
-  };
-  const leave = (code, pstate) => { clearInterval(beat); clearTimeout(timer); ping(pstate || 'idle', () => process.exit(code)); };
-
-  // Something already actionable at startup (a delta, or done) → I'm about to handle it: show "working".
-  if (emitDelta()) { ping('working', () => process.exit(0)); return; }
-
-  ping('watching');
-  const beat = setInterval(() => ping('watching'), 15000);   // heartbeat so a killed session goes stale, not stuck
-  const timer = setTimeout(() => { console.log('still watching (no activity within ' + timeoutSec + 's)\n\nDONE: false'); leave(1, 'idle'); }, timeoutSec * 1000);
-  const watcher = chokidar.watch([sidecarPath(abs), abs], { ignoreInitial: true });
-  // Alex acted → the wait exits, but I'm now HANDLING it. Ping "working" (NOT idle) so the browser reads
-  // "claude is working…" through my response window instead of "waiting for claude". Re-arming → "here".
-  watcher.on('all', () => { if (emitDelta()) leave(0, 'working'); });
-  process.on('SIGINT', () => leave(130, 'idle'));
-}
-if (process.argv[2] === 'wait') { runWait(process.argv.slice(3)); return; }   // subcommand: don't boot the server
+// ---------- subcommands ----------
+// `sidecar <verb> …` (wait, show, comment, suggest, …) is the agent's whole interface — see lib/cli.js.
+// Dispatch BEFORE express/ROOT setup: under a subcommand argv[2] is the verb, so ROOT/BASE_DIR below
+// would resolve to garbage. CLI commands resolve their own paths against cwd instead of safePath.
+const cli = require('./lib/cli.js');
+if (cli.isCommand(process.argv[2])) { cli.run(process.argv[2], process.argv.slice(3)); return; }
 
 // Boot-time code stamp (§6b): the whole "false orphan" incident was a launchd server running a matcher
 // loaded hours before it was rewritten. Log the git sha + server.js mtime at startup, and surface it in
@@ -155,58 +62,6 @@ const CODE_STAMP = (() => {
   let mt = ''; try { mt = fs.statSync(__filename).mtime.toISOString().slice(0, 19).replace('T', ' '); } catch {}
   return s + (mt ? ' · ' + mt : '');
 })();
-
-// Content-anchor matching lives in the shared module so accept/format/orphan here and the client's
-// highlight + occurrence code count occurrences the SAME way (same ws + markdown normalization).
-const findAnchor = (raw, quote, occurrence = 0) => Anchor.findNth(raw, quote, occurrence);
-function annotateOrphans(raw, review) {
-  // Known limitation (M4): occurrence is a positional index, so if one of several identical spans is
-  // deleted, a surviving duplicate shifts into the orphaned item's index and it silently re-anchors to
-  // the wrong copy instead of orphaning. Fixing that needs anchor context (prefix/suffix), not just N.
-  let changed = false;
-  for (const it of review.items) {
-    if (['resolved', 'accepted', 'rejected'].includes(it.status)) continue;
-    const hit = findAnchor(raw, it.anchor.quote, it.anchor.occurrence || 0);
-    if (!hit && it.status !== 'orphaned') { it.status = 'orphaned'; it.orphanedAt = new Date().toISOString(); changed = true; }
-    if (hit && it.status === 'orphaned') { it.status = it.kind === 'suggestion' ? 'pending' : 'open'; delete it.orphanedAt; changed = true; }
-  }
-  return changed;
-}
-
-// Same-id review merge — the client always PUTs its ENTIRE (possibly stale) state.review, so a
-// same-id item on disk may hold thread messages / a more-advanced status the client never saw
-// (an agent appended them after the client loaded). Merge non-destructively instead of replacing.
-const TERMINAL = new Set(['resolved', 'accepted', 'rejected']);
-const statusRank = (s) => (TERMINAL.has(s) ? 2 : s === 'orphaned' ? 1 : 0);   // decided > orphaned > open/pending
-// Pick the side representing the most-advanced/most-recent decision, so a stale write can never
-// regress a decided card back to open, and orphaned can't clobber a real decision.
-function reconcileStatus(existing, incoming) {
-  const re = statusRank(existing.status), ri = statusRank(incoming.status);
-  if (re !== ri) return re > ri ? existing : incoming;
-  if (re === 2) return (incoming.decidedAt || '') >= (existing.decidedAt || '') ? incoming : existing; // later decision
-  if (re === 1) return (incoming.orphanedAt || '') >= (existing.orphanedAt || '') ? incoming : existing;
-  return incoming;   // both open/pending — incoming is the fresher edit
-}
-function mergeItem(existing, incoming) {
-  // Scalars (replacement, note, anchor, flag, …): incoming is the fresher edit — take it when present.
-  const merged = { ...existing, ...incoming };
-  // Thread UNION — the crux: concurrent human+agent writes each carry their own reply, and a stale
-  // client PUT would otherwise overwrite the on-disk thread and silently drop the other side's
-  // message. Messages have no id, so dedupe by the (by, at, text) tuple and keep INSERTION ORDER —
-  // existing (already on disk) first, then the incoming new ones. A fresh reply is always appended last,
-  // so insertion order is chronological WITHOUT trusting `at`, which an agent can stamp wrong (a guessed
-  // timestamp put a reply above the comment it answered, 2026-07-22). Render order matches (threadHtml).
-  const seen = new Set();
-  const thread = [...(existing.thread || []), ...(incoming.thread || [])]
-    .filter(m => { const k = JSON.stringify([m.by, m.at, m.text]); return seen.has(k) ? false : (seen.add(k), true); });
-  merged.thread = thread;
-  // Status + its timestamp, carried together from whichever side won.
-  const win = reconcileStatus(existing, incoming);
-  merged.status = win.status;
-  if (win.decidedAt !== undefined) merged.decidedAt = win.decidedAt; else delete merged.decidedAt;
-  if (win.orphanedAt !== undefined) merged.orphanedAt = win.orphanedAt; else delete merged.orphanedAt;
-  return merged;
-}
 
 // ---------- api ----------
 app.get('/api/files', (req, res) => {
@@ -243,7 +98,7 @@ app.get('/api/state', (req, res) => {
   if (annotateOrphans(markdown, review)) saveReview(abs, review);
   let diff = '';
   // execFileSync + args array: no shell is spawned, so a filename with $(...) or backticks can't inject.
-  try { diff = execFileSync('git', ['diff', '--', path.basename(abs)], { cwd: path.dirname(abs) }).toString(); } catch {}
+  try { diff = execFileSync('git', ['diff', '--', path.basename(abs)], { cwd: path.dirname(abs), stdio: ['ignore', 'pipe', 'ignore'] }).toString(); } catch {}
   res.json({ path: req.query.path, pwd: pwdFor(abs), markdown, review, diff, hash: sha(markdown),
     presence: presenceFor(abs), code: CODE_STAMP });
 });

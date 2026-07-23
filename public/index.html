@@ -911,10 +911,18 @@ function diffHtml(quote, replacement) {
   return '<div class="diffbox">' + Diff.diffWords(quote, replacement).map(p =>
     p.added ? '<ins>' + esc(p.value) + '</ins>' : p.removed ? '<del>' + esc(p.value) + '</del>' : esc(p.value)).join('') + '</div>';
 }
+// An orphan has two very different causes and the card must not conflate them: an anchor that never
+// resolved once was mis-anchored from birth (a selection spanning two blocks, an agent quoting text that
+// isn't there), while "text changed" means it DID resolve and the human then edited underneath it.
+// Reporting the first as "text changed" blames the human for an edit they never made.
+// Module scope on purpose — BOTH renderActive and nestedSugHtml call it.
+const orphanLabel = (it) => it.orphanReason === 'never-matched'
+  ? 'orphaned — anchor never matched' : 'orphaned — text changed';
+
 // A suggestion that answers a comment (replyTo) renders INSIDE that thread — its own diff + accept/reject,
 // carrying its own data-id so the delegated dispatcher targets the suggestion, not the parent comment.
 function nestedSugHtml(sug) {
-  const orphan = sug.status === 'orphaned' ? ' <span class="badge orphaned">orphaned — text changed</span>' : '';
+  const orphan = sug.status === 'orphaned' ? ` <span class="badge orphaned">${orphanLabel(sug)}</span>` : '';
   return `<div class="subcard" data-id="${esc(sug.id)}"><span class="who claude">claude</span> <span class="badge suggestion">suggestion</span>${orphan}`
     + diffHtml(sug.anchor.quote, sug.replacement)
     + (sug.note ? `<div class="msg"><span class="t">${esc(sug.note)}</span></div>` : '')
@@ -974,9 +982,14 @@ function renderActive(list, top, childSug) {
   for (const it of top) {
     const el = document.createElement('div');
     el.className = 'card' + (it.status === 'orphaned' ? ' orphaned' : ''); el.dataset.id = it.id;
+    // Per-item guard. A throw while building ONE card used to abort the whole loop, so every item after
+    // it silently vanished from the rail while the tab count still claimed they were there — the human
+    // sees "3 active", counts two, and has no way to know. Whatever goes wrong with one item, the rest
+    // must still render, and the broken one must be VISIBLE rather than absent.
+    try {
     const label = it.flag ? 'flag' : it.kind;
     let head = `<span class="who ${it.by}">${it.by}</span> <span class="badge ${label}">${label}</span>`;
-    if (it.status === 'orphaned') head += ' <span class="badge orphaned">orphaned — text changed</span>';
+    if (it.status === 'orphaned') head += ` <span class="badge orphaned">${orphanLabel(it)}</span>`;
     // No interpolated inline handlers: the id lives on the card's data-id (set safely above) and every
     // control carries a static data-action, dispatched by the delegated listeners on #side (see below).
     let body = `<div class="quote" title="click to locate" data-action="locate">${esc(it.anchor.quote)}</div>`;
@@ -993,6 +1006,13 @@ function renderActive(list, top, childSug) {
                <button class="primary" data-action="send">send</button></div>`;
     }
     el.innerHTML = head + body;
+    } catch (e) {
+      console.error('sidecar: failed to render item', it.id, e);
+      el.className = 'card orphaned';
+      el.innerHTML = `<div class="chead"><span class="who ${esc(it.by || '?')}">${esc(it.by || '?')}</span>`
+        + ` <span class="badge orphaned">could not render — see console</span></div>`
+        + `<div class="quote">${esc((it.anchor && it.anchor.quote) || it.id)}</div>`;
+    }
     list.appendChild(el);
   }
   // Terminal "done reviewing" — sets session.done → my `sidecar wait` returns DONE → one commit. Lives at

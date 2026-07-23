@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "items": [
+    {
+      "id": "c1784817067076",
+      "kind": "comment",
+      "by": "alex",
+      "anchor": {
+        "quote": "When you write `foo.md.review.json` as a plain file you replace the whole thing, so:",
+        "occurrence": 0
+      },
+      "status": "resolved",
+      "thread": [
+        {
+          "by": "alex",
+          "at": "2026-07-23T14:31:07.078Z",
+          "text": "So they have to rewrite the json each new comment?"
+        },
+        {
+          "by": "claude",
+          "at": "2026-07-23T14:32:20Z",
+          "text": "The agent does, yes — every agent write replaces the whole file, because its only interface is the filesystem (no API, no client). You do not: the browser posts individual actions and the server merges them in place. And the server merges defensively both ways (thread messages unioned, decided statuses never regress), so an agent whole-file write and your click cannot drop each other. The files are a few KB, so the cost is nothing — the real cost is the merge discipline this section has to teach, which is the longest chunk of protocol in the doc. The alternative would be an append-only JSONL sidecar the agent can append to blind, but status changes (pending → accepted) need last-write-wins over the log, so you would trade this section for a different one."
+        },
+        {
+          "by": "alex",
+          "at": "2026-07-23T14:33:25.007Z",
+          "text": "That seems like quite a lot of work for the agent, is there no way for the agent to just append or use bash commands to add comments? That would make it much easier and less succeptible to clobbering and exessive token usage."
+        },
+        {
+          "by": "claude",
+          "at": "2026-07-23T14:34:12Z",
+          "text": "Yes, and it should — you already have the parts. loadReview + mergeItem + saveReview (atomic tmp+rename) is exactly this logic, sitting behind PUT /api/review for the browser. A CLI subcommand reuses all three; it is roughly 20 lines, no new concepts. And `wait` already set the `sidecar <verb> <file>` precedent, so the shape exists too.\n\nWhat I would build: `sidecar add <file>` reading a JSON array of items on stdin. One call takes 1 or 20 items, and the agent never reads the existing sidecar at all. The merge happens inside one process, so it is atomic — that makes it safer than agent-side read-modify-write, not just cheaper.\n\nOn tokens, the win is bigger than it looks: today every write costs read-whole-file plus write-whole-file, and that grows as the review grows — seeding a card on a heavy review costs more than on an empty one. With `add`, cost is just the new items, flat forever.\n\nOne wrinkle: do not put replacement text in flags. Suggestion replacements are multi-line markdown and bash quoting will mangle them. stdin JSON via heredoc avoids that entirely; keep a `--text` shorthand only for one-line comments.\n\nWorth stealing while you are in there: `add` can validate every anchor against the file before writing and exit non-zero listing the quotes that did not match. That kills the orphan bug from the agent side — right now I only learn an anchor failed after you see a broken card.\n\nOne thing it does not fix: reading. I still have to read the sidecar to see your replies. But that direction is unavoidable and it is the cheap half — this proposal removes the redundant read that only exists to avoid clobbering you."
+        },
+        {
+          "by": "claude",
+          "at": "2026-07-23T15:02:21.969Z",
+          "text": "Shipped. The read-modify-write section this was anchored to no longer exists — AGENTS.md now points at skills/sidecar/SKILL.md, and the merge discipline is the CLI's job. The anchor orphaned because the document was rewritten out from under it, which is the honest outcome here."
+        }
+      ],
+      "orphanReason": "never-matched",
+      "decidedAt": "2026-07-23T15:02:21.970Z"
+    }
+  ]
+}

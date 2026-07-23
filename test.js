@@ -7,7 +7,7 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
-const { spawn, execSync } = require('child_process');
+const { spawn, execSync, execFileSync } = require('child_process');
 const { JSDOM } = require('jsdom');
 
 // mirror the server's content hash (sha1 hex, first 12) so tests can assert the returned hash
@@ -788,4 +788,287 @@ test('presence: watching/working surface in /api/state; idle reads as not-here',
   assert.equal((await state()).presence?.state, 'working');
   await post('/api/presence', { path: 'doc.md', state: 'idle' });
   assert.equal((await state()).presence, null, 'idle presence reads as not-here');
+});
+
+/* ---------------------------------------------------------------------------
+   CLI — `sidecar <verb> <file>` (lib/cli.js)
+
+   These run the real binary against a real temp repo with NO SERVER RUNNING, which is the point:
+   the filesystem is the sync layer, and the agent's whole interface has to work without one.
+   --------------------------------------------------------------------------- */
+
+const CLI_DOC = `# Plan
+
+We will ship all six features in week one.
+
+Success metrics are not defined yet.
+
+1. **Read** the sidecar.
+2. **Merge** by id.
+3. **Write** it back.
+
+Repeated line here.
+
+Repeated line here.
+`;
+
+function cliDir() {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-cli-'));
+  fs.writeFileSync(path.join(d, 'doc.md'), CLI_DOC);
+  execSync('git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm init', { cwd: d });
+  return d;
+}
+const BIN = path.join(__dirname, 'server.js');
+const cli = (d, ...args) => execFileSync('node', [BIN, ...args], { cwd: d, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+const cliStdin = (d, input, ...args) => execFileSync('node', [BIN, ...args], { cwd: d, encoding: 'utf8', input });
+// Returns the error (with .status and .stderr) instead of throwing, for the refusal paths.
+function cliFails(d, ...args) {
+  try { execFileSync('node', [BIN, ...args], { cwd: d, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }); return null; }
+  catch (e) { return e; }
+}
+const sc = (d) => JSON.parse(fs.readFileSync(path.join(d, 'doc.md.review.json'), 'utf8'));
+
+test('CLI comment: flat input expands to a full item — id, by, at, status, nested anchor', () => {
+  const d = cliDir();
+  cli(d, 'comment', 'doc.md', '--quote', 'Success metrics', '--text', 'No targets yet?');
+  const [it] = sc(d).items;
+  assert.equal(it.kind, 'comment');
+  assert.equal(it.by, 'claude');
+  assert.equal(it.status, 'open');
+  assert.equal(it.anchor.quote, 'Success metrics');
+  assert.equal(it.anchor.occurrence, 0);
+  assert.equal(it.thread.length, 1);
+  assert.equal(it.thread[0].text, 'No targets yet?');
+  // The agent never writes `at` — a guessed timestamp once put a reply above the comment it answered.
+  assert.ok(!Number.isNaN(Date.parse(it.thread[0].at)), 'at is a real timestamp');
+  assert.match(it.id, /^[\w-]+$/);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('CLI suggest: card carries replacement + note, status pending', () => {
+  const d = cliDir();
+  cli(d, 'suggest', 'doc.md', '--quote', 'We will ship all six features in week one.',
+       '--replacement', 'Week one ships three.', '--note', 'Overcommit.');
+  const [it] = sc(d).items;
+  assert.equal(it.kind, 'suggestion');
+  assert.equal(it.status, 'pending');
+  assert.equal(it.replacement, 'Week one ships three.');
+  assert.equal(it.note, 'Overcommit.');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('CLI refuses a quote that matches nothing, and writes NOTHING', () => {
+  const d = cliDir();
+  const e = cliFails(d, 'comment', 'doc.md', '--quote', 'text that is absent', '--text', 'x');
+  assert.ok(e, 'command should fail');
+  assert.equal(e.status, 1);
+  assert.match(e.stderr, /matched nothing/);
+  assert.ok(!fs.existsSync(path.join(d, 'doc.md.review.json')), 'no sidecar written');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('CLI refuses an ambiguous quote and names the occurrence range', () => {
+  const d = cliDir();
+  const e = cliFails(d, 'comment', 'doc.md', '--quote', 'Repeated line here.', '--text', 'x');
+  assert.ok(e);
+  assert.match(e.stderr, /ambiguous — 2 matches/);
+  assert.match(e.stderr, /--occurrence 0\.\.1/);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('CLI --occurrence disambiguates and is recorded', () => {
+  const d = cliDir();
+  cli(d, 'comment', 'doc.md', '--quote', 'Repeated line here.', '--occurrence', '1', '--text', 'the second one');
+  assert.equal(sc(d).items[0].anchor.occurrence, 1);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('CLI add: batch seeding, kind inferred from the presence of a replacement', () => {
+  const d = cliDir();
+  cliStdin(d, JSON.stringify([
+    { quote: 'Success metrics', text: 'No targets?' },
+    { quote: 'We will ship all six features in week one.', replacement: 'Week one ships three.' },
+  ]), 'add', 'doc.md');
+  const items = sc(d).items;
+  assert.equal(items.length, 2);
+  assert.equal(items[0].kind, 'comment');
+  assert.equal(items[1].kind, 'suggestion');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('CLI write merges — a human item and their thread reply survive an agent write', () => {
+  const d = cliDir();
+  // Human's comment lands first (as the browser would write it).
+  fs.writeFileSync(path.join(d, 'doc.md.review.json'), JSON.stringify({ schema: 1, items: [
+    { id: 'c-human', kind: 'comment', by: 'alex', anchor: { quote: 'Success metrics' }, status: 'open',
+      thread: [{ by: 'alex', at: '2026-01-01T00:00:00Z', text: 'what about these?' }] },
+  ] }, null, 2));
+  cli(d, 'suggest', 'doc.md', '--quote', 'We will ship all six features in week one.', '--replacement', 'Week one ships three.');
+  const items = sc(d).items;
+  assert.equal(items.length, 2);
+  const human = items.find(i => i.id === 'c-human');
+  assert.equal(human.by, 'alex');
+  assert.equal(human.thread[0].text, 'what about these?');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('CLI reply appends to a thread without disturbing earlier messages; --resolve settles it', () => {
+  const d = cliDir();
+  cli(d, 'comment', 'doc.md', '--quote', 'Success metrics', '--text', 'first');
+  const id = sc(d).items[0].id;
+  cli(d, 'reply', 'doc.md', id, 'second');
+  assert.deepEqual(sc(d).items[0].thread.map(m => m.text), ['first', 'second']);
+  cli(d, 'reply', 'doc.md', id, 'third', '--resolve');
+  const it = sc(d).items[0];
+  assert.deepEqual(it.thread.map(m => m.text), ['first', 'second', 'third']);
+  assert.equal(it.status, 'resolved');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('CLI answer inherits the parent anchor and sets replyTo', () => {
+  const d = cliDir();
+  cli(d, 'comment', 'doc.md', '--quote', 'Success metrics', '--text', 'make this concrete');
+  const parent = sc(d).items[0];
+  cli(d, 'answer', 'doc.md', parent.id, '--replacement', 'Target: 200 signups.');
+  const card = sc(d).items.find(i => i.kind === 'suggestion');
+  assert.equal(card.replyTo, parent.id);
+  assert.deepEqual(card.anchor, parent.anchor, 'anchor is inherited, not re-specified');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('CLI drop refuses an item owned by someone else, removes its own', () => {
+  const d = cliDir();
+  fs.writeFileSync(path.join(d, 'doc.md.review.json'), JSON.stringify({ schema: 1, items: [
+    { id: 'c-human', kind: 'comment', by: 'alex', anchor: { quote: 'Success metrics' }, status: 'open', thread: [] },
+  ] }, null, 2));
+  const e = cliFails(d, 'drop', 'doc.md', 'c-human');
+  assert.ok(e, 'should refuse');
+  assert.match(e.stderr, /belongs to "alex"/);
+  assert.equal(sc(d).items.length, 1, 'nothing removed');
+
+  cli(d, 'comment', 'doc.md', '--quote', 'week one', '--text', 'mine');
+  const mine = sc(d).items.find(i => i.by === 'claude');
+  cli(d, 'drop', 'doc.md', mine.id);
+  assert.deepEqual(sc(d).items.map(i => i.id), ['c-human']);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('CLI reanchor repoints an orphan back onto live text', () => {
+  const d = cliDir();
+  cli(d, 'comment', 'doc.md', '--quote', 'Success metrics', '--text', 'q');
+  const id = sc(d).items[0].id;
+  // Human edits the anchored text away.
+  fs.writeFileSync(path.join(d, 'doc.md'), CLI_DOC.replace('Success metrics', 'Outcome measures'));
+  cli(d, 'show', 'doc.md');                       // show runs annotateOrphans, as /api/state does
+  assert.equal(sc(d).items[0].status, 'orphaned');
+  cli(d, 'reanchor', 'doc.md', id, '--quote', 'Outcome measures');
+  const it = sc(d).items[0];
+  assert.equal(it.status, 'open');
+  assert.equal(it.anchor.quote, 'Outcome measures');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('CLI show --needs-reply selects only threads whose last word is the human’s', () => {
+  const d = cliDir();
+  cli(d, 'comment', 'doc.md', '--quote', 'Success metrics', '--text', 'mine, awaiting them');
+  fs.writeFileSync(path.join(d, 'doc.md.review.json'), JSON.stringify({ schema: 1, items: [
+    ...sc(d).items,
+    { id: 'c-theirs', kind: 'comment', by: 'alex', anchor: { quote: 'week one' }, status: 'open',
+      thread: [{ by: 'alex', at: '2026-01-01T00:00:00Z', text: 'answer me' }] },
+  ] }, null, 2));
+  const out = cli(d, 'show', 'doc.md', '--needs-reply');
+  assert.match(out, /c-theirs/);
+  assert.ok(!/awaiting them/.test(out), 'the agent’s own unanswered comment is not "needs reply"');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('CLI show reports full state and the done flag', () => {
+  const d = cliDir();
+  cli(d, 'comment', 'doc.md', '--quote', 'Success metrics', '--text', 'q');
+  const out = cli(d, 'show', 'doc.md');
+  assert.match(out, /1 item/);
+  assert.match(out, /DONE: false/);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('CLI check --quote pre-flights a candidate and bisects a failure', () => {
+  const d = cliDir();
+  const ok = cli(d, 'check', 'doc.md', '--quote', 'Success metrics');
+  assert.match(ok, /unambiguous/);
+  const e = cliFails(d, 'check', 'doc.md', '--quote', 'Success metrics are measured in bananas');
+  assert.ok(e);
+  assert.match(e.stderr, /longest matching prefix/);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('CLI check (bare) lints every anchor and fails when one cannot resolve', () => {
+  const d = cliDir();
+  cli(d, 'comment', 'doc.md', '--quote', 'Success metrics', '--text', 'q');
+  assert.match(cli(d, 'check', 'doc.md'), /^ok /m);
+  fs.writeFileSync(path.join(d, 'doc.md'), CLI_DOC.replace('Success metrics', 'Outcome measures'));
+  const e = cliFails(d, 'check', 'doc.md');
+  assert.ok(e);
+  assert.match(e.stderr, /cannot resolve/);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('CLI rejects an unknown flag rather than silently writing a malformed item', () => {
+  const d = cliDir();
+  const e = cliFails(d, 'suggest', 'doc.md', '--quote', 'Success metrics', '--replacment', 'typo');
+  assert.ok(e);
+  assert.equal(e.status, 2);
+  assert.match(e.stderr, /unknown flag --replacment/);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('CLI fails loudly on a path that does not resolve (never silently addresses nothing)', () => {
+  const d = cliDir();
+  const e = cliFails(d, 'show', 'nope.md');
+  assert.ok(e);
+  assert.equal(e.status, 2);
+  assert.match(e.stderr, /no file at/);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('anchor: a quote spanning two list items matches (block markers are not rendered text)', () => {
+  const Anchor = require('./public/anchor.js');
+  const raw = '1. **Read** the sidecar.\n2. **Merge** by id.';
+  assert.equal(Anchor.findAll(raw, 'Read the sidecar. Merge by id.').length, 1);
+  assert.equal(Anchor.findAll('## Heading\n\nBody text', 'Heading Body text').length, 1);
+  assert.equal(Anchor.findAll('- alpha\n- beta', 'alpha beta').length, 1);
+  assert.equal(Anchor.findAll('> quoted\n> second', 'quoted second').length, 1);
+  // Precision must not regress: these are not line-start block markers.
+  assert.equal(Anchor.findAll('a well-known thing', 'well-known').length, 1);
+  assert.equal(Anchor.findAll('see section 2. it says', 'section 2. it says').length, 1);
+});
+
+test('orphan reason distinguishes never-matched from text-changed', () => {
+  const { annotateOrphans } = require('./lib/review.js');
+  const raw = 'Alpha beta gamma.';
+  const born_bad = { items: [{ id: 'x', kind: 'comment', status: 'open', anchor: { quote: 'nowhere in here' } }] };
+  annotateOrphans(raw, born_bad);
+  assert.equal(born_bad.items[0].orphanReason, 'never-matched');
+
+  const was_good = { items: [{ id: 'y', kind: 'comment', status: 'open', anchor: { quote: 'Alpha' } }] };
+  annotateOrphans(raw, was_good);                       // resolves → stamps matchedAt
+  assert.equal(was_good.items[0].status, 'open');
+  annotateOrphans('Delta epsilon.', was_good);          // human edits it away
+  assert.equal(was_good.items[0].status, 'orphaned');
+  assert.equal(was_good.items[0].orphanReason, 'text-changed');
+});
+
+test('CLI and browser writing concurrently do not drop each other', async () => {
+  // The CLI merges in-process; the server merges on PUT. Both go through lib/review.js mergeItem,
+  // so an interleaved pair must end with both items present.
+  fs.writeFileSync(path.join(dir, 'concurrent.md'), 'Alpha line.\n\nBeta line.\n');
+  execFileSync('node', [BIN, 'comment', 'concurrent.md', '--quote', 'Alpha line.', '--text', 'from the CLI'],
+    { cwd: dir, encoding: 'utf8' });
+  await put('/api/review', { path: 'concurrent.md', review: { schema: 1, items: [
+    { id: 'c-browser', kind: 'comment', by: 'alex', anchor: { quote: 'Beta line.' }, status: 'open',
+      thread: [{ by: 'alex', at: '2026-01-01T00:00:00Z', text: 'from the browser' }] },
+  ] } });
+  const after = JSON.parse(fs.readFileSync(path.join(dir, 'concurrent.md.review.json'), 'utf8'));
+  const texts = after.items.flatMap(i => (i.thread || []).map(m => m.text));
+  assert.ok(texts.includes('from the CLI'), 'CLI item survived the browser PUT');
+  assert.ok(texts.includes('from the browser'), 'browser item survived');
 });
