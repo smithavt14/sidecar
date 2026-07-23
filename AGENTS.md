@@ -18,6 +18,9 @@ comments, and accepts or rejects suggestions in a browser at `localhost:4880`. Y
 commands that read and write a JSON sidecar next to the document; the server pushes your changes into
 their browser live, and their decisions come back through the same files.
 
+The tool is `@spktr/sidecar` on npm — `npm i -g @spktr/sidecar` puts `sidecar` on PATH, or prefix every
+command below with `npx @spktr/sidecar`.
+
 ```bash
 sidecar doctor doc.md                # server up? on what code? which URLs to hand over?
 sidecar show doc.md                  # the complete review state

@@ -10,8 +10,7 @@ description: |
   through this proposal with me," "let's revise this"). sidecar gives tracked suggestion cards with
   word-level diffs, comment threads, and rich-text editing on the real file, anchored by content
   rather than line numbers. NOT for a quick one-line take or a prose-tightening pass, and not for
-  code review. Needs the document as a file on disk. Covers the commands, the anchor rules, and the
-  draft → suggest → they review → read their decisions loop.
+  code review. Needs the document as a file on disk.
 ---
 
 # sidecar — reviewing a document with a human
@@ -37,6 +36,15 @@ for three paragraphs.
 
 ## Start here
 
+Install the tool so the `sidecar <verb>` commands below work as written:
+
+```bash
+npm i -g @spktr/sidecar       # puts `sidecar` on PATH
+```
+
+No global install? Prefix every command below with `npx @spktr/sidecar` (e.g.
+`npx @spktr/sidecar doctor doc.md`).
+
 ```bash
 sidecar doctor                # is a server running, on what code, and what URLs to hand over
 sidecar doctor path/to/doc.md # …including the deep links for that specific file
@@ -45,7 +53,7 @@ sidecar doctor path/to/doc.md # …including the deep links for that specific fi
 If nothing is running, start one — it serves a file or a whole directory:
 
 ```bash
-npx sidecar ~/path/to/docs    # → http://localhost:4880
+npx @spktr/sidecar ~/path/to/docs    # → http://localhost:4880
 ```
 
 The commands work with **no server running** — the filesystem is the sync layer. A server is only
@@ -92,8 +100,12 @@ sidecar answer doc.md c-metrics-a1b2c3 --replacement "Target: 200 signups by Mar
 
 ```bash
 sidecar reanchor doc.md s-intro-d4e5f6 --quote "the text as it reads now"   # rescue an orphan
+sidecar suggest doc.md --id s-intro-d4e5f6 --replacement "a better wording" # revise a card in place
 sidecar drop doc.md s-intro-d4e5f6                                          # withdraw your own item
 ```
+
+`reanchor` repoints the anchor keeping the content; `suggest --id` keeps the anchor and revises the
+content (no `--quote` — the card's existing anchor is reused).
 
 ### Long or multi-line text
 
@@ -221,6 +233,11 @@ There is deliberately no command for it.
 Each reviewed `foo.md` gets a sibling `foo.md.review.json` holding the items. You should not need to
 read or write it directly — `sidecar show` is the readable view and the commands are the writable one —
 but it is plain JSON, it belongs in git alongside the document, and the schema is stable.
+
+It stays uncommitted until the review ends (you commit it once with the document), so a `git checkout -f`
+or `git stash` mid-review discards the whole review — every card and comment, not just an anchor. There
+is also a `foo.md.review.seen.json` cursor tracking what you have already read; that one is agent state,
+never committed (it's gitignored).
 
 Statuses: suggestions run `pending → accepted | rejected`; comments run `open → resolved`; either can
 become `orphaned`. Items are stamped with `by` (your agent name — set `SIDECAR_AGENT` if `claude` is

@@ -1,6 +1,6 @@
 {
-  "name": "sidecar",
-  "version": "0.1.0",
+  "name": "@spktr/sidecar",
+  "version": "1.0.0",
   "description": "Review documents with your AI agent, locally: comments, suggestion cards with word-level diffs, and rich-text editing on your own files.",
   "keywords": [
     "markdown",
@@ -21,6 +21,17 @@
   },
   "author": "Alex Smith",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "server.js",
+    "lib/",
+    "public/",
+    "skills/",
+    "scripts/",
+    "AGENTS.md"
+  ],
   "bin": {
     "sidecar": "./server.js"
   },
