@@ -160,6 +160,26 @@
   .msg .who::before { display:none; }
   .msg .who.agent, .msg .who.human { margin-right:5px; }
   .msg .t { color:var(--fg); }
+  /* A message body is rendered markdown (proseHtml). One-paragraph bodies come back inline and sit on
+     the author's line; anything structured brings real blocks, styled tight so a card stays scannable. */
+  .msg .t > :first-child { margin-top:0; }
+  .msg .t > :last-child { margin-bottom:0; }
+  .msg .t p { margin:0 0 8px; }
+  .msg .t ul, .msg .t ol { margin:6px 0; padding-left:19px; }
+  .msg .t li { margin:3px 0; }
+  .msg .t li > p { margin:0; }
+  .msg .t h1, .msg .t h2, .msg .t h3, .msg .t h4 {
+    font-size:13px; font-weight:650; color:var(--ink); margin:11px 0 4px; letter-spacing:0; }
+  .msg .t code { font:12px 'Geist Mono', ui-monospace, Menlo, monospace;
+    background:var(--fill); border-radius:4px; padding:1px 4px; word-break:break-word; }
+  .msg .t pre { background:var(--fill); border-radius:9px; padding:9px 11px; margin:8px 0; overflow-x:auto; }
+  .msg .t pre code { background:none; padding:0; }
+  .msg .t blockquote { margin:8px 0; padding-left:10px; border-left:2px solid var(--line-2); color:var(--muted); }
+  .msg .t a { color:var(--ink); text-decoration:underline; text-underline-offset:2px; }
+  .msg .t hr { border:0; border-top:1px solid var(--line); margin:11px 0; }
+  .msg .t table { border-collapse:collapse; margin:8px 0; font-size:12.5px; display:block; overflow-x:auto; }
+  .msg .t th, .msg .t td { border:1px solid var(--line-2); padding:4px 7px; text-align:left; }
+  .msg .t img { max-width:100%; height:auto; border-radius:6px; }
   /* word-level diff — mono well; deletions strike out muted, insertions carry the agent's yellow */
   .diffbox { font:12.5px/1.6 'Geist Mono', ui-monospace, Menlo, monospace; background:var(--fill); border-radius:10px;
     padding:10px 12px; margin:9px 0; white-space:pre-wrap; word-break:break-word; color:#57574f; }
@@ -954,6 +974,18 @@ async function submitComment() {
 
 // ---------- sidebar ----------
 function esc(s) { return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+// Comment and note bodies are markdown, same as the document — so render them as markdown. Escaping
+// them into a <span> (which is what this did) collapsed every newline, because .msg .t sets no
+// white-space rule, and printed literal ** and backticks: any structured comment arrived as one
+// unreadable run-on block. Same marked→DOMPurify path as renderMd, for the same XSS reason — these
+// strings reach innerHTML on a page that's same-origin with the file API.
+// A body that is exactly one paragraph is unwrapped, so short replies stay on the author's line and
+// look as they always have; only genuinely structured text becomes blocks.
+function proseHtml(s) {
+  const html = DOMPurify.sanitize(marked.parse(String(s ?? ''), { breaks: true })).trim();
+  const one = html.match(/^<p>([\s\S]*)<\/p>$/);
+  return one && !/<p[ >]/.test(one[1]) ? one[1] : html;
+}
 // Identity class for a card/thread author — the agent (its own name, default 'claude') gets the
 // yellow chip; everyone else (the human, whatever SIDECAR_USER is) gets the ink dot. Keyed off the
 // agent name from /api/state, never a literal, so legacy 'alex', the default 'you', and any custom
@@ -978,7 +1010,7 @@ function nestedSugHtml(sug) {
   const orphan = sug.status === 'orphaned' ? ` <span class="badge orphaned">${orphanLabel(sug)}</span>` : '';
   return `<div class="subcard" data-id="${esc(sug.id)}"><span class="who agent">claude</span> <span class="badge suggestion">suggestion</span>${orphan}`
     + diffHtml(sug.anchor.quote, sug.replacement)
-    + (sug.note ? `<div class="msg"><span class="t">${esc(sug.note)}</span></div>` : '')
+    + (sug.note ? `<div class="msg"><span class="t">${proseHtml(sug.note)}</span></div>` : '')
     + `<div class="row"><button class="primary" data-action="accept">accept</button>
        <button data-action="reject">reject</button></div></div>`;
 }
@@ -1048,7 +1080,7 @@ function renderActive(list, top, childSug) {
     let body = `<div class="quote" title="click to locate" data-action="locate">${esc(it.anchor.quote)}</div>`;
     if (it.kind === 'suggestion') {
       body += diffHtml(it.anchor.quote, it.replacement);
-      if (it.note) body += `<div class="msg"><span class="t">${esc(it.note)}</span></div>`;
+      if (it.note) body += `<div class="msg"><span class="t">${proseHtml(it.note)}</span></div>`;
       body += `<div class="row"><button class="primary" data-action="accept">accept</button>
                <button data-action="reject">reject</button></div>`;
     } else {
@@ -1096,13 +1128,13 @@ function renderArchived(list, archived, childSug) {
     body += `<div class="quote">${esc(it.anchor.quote)}</div>`;
     if (it.kind === 'suggestion') {
       body += diffHtml(it.anchor.quote, it.replacement);
-      if (it.note) body += `<div class="msg"><span class="t">${esc(it.note)}</span></div>`;
+      if (it.note) body += `<div class="msg"><span class="t">${proseHtml(it.note)}</span></div>`;
     } else {
       body += threadHtml(it.thread);
       for (const sug of (childSug[it.id] || [])) if (['accepted', 'rejected'].includes(sug.status))
         body += `<div class="subcard"><span class="who agent">claude</span> <span class="badge ${sug.status}">${sug.status}</span>`
               + diffHtml(sug.anchor.quote, sug.replacement)
-              + (sug.note ? `<div class="msg"><span class="t">${esc(sug.note)}</span></div>` : '') + `</div>`;
+              + (sug.note ? `<div class="msg"><span class="t">${proseHtml(sug.note)}</span></div>` : '') + `</div>`;
     }
     el.innerHTML = body;
     } catch (e) {
@@ -1120,7 +1152,7 @@ function renderArchived(list, archived, childSug) {
 // thread merge preserves the same order.
 function threadHtml(thread) {
   return (thread || [])
-    .map(m => `<div class="msg"><span class="who ${whoCls(m.by)}">${esc(m.by)}</span> <span class="t">${esc(m.text)}</span></div>`).join('');
+    .map(m => `<div class="msg"><span class="who ${whoCls(m.by)}">${esc(m.by)}</span> <span class="t">${proseHtml(m.text)}</span></div>`).join('');
 }
 // Right cluster — pure STATUS: the open + orphaned counts (no actions, no presence).
 function renderTurn() {
