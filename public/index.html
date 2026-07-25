@@ -1014,6 +1014,23 @@ function nestedSugHtml(sug) {
     + `<div class="row"><button class="primary" data-action="accept">accept</button>
        <button data-action="reject">reject</button></div></div>`;
 }
+// Where each item's anchor actually falls in the document, as a character offset into the rendered
+// text. Computed with the same Anchor.findNth the highlighter uses, rather than by reading the <mark>
+// elements: markAnchors() deliberately early-returns while the doc has focus, so mark positions go
+// stale mid-edit and would silently scramble the order. An anchor that matches nothing (an orphan, or
+// text the human has since rewritten) has no position and gets -1, which floats it to the top of the
+// rail where it's visible, instead of sinking it to the bottom.
+function docRank(items) {
+  const { full } = docText();
+  const rank = new Map();
+  for (const it of items) {
+    let hit = null;
+    try { hit = it.anchor && Anchor.findNth(full, it.anchor.quote, it.anchor.occurrence || 0); }
+    catch (e) { console.error('sidecar: failed to rank', it.id, e); }
+    rank.set(it.id, hit ? hit.start : -1);
+  }
+  return rank;
+}
 function renderSide() {
   const side = $('side');
   // Preserve any reply the user is mid-typing. renderSide rebuilds every card via innerHTML, and it
@@ -1034,6 +1051,13 @@ function renderSide() {
     (childSug[it.replyTo] = childSug[it.replyTo] || []).push(it);
   const activeTop = state.review.items.filter(i => !isSettled(i) && !isReplySug(i));
   const archivedTop = state.review.items.filter(i => isSettled(i) && !isReplySug(i));
+  // Open cards read top-to-bottom in DOCUMENT order, not creation order. A comment on the last
+  // paragraph used to sit above one on the first, so scrolling the doc and scanning the rail were
+  // unrelated motions. Sort is stable, so items sharing a position (and the -1 orphans pinned at the
+  // top) keep their creation order. Archived stays chronological: it's a log, and a settled item's
+  // anchor may no longer exist in the document at all.
+  const rank = docRank(activeTop);
+  activeTop.sort((a, b) => rank.get(a.id) - rank.get(b.id));
   $('sheetCount').textContent = activeTop.length || '';   // mobile pull-up pill count = open items
 
   side.innerHTML = '';
@@ -1286,10 +1310,17 @@ function toggleSheet(force) {
 // Wrap the (occurrence-th) match of an anchor quote in <mark data-id> — across text nodes, so a
 // phrase that spans bold/links stays fully highlighted. Marks are contenteditable:false (a clean tap
 // target, no keyboard) and are stripped by toMd() on save, so they never touch the markdown.
-function wrapAnchor(quote, occurrence, id) {
+// The document's rendered text as one string, plus the text nodes it was built from. Shared by the
+// highlighter and the rail's ordering so an anchor's offset and its highlight can never disagree.
+// (wrapAnchor must re-read this per item: wrapping one anchor mutates the tree under the next walk.)
+function docText() {
   const walker = document.createTreeWalker($('doc'), NodeFilter.SHOW_TEXT);
   const nodes = []; let full = '';
   while (walker.nextNode()) { nodes.push({ node: walker.currentNode, start: full.length }); full += walker.currentNode.textContent; }
+  return { nodes, full };
+}
+function wrapAnchor(quote, occurrence, id) {
+  const { nodes, full } = docText();
   // Same matcher the server + occurrenceFor use, run over the concatenated rendered text; the returned
   // offsets index straight into `full`, so the text-node slicing below is unchanged.
   const hit = Anchor.findNth(full, quote, occurrence || 0);
