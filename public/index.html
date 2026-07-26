@@ -128,15 +128,17 @@
   .side-list.docked { display:block; position:relative; }
   .side-list.docked .card { position:absolute; left:0; right:0; }
   /* A tall card would shove every later card far below its own anchor, so unfocused cards are clipped to
-     a cap (set inline by dockCards) and carry a fade + toggle. This is what keeps the column honest. */
-  .side-list.docked .card.clipped { overflow:hidden; }
+     a cap (set inline by dockCards) and carry a fade + toggle. This is what keeps the column honest.
+     Only .cbody clips: resolve / reply / send sit OUTSIDE it and stay reachable without expanding. */
+  .card .cbody { position:relative; }
+  .side-list.docked .card.clipped .cbody { overflow:hidden; }
+  .side-list.docked .card.clipped .cbody::after { content:''; position:absolute; left:0; right:0; bottom:0;
+    height:44px; pointer-events:none; background:linear-gradient(to bottom, rgba(255,255,255,0), var(--bg)); }
   .side-list .card .more { display:none; }
-  .side-list.docked .card.has-more .more { display:block; position:absolute; left:0; right:0; bottom:0;
-    padding:26px 16px 12px; border:0; border-radius:0 0 14px 14px; box-shadow:none; text-align:left;
-    font:600 12px 'Geist', ui-sans-serif, sans-serif; color:var(--muted); cursor:pointer;
-    background:linear-gradient(to bottom, rgba(255,255,255,0), var(--bg) 60%); }
-  .side-list.docked .card.has-more:not(.clipped) .more { background:none; padding-top:12px; position:static; }
-  .side-list.docked .card.has-more .more:hover { color:var(--ink); }
+  .side-list.docked .card.has-more .more { display:block; width:100%; text-align:left; margin:7px 0 0;
+    padding:2px 0; border:0; background:none; box-shadow:none; cursor:pointer;
+    font:600 12px 'Geist', ui-sans-serif, sans-serif; color:var(--muted); }
+  .side-list.docked .card.has-more .more:hover { color:var(--ink); background:none; }
   /* review card — no border; a soft depth shadow lifts it off the rail */
   .card { background:var(--bg); border-radius:14px; padding:15px 16px; font-size:13px; box-shadow:var(--shadow);
     transition:box-shadow .2s ease; }
@@ -1077,7 +1079,11 @@ function dockCards() {
   const cards = [...list.querySelectorAll(':scope > .card[data-id]')];
   list.classList.toggle('docked', on);
   if (!on) {
-    for (const c of cards) { c.style.top = c.style.maxHeight = ''; c.classList.remove('clipped', 'has-more'); }
+    for (const c of cards) {
+      c.style.top = '';
+      const b = c.querySelector(':scope > .cbody'); if (b) b.style.maxHeight = '';
+      c.classList.remove('clipped', 'has-more');
+    }
     const f = list.querySelector(':scope > .done-foot');
     if (f) f.style.position = f.style.top = f.style.left = f.style.right = '';
     list.style.height = '';
@@ -1088,14 +1094,18 @@ function dockCards() {
   let cursor = 0;
   for (const card of cards) {
     const id = card.dataset.id, expanded = expandedCards.has(id);
-    // Measure unclipped first, so "is this card too tall?" is asked of its real height, then clip.
-    card.style.maxHeight = ''; card.classList.remove('clipped');
-    const tall = card.offsetHeight > CARD_CAP;
-    if (tall && !expanded) { card.style.maxHeight = CARD_CAP + 'px'; card.classList.add('clipped'); }
+    // Only the body clips; the action row below it is never hidden. Measure unclipped first, so "is this
+    // too tall?" is asked of the real content height, then clip. The 12px tolerance stops a card that
+    // overruns by a few pixels from sprouting a toggle that reveals almost nothing.
+    const cbody = card.querySelector(':scope > .cbody') || card;
+    cbody.style.maxHeight = ''; card.classList.remove('clipped');
+    const tall = cbody.scrollHeight > CARD_CAP + 12;
+    if (tall && !expanded) { cbody.style.maxHeight = CARD_CAP + 'px'; card.classList.add('clipped'); }
     card.classList.toggle('has-more', tall);
-    let more = card.querySelector('.more');
+    let more = card.querySelector(':scope > .more');
     if (tall) {
-      if (!more) { more = document.createElement('button'); more.className = 'more'; more.dataset.action = 'more'; card.appendChild(more); }
+      if (!more) { more = document.createElement('button'); more.className = 'more'; more.dataset.action = 'more'; }
+      if (more.previousElementSibling !== cbody) cbody.after(more);   // between the body and the actions
       more.textContent = expanded ? 'show less' : 'show more';
     } else if (more) more.remove();
     // An orphan (or anything whose quote no longer matches) has no mark to measure, so it just takes the
@@ -1194,19 +1204,23 @@ function renderActive(list, top, childSug) {
     // No interpolated inline handlers: the id lives on the card's data-id (set safely above) and every
     // control carries a static data-action, dispatched by the delegated listeners on #side (see below).
     let body = `<div class="quote" title="click to locate" data-action="locate">${esc(it.anchor.quote)}</div>`;
+    // Content and actions are separated so a docked card can clip its BODY and keep the controls
+    // reachable. Clipping the whole card hid resolve / reply / send behind "show more", which made a
+    // long thread unanswerable without expanding it first.
+    let actions = '';
     if (it.kind === 'suggestion') {
       body += diffHtml(it.anchor.quote, it.replacement);
       if (it.note) body += `<div class="msg"><span class="t">${proseHtml(it.note)}</span></div>`;
-      body += `<div class="row"><button class="primary" data-action="accept">accept</button>
-               <button data-action="reject">reject</button></div>`;
+      actions = `<div class="row"><button class="primary" data-action="accept">accept</button>
+                 <button data-action="reject">reject</button></div>`;
     } else {
       body += threadHtml(it.thread);
       for (const sug of (childSug[it.id] || [])) if (['pending', 'orphaned'].includes(sug.status)) body += nestedSugHtml(sug);
-      body += `<div class="row"><textarea class="reply" rows="1" placeholder="reply…" oninput="autogrow(this)" data-action="reply"></textarea></div>
-               <div class="row spread"><button class="ghost" data-action="resolve">resolve</button>
-               <button class="primary" data-action="send">send</button></div>`;
+      actions = `<div class="row"><textarea class="reply" rows="1" placeholder="reply…" oninput="autogrow(this)" data-action="reply"></textarea></div>
+                 <div class="row spread"><button class="ghost" data-action="resolve">resolve</button>
+                 <button class="primary" data-action="send">send</button></div>`;
     }
-    el.innerHTML = head + body;
+    el.innerHTML = `<div class="cbody">${head + body}</div>` + actions;
     } catch (e) {
       console.error('sidecar: failed to render item', it.id, e);
       el.className = 'card orphaned';
