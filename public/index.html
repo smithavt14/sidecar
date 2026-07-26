@@ -103,11 +103,16 @@
   mark.anchor { background:transparent; border-bottom:2px solid var(--yellow); padding:0 1px; cursor:pointer;
     transition:background .15s ease; border-radius:1px; }
   mark.anchor.flash { background:rgba(255,235,0,.32); box-shadow:0 0 0 3px rgba(255,235,0,.3); }
+  /* The rail scrolls WITH the page rather than in its own scroll box. That's what lets a card sit level
+     with the text it's about (see dockCards): two independent scrollers can't stay aligned without a
+     scroll handler, and one shared scroll context needs none. The mobile sheet below re-adds its own
+     height + overflow, since there it really is a separate scrolling surface. */
   aside { border-left:1px solid var(--line); padding:22px 20px; display:flex; flex-direction:column; gap:0;
-    height:calc(100vh - 51px); overflow-y:auto; position:sticky; top:51px; background:var(--bg); }
-  /* review-rail tabs: active threads ↔ archived threads. Pinned to the top of the rail as it scrolls.
-     Its padding is an OPAQUE buffer (no transparent margin/gap) so scrolling cards can't crowd under it. */
-  .tabs { position:sticky; top:-22px; z-index:2; display:flex; gap:2px; margin:0 -2px;
+    background:var(--bg); }
+  /* review-rail tabs: active threads ↔ archived threads. Sticky to the PAGE now (under the 51px header),
+     so the tabs and their counts stay reachable however far down the document you are.
+     The padding is an OPAQUE buffer (no transparent margin/gap) so scrolling cards can't crowd under it. */
+  .tabs { position:sticky; top:51px; z-index:2; display:flex; gap:2px; margin:0 -2px;
     padding:10px 2px 14px; background:var(--bg); }
   .tab { font:600 13px 'Geist', ui-sans-serif, sans-serif; border:none; background:none; color:var(--muted);
     padding:7px 11px; border-radius:8px; display:inline-flex; align-items:center; gap:6px; box-shadow:none; }
@@ -117,6 +122,21 @@
     padding:0 6px; min-width:17px; text-align:center; }
   .tab.on .tc { background:#e4e4dc; }
   .side-list { display:flex; flex-direction:column; gap:8px; }
+  /* Docked layout (desktop, active tab): each card is absolutely placed level with its anchor by
+     dockCards(), which also sets the list's height so the page can scroll to the last one. Cards keep
+     left/right 0 so they still span the rail's width and measure the same height they did in flow. */
+  .side-list.docked { display:block; position:relative; }
+  .side-list.docked .card { position:absolute; left:0; right:0; }
+  /* A tall card would shove every later card far below its own anchor, so unfocused cards are clipped to
+     a cap (set inline by dockCards) and carry a fade + toggle. This is what keeps the column honest. */
+  .side-list.docked .card.clipped { overflow:hidden; }
+  .side-list .card .more { display:none; }
+  .side-list.docked .card.has-more .more { display:block; position:absolute; left:0; right:0; bottom:0;
+    padding:26px 16px 12px; border:0; border-radius:0 0 14px 14px; box-shadow:none; text-align:left;
+    font:600 12px 'Geist', ui-sans-serif, sans-serif; color:var(--muted); cursor:pointer;
+    background:linear-gradient(to bottom, rgba(255,255,255,0), var(--bg) 60%); }
+  .side-list.docked .card.has-more:not(.clipped) .more { background:none; padding-top:12px; position:static; }
+  .side-list.docked .card.has-more .more:hover { color:var(--ink); }
   /* review card — no border; a soft depth shadow lifts it off the rail */
   .card { background:var(--bg); border-radius:14px; padding:15px 16px; font-size:13px; box-shadow:var(--shadow);
     transition:box-shadow .2s ease; }
@@ -311,7 +331,9 @@
 
     /* the sidebar, reframed as a bottom sheet */
     aside {
-      position:fixed; left:0; right:0; bottom:0; top:auto; height:76vh;
+      /* height + overflow live here, not on the base rule: on desktop the rail scrolls with the page so
+         cards can dock to their anchors, but the sheet genuinely is its own scrolling surface. */
+      position:fixed; left:0; right:0; bottom:0; top:auto; height:76vh; overflow-y:auto;
       border-left:none; border-top:1px solid var(--line); border-radius:22px 22px 0 0;
       background:var(--bg); box-shadow:0 -12px 40px rgba(20,20,15,.18);
       transform:translateY(102%); transition:transform .26s ease-out; z-index:46;
@@ -319,6 +341,9 @@
     }
     aside::before { content:''; position:absolute; top:9px; left:50%; transform:translateX(-50%);
       width:40px; height:4px; border-radius:99px; background:var(--line-strong); }
+    /* Inside the sheet the tabs stick to the SHEET's scroll box, not the page, so the desktop
+       under-the-header offset would push them 51px down. Back to cancelling the sheet's own padding. */
+    .tabs { top:-22px; }
     body.sheet-open aside { transform:translateY(0); }
 
     #sheetBackdrop { display:block; position:fixed; inset:0; background:rgba(20,20,15,.28); z-index:45;
@@ -548,7 +573,10 @@ function renderDoc() {
 
 // Typing anywhere in the doc marks it dirty and schedules a debounced serialize→save.
 // We never re-render mid-edit (that would lose the caret); the live DOM is the source until save.
-$('doc').addEventListener('input', () => { dirty = true; setStatus('editing…'); scheduleSave(); });
+// Typing reflows the document, which moves every mark below the caret — so the docked cards have to
+// follow. markAnchors() is skipped while the doc has focus (it would eat the caret), but the existing
+// marks are inline elements that move with the text, so measuring them mid-edit is still correct.
+$('doc').addEventListener('input', () => { dirty = true; setStatus('editing…'); scheduleSave(); scheduleDock(); });
 $('doc').addEventListener('blur', () => flushSave(), true);
 function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(saveDoc, 700); }
 async function flushSave() { if (dirty) { clearTimeout(saveTimer); await saveDoc(); } }
@@ -1031,6 +1059,69 @@ function docRank(items) {
   }
   return rank;
 }
+// ---------- docked rail: every card level with the text it's about ----------
+// Cards are absolutely placed at their anchor's vertical position, then pushed down where they'd overlap
+// (the Google Docs model). It works without a scroll listener only because the rail shares the page's
+// scroll context — measuring the mark and the list at the same instant cancels the scroll out. If the
+// rail ever gets its own overflow again, this silently drifts.
+const CARD_CAP = 300;   // px an unfocused card is clipped to; a tall one would push its neighbours off their anchors
+const CARD_GAP = 9;
+const expandedCards = new Set();   // survives renderSide's innerHTML rebuild, which is why it lives out here
+function cssId(id) { return window.CSS && CSS.escape ? CSS.escape(id) : id; }
+function dockCards() {
+  const list = $('side').querySelector('.side-list');
+  if (!list) return;
+  // Docked only on desktop and only on the active tab: the mobile rail is a separate scrolling sheet, and
+  // a settled item's anchor may not exist in the document at all.
+  const on = window.matchMedia('(min-width: 781px)').matches && sideTab === 'active';
+  const cards = [...list.querySelectorAll(':scope > .card[data-id]')];
+  list.classList.toggle('docked', on);
+  if (!on) {
+    for (const c of cards) { c.style.top = c.style.maxHeight = ''; c.classList.remove('clipped', 'has-more'); }
+    const f = list.querySelector(':scope > .done-foot');
+    if (f) f.style.position = f.style.top = f.style.left = f.style.right = '';
+    list.style.height = '';
+    return;
+  }
+  const doc = $('doc');
+  const listTop = list.getBoundingClientRect().top;
+  let cursor = 0;
+  for (const card of cards) {
+    const id = card.dataset.id, expanded = expandedCards.has(id);
+    // Measure unclipped first, so "is this card too tall?" is asked of its real height, then clip.
+    card.style.maxHeight = ''; card.classList.remove('clipped');
+    const tall = card.offsetHeight > CARD_CAP;
+    if (tall && !expanded) { card.style.maxHeight = CARD_CAP + 'px'; card.classList.add('clipped'); }
+    card.classList.toggle('has-more', tall);
+    let more = card.querySelector('.more');
+    if (tall) {
+      if (!more) { more = document.createElement('button'); more.className = 'more'; more.dataset.action = 'more'; card.appendChild(more); }
+      more.textContent = expanded ? 'show less' : 'show more';
+    } else if (more) more.remove();
+    // An orphan (or anything whose quote no longer matches) has no mark to measure, so it just takes the
+    // next slot — which, given the -1 sort rank, is the top of the rail.
+    const mark = doc.querySelector('mark.anchor[data-id="' + cssId(id) + '"]');
+    const target = mark ? mark.getBoundingClientRect().top - listTop : cursor;
+    const top = Math.max(Math.round(target), cursor);
+    card.style.top = top + 'px';
+    cursor = top + card.offsetHeight + CARD_GAP;
+  }
+  // "done reviewing" is a static child of a list whose cards are now absolute, so it would collapse to
+  // the top of the rail. Place it below the last card, where it still reads as the foot of the column.
+  const foot = list.querySelector(':scope > .done-foot');
+  if (foot) {
+    foot.style.position = 'absolute'; foot.style.left = foot.style.right = '0';
+    foot.style.top = cursor + 'px';
+    cursor += foot.offsetHeight;
+  }
+  list.style.height = cursor + 'px';   // absolute children don't size the parent; the page needs this to scroll
+}
+let dockQueued = false;
+function scheduleDock() {
+  if (dockQueued) return;
+  dockQueued = true;
+  requestAnimationFrame(() => { dockQueued = false; try { dockCards(); } catch (e) { console.error('sidecar: dock failed', e); } });
+}
 function renderSide() {
   const side = $('side');
   // Preserve any reply the user is mid-typing. renderSide rebuilds every card via innerHTML, and it
@@ -1079,6 +1170,7 @@ function renderSide() {
     if (d.focused) { ta.focus(); try { ta.setSelectionRange(d.start, d.end); } catch (_) {} }
   }
   markAnchors();   // refresh the in-doc highlight cues to match the current items
+  dockCards();     // …then place each card level with the mark markAnchors just laid down (order matters)
   renderTurn();    // right cluster: open / orphaned counts
   renderPresence();// center: claude is here ↔ waiting for claude
 }
@@ -1221,7 +1313,7 @@ async function markDone() {
   } catch (e) { alert('could not send: ' + e.message); }
 }
 // grow a textarea to fit its content so the whole comment stays visible while typing
-function autogrow(el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }
+function autogrow(el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; scheduleDock(); }
 async function reply(id, input) {
   if (!input.value.trim()) return;
   const it = state.review.items.find(i => i.id === id);
@@ -1255,6 +1347,8 @@ $('side').addEventListener('click', (e) => {
   const holder = el.closest('[data-id]'); if (!holder) return;
   const id = holder.dataset.id;
   switch (el.dataset.action) {
+    // Clipped-card toggle. Re-docks rather than just growing the card: everything below it has to move.
+    case 'more': expandedCards.has(id) ? expandedCards.delete(id) : expandedCards.add(id); dockCards(); break;
     case 'locate': locate(id); break;
     case 'accept': decide(id, 'accept'); break;
     case 'reject': decide(id, 'reject'); break;
@@ -1379,6 +1473,9 @@ const setModHeld = (on) => $('doc').classList.toggle('mod', on);
 window.addEventListener('keydown', (e) => { if (e.key === 'Meta' || e.key === 'Control') setModHeld(true); });
 window.addEventListener('keyup', (e) => { if (e.key === 'Meta' || e.key === 'Control') setModHeld(false); });
 window.addEventListener('blur', () => setModHeld(false));
+// Resize changes both the text reflow and the desktop/mobile cutoff, so the docked layout is recomputed
+// (or torn down, below 781px) on every resize.
+window.addEventListener('resize', scheduleDock);
 function openReview(id) {
   toggleSheet(true);
   document.querySelectorAll('.flash').forEach(m => m.classList.remove('flash'));
