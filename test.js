@@ -556,6 +556,7 @@ test('editing a paragraph adjacent to a table leaves the table intact (whole-doc
 // untouched one). We build a #doc + block model EXACTLY as index.html's renderDoc does, so this is the
 // same code the browser runs, not a re-implementation.
 const Serialize = require('./public/serialize.js');   // the SAME file index.html loads via <script>
+const Flow = require('./public/flow.js');             // ditto — the ```flow renderer
 
 // A multi-block fixture: headings, paragraphs, a GFM table (non-canonical spacing so a re-serialize
 // would visibly differ from the raw), a nested list, and a fenced code block. Built as a byte-exact
@@ -593,6 +594,20 @@ function buildDoc(md) {
     if (b.token.type === 'space') return;
     const el = window.document.createElement('div');
     el.className = 'block'; el.dataset.i = i;
+    // renderDoc's atomic branch, mirrored: a ```flow fence and a raw-HTML block become uneditable
+    // islands whose md0 is the ORIGINAL markdown, so they never reach turndown. Kept in step with the
+    // page on purpose — a helper that skipped this would test a document shape the browser never builds.
+    const isFlow = b.token.type === 'code' && (b.token.lang || '').trim().toLowerCase() === 'flow';
+    if (isFlow || b.token.type === 'html') {
+      el.innerHTML = isFlow ? Flow.render(b.token.text || '').svg : DOMPurify.sanitize(b.token.raw);
+      if (isFlow) el.__flowNodes = Flow.render(b.token.text || '').nodes;
+      el.dataset.atomic = '1';
+      el.contentEditable = 'false';
+      el.__md = b.token.raw.trim();
+      b.md0 = el.__md;
+      doc.appendChild(el);
+      return;
+    }
     el.innerHTML = renderMd([b.token]);
     doc.appendChild(el);
     b.md0 = Serialize.toMd(el, td);
@@ -1700,4 +1715,157 @@ test('wait: an accept prints the digest exactly once (double-print regression)',
   assert.equal((out.match(/## sidecar — your turn/g) || []).length, 1, 'exactly one digest header');
   assert.equal((out.match(/ACCEPTED/g) || []).length, 1, 'exactly one ACCEPTED line');
   fs.rmSync(d, { recursive: true, force: true });
+});
+
+/* ---------------------------------------------------------------------------------------------
+   VISUALS — ```flow diagrams, raw-HTML islands, and the /assets image route.
+
+   The load-bearing property is that a rendered block never reaches turndown: turndown cannot round-
+   trip an <svg> (it comes back as the bare label text) so an editable diagram would be destroyed by
+   the first stray keystroke. Atomic blocks make that path unreachable rather than unlikely, and the
+   tests below pin it on BOTH serialize paths — the tight one and the block-count-changed fallback
+   that produced the original data-loss bug.
+   --------------------------------------------------------------------------------------------- */
+
+const FLOW_SRC = '```flow\nSign up --> Verify email\nVerify email --> {Valid?}\n{Valid?} -->|yes| Done\n{Valid?} -->|no| Verify email\n```';
+const HTML_SRC = '<div style="display:flex">\n  <span>before</span>\n  <span>after</span>\n</div>';
+const VIS_DOC = [
+  '# Visuals', '',
+  'Intro paragraph mentioning Done in prose.', '',
+  FLOW_SRC, '',
+  'Middle paragraph.', '',
+  HTML_SRC, '',
+  'Closing paragraph.', '',
+].join('\n');
+
+test('flow parse: nodes, edges, labels, decisions and direction', () => {
+  const m = Flow.parse('LR\n%% a comment\nA --> B\nB -->|yes| {C?}\n{C?} --> A');
+  assert.equal(m.dir, 'LR', 'a bare LR line sets direction');
+  assert.deepEqual(m.nodes.map(n => n.label), ['A', 'B', 'C?'], '%% comments are skipped, nodes dedupe by label');
+  assert.equal(m.nodes.find(n => n.label === 'C?').decision, true, '{…} marks a decision');
+  assert.equal(m.edges.length, 3);
+  assert.equal(m.edges[1].label, 'yes', 'the |label| rides the arrow it follows');
+  assert.deepEqual(m.errors, []);
+});
+
+test('flow parse: a chained line is several edges, and a node offset points at its own label', () => {
+  const src = 'Draft --> Review --> Ship';
+  const m = Flow.parse(src);
+  assert.equal(m.edges.length, 2, 'A --> B --> C is two edges');
+  // `at` is what makes a node comment anchor to ITS mention rather than to some earlier line that
+  // happens to share the word — so it has to index the label exactly.
+  for (const n of m.nodes) assert.equal(src.substr(n.at, n.label.length), n.label, `offset for ${n.label}`);
+});
+
+test('flow parse: a malformed line is reported, not silently dropped', () => {
+  const m = Flow.parse('A --> \nB --> C');
+  assert.deepEqual(m.errors, ['A -->'], 'the unreadable line is surfaced');
+  assert.ok(m.nodes.some(n => n.label === 'C'), 'the readable lines still parse');
+});
+
+test('flow layout: a cycle does not inflate ranks, and the back edge is routed around', () => {
+  const m = Flow.layout(Flow.parse('A --> B\nB --> C\nC --> A'));
+  // Ranking THROUGH a cycle walks every node down a level per pass, leaving a tall ladder with empty
+  // rows; the empty rows then read as holes and Math.max over a hole is NaN — a blank diagram.
+  const ys = [...new Set(m.nodes.map(n => n.y))];
+  assert.equal(ys.length, 3, 'three nodes, three rows — no ladder');
+  assert.ok(Number.isFinite(m.width) && Number.isFinite(m.height), 'no NaN in the canvas size');
+  assert.equal(m.edges.filter(e => e.back).length, 1, 'exactly the cycle-closing edge is a back edge');
+  assert.ok(m.loop > 0, 'the canvas reserves room for the loop, or it clips');
+});
+
+test('flow render: an empty fence renders without a negative canvas', () => {
+  const m = Flow.layout(Flow.parse(''));
+  assert.equal(m.width, 0); assert.equal(m.height, 0);
+  const { svg } = Flow.render('');
+  assert.ok(!/NaN|undefined/.test(svg), 'no NaN/undefined leaks into the SVG');
+});
+
+test('flow render: labels are escaped and data-node carries an index, never flow source', () => {
+  const { svg } = Flow.render('<script>x</script> --> B');
+  assert.ok(!svg.includes('<script>'), 'a label is escaped, never live markup');
+  assert.ok(svg.includes('&lt;script&gt;'));
+  // DOMPurify's SAFE_FOR_XML strips any attribute whose value contains `-->`, which is exactly the
+  // arrow syntax — so an attribute carrying raw flow source would silently vanish.
+  assert.ok(/data-node="\d+"/.test(svg), 'data-node is an index');
+  assert.ok(!/data-\w+="[^"]*--&gt;/.test(svg) && !/data-\w+="[^"]*-->/.test(svg), 'no attribute carries an arrow');
+});
+
+test('atomic blocks: a flow fence and an HTML island survive an edit elsewhere, byte-for-byte', () => {
+  const { doc, blocks, td } = buildDoc(VIS_DOC);
+  blockByText(doc, 'Middle paragraph.').querySelector('p').textContent = 'Middle paragraph, edited.';
+  const { md, tight } = Serialize.serialize(doc, blocks, td);
+  assert.equal(tight, true, 'block count unchanged → tight path');
+  assert.equal(md, VIS_DOC.replace('Middle paragraph.', 'Middle paragraph, edited.'));
+  assert.ok(md.includes(FLOW_SRC), 'the flow fence survived byte-for-byte');
+  assert.ok(md.includes(HTML_SRC), 'the HTML island survived byte-for-byte');
+});
+
+test('atomic blocks survive the block-count-changed fallback path', () => {
+  const { doc, blocks, td } = buildDoc(VIS_DOC);
+  blockByText(doc, 'Closing paragraph.').remove();
+  const { md, tight } = Serialize.serialize(doc, blocks, td);
+  assert.equal(tight, false, 'block count changed → fallback path');
+  assert.ok(md.includes(FLOW_SRC), 'flow fence survived the fallback (turndown would flatten it to labels)');
+  assert.ok(md.includes(HTML_SRC), 'HTML island survived the fallback');
+  assert.ok(!md.includes('Closing paragraph.'), 'the removed block is gone');
+});
+
+test('atomic blocks are not editable, so the turndown path is unreachable for them', () => {
+  const { doc } = buildDoc(VIS_DOC);
+  const atomic = [...doc.querySelectorAll('.block[data-atomic]')];
+  assert.equal(atomic.length, 2, 'the flow fence and the HTML block are both atomic');
+  for (const el of atomic) assert.equal(el.contentEditable, 'false');
+});
+
+test('toMd on an atomic block with no source THROWS rather than flattening it', () => {
+  const { doc, td } = buildDoc(VIS_DOC);
+  const el = doc.querySelector('.block[data-atomic]');
+  delete el.__md;
+  // A silent turndown fallback here IS the data-loss bug: the diagram would come back as its bare
+  // label text and the fence would be gone from the file, with nothing logged.
+  assert.throws(() => Serialize.toMd(el, td), /missing its __md/);
+});
+
+test('a comment can anchor to a diagram node label inside a flow fence', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-flow-'));
+  fs.writeFileSync(path.join(d, 'f.md'), VIS_DOC);
+  // A node label appears once per EDGE that names it, so from the CLI a node comment is ambiguous by
+  // construction and the existing guard refuses it without --occurrence. That guard is right — this
+  // pins the shape agents actually have to use.
+  assert.throws(() => cli(d, 'comment', 'f.md', '--quote', 'Verify email', '--text', 'x'),
+    /ambiguous — 3 matches/, 'a bare node label is refused, not silently anchored to the first mention');
+  cli(d, 'comment', 'f.md', '--quote', 'Verify email', '--occurrence', '0', '--text', 'is this step needed?');
+  const it = JSON.parse(fs.readFileSync(path.join(d, 'f.md.review.json'), 'utf8')).items[0];
+  assert.equal(it.status, 'open', 'a node label anchors like any other quote — not orphaned');
+  const hit = Anchor.findNth(VIS_DOC, it.anchor.quote, it.anchor.occurrence || 0);
+  assert.ok(hit, 'the anchor resolves in the document');
+  assert.ok(VIS_DOC.slice(hit.start, hit.end) === 'Verify email');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('assets: a relative image beside the document is served with a locked-down type', async () => {
+  fs.writeFileSync(path.join(dir, 'pic.svg'), '<svg xmlns="http://www.w3.org/2000/svg"><rect width="4" height="4"/></svg>');
+  const r = await fetchRetry(`${BASE}/assets?doc=doc.md&src=${encodeURIComponent('./pic.svg')}`);
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get('content-type') || '', /image\/svg\+xml/);
+  // An SVG is a document, and this origin carries the file read/write API — so nothing it references
+  // may load, and the type may not be sniffed into something executable.
+  assert.match(r.headers.get('content-security-policy') || '', /default-src 'none'/);
+  assert.equal(r.headers.get('x-content-type-options'), 'nosniff');
+});
+
+test('assets refuses traversal, absolute paths, URLs and non-images', async () => {
+  const cases = [
+    ['../../../../etc/hosts', 'traversal to a non-image'],
+    ['../../../../tmp/evil.png', 'traversal to an image extension outside the root'],
+    ['/etc/hosts', 'an absolute path'],
+    ['https://example.com/a.png', 'a remote URL'],
+    ['./doc.md', 'a non-image inside the root'],
+  ];
+  for (const [src, why] of cases) {
+    const r = await fetchRetry(`${BASE}/assets?doc=doc.md&src=${encodeURIComponent(src)}`);
+    assert.ok(r.status >= 400 && r.status < 500, `${why} must be refused, got ${r.status}`);
+    assert.match(r.headers.get('content-type') || '', /json/, `${why}: error must be JSON`);
+  }
 });

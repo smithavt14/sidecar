@@ -70,6 +70,32 @@ const CODE_STAMP = (() => {
 })();
 
 // ---------- api ----------
+// ---------- images referenced by a document ----------
+// A relative `![](./flow.png)` is relative to the DOCUMENT, but the page is served from `/?f=…`, so the
+// browser resolves it against the app root and 404s. The client hands over both halves and resolution
+// happens here, through the same safePath the file API uses — one confinement check, not two.
+const IMAGE_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.avif': 'image/avif', '.svg': 'image/svg+xml' };
+app.get('/assets', (req, res) => {
+  const src = String(req.query.src || '');
+  // Only a relative path off the document. A URL or an absolute path would make this route a general
+  // file-read primitive for anything the served root contains, image extension or not.
+  if (!src || /^([a-z][a-z0-9+.-]*:|\/\/|\/)/i.test(src)) return res.status(400).json({ error: 'relative image paths only' });
+  const ext = path.extname(src).toLowerCase();
+  if (!IMAGE_TYPES[ext]) return res.status(400).json({ error: 'not an image' });
+  let abs;
+  try { abs = safePath(path.resolve(path.dirname(safePath(String(req.query.doc || ''))), src)); }
+  catch { return res.status(403).json({ error: 'path escapes root' }); }
+  if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) return res.status(404).json({ error: 'not found' });
+  // An SVG is a document, not just pixels: served same-origin it could carry script, and this origin
+  // has the file read/write API on it. Inside an <img> nothing runs, but a user can also open this URL
+  // directly — so deny everything the file might try to load or execute, and pin the type against sniffing.
+  res.set('Content-Type', IMAGE_TYPES[ext]);
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+  res.sendFile(abs);
+});
+
 app.get('/api/files', (req, res) => {
   const files = [];
   (function walk(dir) {

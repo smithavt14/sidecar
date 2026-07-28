@@ -7,6 +7,7 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <script src="/anchor.js"></script>   <!-- the shared matcher; server requires the same file so both agree on occurrences -->
 <script src="/serialize.js"></script>   <!-- the tight-diff serialize/reindex round-trip; Node tests require the same file -->
+<script src="/flow.js"></script>   <!-- ```flow fences → SVG; pure string in/out, Node tests require the same file -->
 <script src="/lib/marked/marked.min.js"></script>
 <script src="/lib/dompurify/dist/purify.min.js"></script>   <!-- marked v12 has no sanitizer; scrub its HTML before it hits innerHTML (XSS) -->
 <script src="/lib/diff/dist/diff.min.js"></script>
@@ -87,6 +88,32 @@
     font-family:'Geist Mono', ui-monospace, Menlo, monospace; }
   #doc pre code { padding:0; background:none; }
   #doc img { max-width:100%; height:auto; }
+  /* ---------- atomic blocks: a rendered diagram or a raw-HTML island ----------
+     These are contenteditable=false (set in renderDoc, not in the markup — DOMPurify strips the
+     attribute). They can't be typed into, so turndown never gets the chance to flatten an SVG back
+     into its bare label text, which is what it does to any HTML it doesn't understand. */
+  #doc .block[data-atomic] { position:relative; margin:22px 0; }
+  #doc .block[data-atomic]:focus-within, #doc .block[data-atomic]:focus { outline:none; }
+  .fl { display:block; max-width:100%; height:auto; margin:0 auto; }
+  .fl-box { fill:#fff; stroke:var(--line-strong); stroke-width:1.25; }
+  .fl-label { font:13px/1 'Geist', ui-sans-serif, system-ui, sans-serif; fill:var(--ink); text-anchor:middle; }
+  .fl-edge { stroke:var(--line-2); stroke-width:1.5; fill:none; }
+  .fl-head { fill:var(--line-2); }
+  .fl-elabel { font:11px/1 'Geist', ui-sans-serif, system-ui, sans-serif; fill:var(--muted); text-anchor:middle; }
+  .fl-elabel-bg { fill:var(--bg); }
+  /* a node is the click target — the affordance has to be visible before the click, or nobody finds it */
+  .fl-node { cursor:pointer; }
+  .fl-node:hover .fl-box, .fl-node:focus .fl-box { stroke:var(--ink); fill:var(--fill); }
+  .fl-node:focus { outline:none; }
+  /* an open comment on a node: the same yellow that marks the agent's anchors in prose */
+  .fl-node.anchored .fl-box { stroke:var(--yellow-ring); stroke-width:2; }
+  .fl-errors { margin-top:8px; text-align:center; font:12px/1.5 'Geist Mono', ui-monospace, Menlo, monospace;
+    color:var(--muted); }
+  /* the one thing that tells you the boxes are live; hidden on touch, where hover doesn't exist */
+  .fl-hint { position:absolute; right:0; top:-18px; font-size:11px; color:var(--faint);
+    opacity:0; transition:opacity .15s; pointer-events:none; }
+  #doc .block[data-atomic]:hover .fl-hint { opacity:1; }
+  @media (hover:none) { .fl-hint { display:none; } }
   #doc table { border-collapse:collapse; } #doc td, #doc th { border:1px solid var(--line-2); padding:6px 11px; font-size:14px; }
   /* a document blockquote is CONTENT, not the agent — keep it monochrome (yellow is reserved) */
   #doc blockquote { border-left:2px solid var(--line-2); margin-left:0; padding-left:14px; color:var(--muted); }
@@ -571,12 +598,55 @@ function renderDoc() {
     if (b.token.type === 'space') return;
     const el = document.createElement('div');
     el.className = 'block'; el.dataset.i = i;
+    if (renderAtomic(el, b)) { doc.appendChild(el); return; }   // sets its own md0; never goes through turndown
     el.innerHTML = renderMd([b.token]);   // sanitized before it hits the DOM; .block wrapper added after, structure intact
     // Surface a link's destination on hover — inside a contenteditable the href is otherwise invisible.
     el.querySelectorAll('a[href]').forEach(a => { if (!a.title) a.title = a.getAttribute('href'); });
+    el.querySelectorAll('img[src]').forEach(rewriteAssetSrc);
     doc.appendChild(el);
     b.md0 = toMd(el);   // baseline for tight-diff change detection
   });
+}
+
+// A relative image path in the document is relative to the DOCUMENT, but the page lives at `/?f=…`,
+// so the browser would resolve `./flow.png` against the app root and 404. Hand both halves to the
+// server and let it resolve + confine them — path safety stays in the one place that already does it
+// (safePath), instead of being re-derived here where it would drift.
+function rewriteAssetSrc(img) {
+  const src = img.getAttribute('src') || '';
+  if (!src || /^([a-z][a-z0-9+.-]*:|\/\/|\/)/i.test(src)) return;   // absolute, protocol-relative, or data: → leave it
+  img.setAttribute('src', '/assets?doc=' + encodeURIComponent(FILE) + '&src=' + encodeURIComponent(src));
+}
+
+// ---------- atomic blocks ----------
+// A ```flow fence renders as a diagram; a raw-HTML block renders as itself. Both become islands the
+// human cannot type into, and that is the entire safety story: the save path re-serializes an EDITED
+// block through turndown, which has no idea what an <svg> is and flattens it to its bare label text
+// ("Sign up\n\nVerify"). Making the block uneditable means that code path can never be reached for it,
+// rather than merely being unlikely. Their md0 is the ORIGINAL markdown, so serialize() emits the
+// source bytes verbatim on every save, in both the aligned and the block-count-changed path.
+function renderAtomic(el, b) {
+  const t = b.token;
+  const isFlow = t.type === 'code' && (t.lang || '').trim().toLowerCase() === 'flow';
+  if (!isFlow && t.type !== 'html') return false;
+
+  if (isFlow) {
+    const { svg, nodes } = Flow.render(t.text || '');
+    el.innerHTML = svg + '<span class="fl-hint">click a node to comment</span>';
+    // Where the fence's CONTENT starts inside the document, so a node's offset within the fence
+    // becomes an offset in state.markdown — which is what picks the right occurrence of a label that
+    // also appears in the prose above.
+    el.__flowNodes = nodes;
+    el.__flowBase = b.start + Math.max(0, t.raw.indexOf(t.text || ''));
+  } else {
+    el.innerHTML = DOMPurify.sanitize(t.raw);
+    el.querySelectorAll('img[src]').forEach(rewriteAssetSrc);
+  }
+  el.dataset.atomic = '1';
+  el.contentEditable = 'false';   // must be set here: DOMPurify strips the attribute from markup
+  el.__md = t.raw.trim();         // serialize.js reads this instead of running turndown
+  b.md0 = el.__md;
+  return true;
 }
 
 // Typing anywhere in the doc marks it dirty and schedules a debounced serialize→save.
@@ -794,6 +864,7 @@ function onSelectEnd(e) {
     const sel = window.getSelection();
     const text = sel ? sel.toString().trim() : '';
     if (text.length < 3 || !sel.rangeCount || !$('doc').contains(sel.anchorNode)) { hideTool(); return; }
+    pendingNode = null;   // a text selection supersedes any node still pending, or its anchor wins wrongly
     pendingSel = text;
     savedRange = sel.getRangeAt(0).cloneRange();   // execCommand needs this restored after the input steals focus
     const blockEl = sel.anchorNode.parentElement && sel.anchorNode.parentElement.closest
@@ -812,6 +883,64 @@ function onSelectEnd(e) {
 }
 document.addEventListener('mouseup', onSelectEnd);
 document.addEventListener('touchend', onSelectEnd);   // mobile: text selection ends with touchend, not mouseup
+
+// ---------- a diagram node -> a comment anchored to that node ----------
+// The picture is not the source. A node comment anchors to the node's LABEL TEXT inside the fence,
+// which is ordinary document text the matcher already reaches (test.js pins that a comment can anchor
+// inside a fenced code block, and spliceRisk refuses to splice across one — highlight allowed exactly
+// where mutation isn't). So these orphan, re-anchor and merge like every other comment: no second
+// anchor type, no new orphan semantics, nothing in the sidecar JSON that says "diagram".
+let pendingNode = null;
+
+// Where this fence's CONTENT starts in the current document. b.start goes stale after a structural
+// edit — serialize()'s block-count-changed path doesn't reindex — so find the fence by its content and
+// use the recorded offset only to break ties between two identical fences.
+function fenceBase(b) {
+  const raw = b.token.raw, hits = [];
+  for (let i = state.markdown.indexOf(raw); i !== -1; i = state.markdown.indexOf(raw, i + 1)) hits.push(i);
+  const at = hits.length ? hits.reduce((best, h) => Math.abs(h - b.start) < Math.abs(best - b.start) ? h : best) : b.start;
+  return at + Math.max(0, raw.indexOf(b.token.text || ''));
+}
+
+// Resolved at SUBMIT time, not at click time: flushSave() runs in between and can shift every offset
+// in the document, and the anchor has to match what actually landed on disk.
+function nodeAnchor(p) {
+  const b = blocks[p.blockIdx];
+  const el = $('doc').querySelector('.block[data-i="' + p.blockIdx + '"]');
+  const node = el && el.__flowNodes && el.__flowNodes[p.nodeIdx];
+  if (!b || !node) return null;
+  const hits = Anchor.findAll(state.markdown, node.label);
+  if (!hits.length) return null;
+  // The label almost always also appears in the prose around the diagram; pick the mention that is
+  // this node's own, by proximity to where it sits inside the fence.
+  const target = fenceBase(b) + node.at;
+  let occurrence = 0, bd = Infinity;
+  hits.forEach((h, i) => { const d = Math.abs(h.start - target); if (d < bd) { bd = d; occurrence = i; } });
+  return { quote: node.label, occurrence };
+}
+
+$('doc').addEventListener('click', (e) => {
+  const g = e.target.closest && e.target.closest('.fl-node');
+  if (!g) return;
+  const blockEl = g.closest('.block');
+  const nodeIdx = Number(g.dataset.node);
+  if (!blockEl || !blockEl.__flowNodes || !blockEl.__flowNodes[nodeIdx]) return;
+  hideTool();
+  // Already commented on → open that thread, the same as clicking a highlight in the prose. Otherwise
+  // every click on a discussed node would start a second thread about it.
+  if (g.dataset.itemId) return openReview(g.dataset.itemId);
+  pendingNode = { blockIdx: Number(blockEl.dataset.i), nodeIdx };
+  pendingSel = blockEl.__flowNodes[nodeIdx].label;
+  pendingSelBlock = pendingNode.blockIdx; pendingSelOffset = null; savedRange = null;
+  selRect = g.getBoundingClientRect();
+  openComment();
+});
+// Keyboard parity — the nodes are focusable, so Enter has to do what the click does.
+$('doc').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  const g = e.target.closest && e.target.closest('.fl-node');
+  if (g) { e.preventDefault(); g.dispatchEvent(new MouseEvent('click', { bubbles: true })); }
+});
 const SELTOOL_HTML = $('seltool').innerHTML;   // captured once — openLinkInput() replaces the buttons with a URL field
 function showTool() {
   const st = $('seltool');
@@ -822,7 +951,7 @@ function showTool() {
   st.style.top = Math.max(scrollY + 4, selRect.top + scrollY - st.offsetHeight - 8) + 'px';
 }
 function hideTool() { $('seltool').style.display = 'none'; }
-function hidePopover() { $('popover').style.display = 'none'; $('popover').innerHTML = ''; }
+function hidePopover() { $('popover').style.display = 'none'; $('popover').innerHTML = ''; pendingNode = null; }
 
 $('seltool').addEventListener('mousedown', (e) => e.preventDefault()); // keep the text selection alive
 $('seltool').addEventListener('click', (e) => {
@@ -997,8 +1126,10 @@ async function submitComment() {
   const body = $('pobody').value.trim();
   if (!body || !pendingSel) return hidePopover();
   await flushSave();  // anchor must match what's on disk
+  const anchor = (pendingNode && nodeAnchor(pendingNode))
+    || { quote: pendingSel, occurrence: occurrenceFor(pendingSel, pendingSelBlock, pendingSelOffset) };
   const item = { id: 'c' + Date.now(), kind: 'comment', by: state.user,
-    anchor: { quote: pendingSel, occurrence: occurrenceFor(pendingSel, pendingSelBlock, pendingSelOffset) }, status: 'open',
+    anchor, status: 'open',
     thread: [{ by: state.user, at: new Date().toISOString(), text: body }] };
   hidePopover();
   await pushReviewItem(item);
@@ -1443,7 +1574,16 @@ function toggleSheet(force) {
 // highlighter and the rail's ordering so an anchor's offset and its highlight can never disagree.
 // (wrapAnchor must re-read this per item: wrapping one anchor mutates the tree under the next walk.)
 function docText() {
-  const walker = document.createTreeWalker($('doc'), NodeFilter.SHOW_TEXT);
+  // Atomic blocks are excluded on purpose, for two independent reasons. (1) surroundContents() would
+  // inject an HTML <mark> into the SVG namespace, where it doesn't render — the diagram would just
+  // lose a label. (2) A diagram's rendered text is its node labels, one per node, while the fence
+  // SOURCE mentions a label once per edge; letting the two into the same offset space makes the
+  // occurrence index mean different things at write time and at highlight time. Anchored nodes get
+  // their cue from markAnchors() marking the <g> instead.
+  const walker = document.createTreeWalker($('doc'), NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (n.parentElement && n.parentElement.closest('[data-atomic]'))
+      ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+  });
   const nodes = []; let full = '';
   while (walker.nextNode()) { nodes.push({ node: walker.currentNode, start: full.length }); full += walker.currentNode.textContent; }
   return { nodes, full };
@@ -1475,6 +1615,7 @@ function markAnchors() {
   const doc = $('doc');
   if (document.activeElement === doc || doc.contains(document.activeElement)) return;
   doc.querySelectorAll('mark.anchor').forEach(m => { const p = m.parentNode; while (m.firstChild) p.insertBefore(m.firstChild, m); p.removeChild(m); });
+  doc.querySelectorAll('.fl-node.anchored').forEach(g => { g.classList.remove('anchored'); delete g.dataset.itemId; });
   doc.normalize();
   for (const it of state.review.items) {
     if (!['open', 'pending'].includes(it.status)) continue;
@@ -1483,6 +1624,22 @@ function markAnchors() {
     // silently lost its cues while the cards still listed them.
     try { wrapAnchor(it.anchor.quote, it.anchor.occurrence || 0, it.id); }
     catch (e) { console.error('sidecar: failed to highlight', it.id, e); }
+    try { markNodes(it.anchor.quote, it.id); }
+    catch (e) { console.error('sidecar: failed to highlight node', it.id, e); }
+  }
+}
+// A diagram node whose label IS this item's quote gets the cue. Matched on the label rather than on
+// anything stored in the sidecar, so a node comment stays an ordinary comment on disk — an agent that
+// quotes a node by name from the CLI lights it up too, without knowing diagrams exist.
+function markNodes(quote, id) {
+  const want = String(quote || '').trim();
+  if (!want) return;
+  for (const blockEl of $('doc').querySelectorAll('.block[data-atomic]')) {
+    (blockEl.__flowNodes || []).forEach((n, i) => {
+      if (n.label !== want) return;
+      const g = blockEl.querySelector('.fl-node[data-node="' + i + '"]');
+      if (g) { g.classList.add('anchored'); g.dataset.itemId = id; }
+    });
   }
 }
 function pulse(nodes) { nodes.forEach(m => m.classList.add('flash')); setTimeout(() => nodes.forEach(m => m.classList.remove('flash')), 1400); }

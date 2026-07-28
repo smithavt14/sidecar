@@ -5,7 +5,7 @@ For *driving* sidecar as an agent (reviewing a document with a human), see
 
 ## Shape
 
-No build step. Six files carry the whole tool:
+No build step. Eight files carry the whole tool:
 
 | File | What it is |
 |---|---|
@@ -15,6 +15,8 @@ No build step. Six files carry the whole tool:
 | `lib/wait.js` | `sidecar wait` — the fs-watching reactive-loop primitive. Server-independent by design. |
 | `public/index.html` | The entire frontend: rendering, contenteditable editor, review rail. |
 | `public/anchor.js` | The ONE content-anchor matcher, loaded by both the browser and Node. |
+| `public/serialize.js` | The tight-diff serialize/reindex round-trip, shared with the Node tests. |
+| `public/flow.js` | ```flow fences → SVG. Pure string in/out; no DOM, no dependency. |
 
 ## What sidecar actually promises
 
@@ -72,4 +74,24 @@ hover title in the UI.
   Keep that when you change the surrounding code; delete them when the reason stops being true.
 - Safety properties that tests cover and should stay covered: atomic sidecar writes, merge-by-id never
   dropping the other side's work, decided statuses never regressing, path confinement to the served
-  root, Host-header allowlisting, DOMPurify on rendered markdown, `git diff` run without a shell.
+  root, Host-header allowlisting, DOMPurify on rendered markdown, `git diff` run without a shell,
+  and atomic blocks emitting their source bytes rather than going through turndown.
+
+## Atomic blocks
+
+A ```flow fence and a raw-HTML block render as **islands**: `contenteditable="false"`, and `toMd()`
+returns the element's `__md` (its original markdown) instead of running turndown. Both halves are
+load-bearing. Turndown cannot round-trip what these render to — an `<svg>` comes back as its bare label
+text — so the block has to be unreachable from the edit path, not merely unlikely to be edited. The
+`toMd` branch **throws** when `__md` is missing rather than falling back to turndown, because a silent
+fallback there is precisely the data-loss bug it exists to prevent.
+
+Two things that look like they should work and don't. `contenteditable` is not in DOMPurify's allowed
+attribute set, so it must be set from code after sanitizing. And DOMPurify's `SAFE_FOR_XML` strips any
+attribute whose value contains `-->` — which is the flow arrow — so a node's identity travels as an
+index in `data-node`, never as its source. Both cost an afternoon to find; neither fails loudly.
+
+Diagrams are also excluded from `docText()`, so anchor highlighting never injects an HTML `<mark>` into
+the SVG namespace (where it silently does not render) and never mixes the fence's per-edge label
+mentions into the same offset space as the rendered one-per-node text. Anchored nodes get their cue
+from `markNodes()` instead.

@@ -88,6 +88,13 @@ tabs — **active** threads (open, editable) and **archived** threads (settled, 
 **Suggest** (your agent). Suggestion cards propose a replacement for a quoted span, shown as a word-level
 diff. Accept applies it to the real file; reject leaves it.
 
+**Show a flow, and comment on it.** A ` ```flow ` fence renders as a diagram, and clicking a box opens a
+comment thread on *that step* rather than on the line of markdown describing it — which is usually the
+thing you actually wanted to say. `A --> B` is an edge, `-->|label|` labels it, `{…}` is a decision, a
+leading `LR` turns it sideways. The source stays plain text in your file, so it still reads in a
+`git diff`. Raw HTML renders too (inline styles only), and relative image paths — `![](./wireframe.svg)`
+— resolve against the document.
+
 **Save.** Edits autosave to the real file (debounced), preserving the exact bytes of every block you didn't
 touch.
 

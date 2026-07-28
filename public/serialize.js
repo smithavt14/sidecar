@@ -10,6 +10,15 @@
    `td` — this module never constructs it, so both sides serialize through the identical instance. */
 (function (root) {
   function toMd(node, td) {
+    // An atomic block (a rendered ```flow diagram, a raw-HTML island) carries its own source markdown
+    // on `__md`, because turndown cannot round-trip what it renders to: an <svg> comes back as its bare
+    // label text and the diagram is gone. Deliberately NO fallback to turndown when the property is
+    // missing — a silent fallback here IS the data-loss bug, so an element marked atomic without its
+    // source is a programming error that should throw rather than quietly flatten the block.
+    if (node.dataset && node.dataset.atomic) {
+      if (typeof node.__md !== 'string') throw new Error('atomic block is missing its __md source');
+      return node.__md;
+    }
     const clone = node.cloneNode(true);
     clone.querySelectorAll('mark.anchor').forEach(m => m.replaceWith(...m.childNodes)); // locate highlights never save
     // Strip any ​ caret-escape left by an inline input rule (see tryInlineRule); it's invisible and never saved.

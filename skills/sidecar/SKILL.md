@@ -194,6 +194,51 @@ was trying to prevent. Fix the quote instead.
 
 ---
 
+## Visuals — diagrams, HTML, images
+
+Some things are worth showing rather than describing, and a flow is the clearest case: the human wants
+to comment on *the step*, not on the sentence about the step.
+
+**A ```flow fence renders as a diagram, and each box is a comment target.** The human clicks a box and
+gets a thread anchored to that node. Write the fence as ordinary document content:
+
+````markdown
+```flow
+Sign up --> Verify email
+Verify email --> {Valid?}
+{Valid?} -->|yes| Onboarding
+{Valid?} -->|no| Verify email
+```
+````
+
+`A --> B` is an edge · `-->|label|` labels it · `{…}` is a decision (drawn as a diamond) · a first line
+of `LR` lays it out left-to-right instead of top-down · `%%` is a comment · chains work
+(`A --> B --> C`). A node's identity is its label text, so repeating a label refers to the same box.
+A line that can't be read is reported under the diagram rather than dropped.
+
+This is a deliberate subset of mermaid's flowchart syntax. It is not mermaid — no subgraphs, no other
+diagram types.
+
+**Commenting on a node from the CLI needs `--occurrence`.** A label appears once per edge that names
+it, so `--quote "Verify email"` is ambiguous by construction and will be refused with a count. Pass
+`--occurrence 0` for its first mention in the fence, and remember the label may also appear in the
+prose around the diagram — `sidecar check <file> --quote "…"` shows you every match before you write.
+
+**Raw HTML renders too**, for what the flow syntax can't draw. Inline `style=""` only — a `<style>`
+tag is stripped, as are `<script>`, event handlers and `<iframe>`. Prefer a diagram: the HTML block is
+opaque to a reader of the raw file, where a fence stays legible in a `git diff`.
+
+**Images work by relative path** — `![wireframe](./wireframe.svg)` resolves against the document.
+Generating an `.svg` next to the file and linking it is the right move for anything the flow syntax
+can't express.
+
+**Both render as islands the human cannot type into.** That is deliberate: the editor saves by
+re-serializing edited blocks, and an `<svg>` cannot survive that trip. So *you* change a diagram by
+editing the file; they change it by asking you to. Their comments and your edits work as normal
+everywhere else in the document.
+
+---
+
 ## The loop
 
 1. **Draft** the document (the first version is usually yours).
