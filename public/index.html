@@ -107,6 +107,8 @@
   .fl-node:focus { outline:none; }
   /* an open comment on a node: the same yellow that marks the agent's anchors in prose */
   .fl-node.anchored .fl-box { stroke:var(--yellow-ring); stroke-width:2; }
+  /* the flash on jump. `box-shadow` does nothing inside SVG, so this is the fill instead */
+  .fl-node.flash .fl-box { fill:rgba(255,235,0,.32); stroke:var(--yellow-ring); stroke-width:2.5; }
   .fl-errors { margin-top:8px; text-align:center; font:12px/1.5 'Geist Mono', ui-monospace, Menlo, monospace;
     color:var(--muted); }
   /* the one thing that tells you the boxes are live; hidden on touch, where hover doesn't exist */
@@ -1246,8 +1248,11 @@ function dockCards() {
       more.textContent = expanded ? 'show less' : 'show more';
     } else if (more) more.remove();
     // An orphan (or anything whose quote no longer matches) has no mark to measure, so it just takes the
-    // next slot — which, given the -1 sort rank, is the top of the rail.
-    const mark = doc.querySelector('mark.anchor[data-id="' + cssId(id) + '"]');
+    // next slot — which, given the -1 sort rank, is the top of the rail. A comment on a diagram node has
+    // no mark either, by design (markAnchors marks the <g> instead) — measure the node, or the card docks
+    // beside whatever prose happens to repeat the label.
+    const mark = doc.querySelector('mark.anchor[data-id="' + cssId(id) + '"]')
+      || doc.querySelector('.fl-node.anchored[data-item-id="' + cssId(id) + '"]');
     const target = mark ? mark.getBoundingClientRect().top - listTop : cursor;
     const top = Math.max(Math.round(target), cursor);
     card.style.top = top + 'px';
@@ -1622,10 +1627,15 @@ function markAnchors() {
     if (it.kind === 'suggestion' && it.replyTo) continue;   // shares its parent comment's span — don't double-wrap
     // Guarded per item: a throw here used to abandon every REMAINING highlight, so the document
     // silently lost its cues while the cards still listed them.
+    // Nodes first, and a node claims the item outright. The quote is the node's LABEL, which usually
+    // also appears in the prose around the diagram — highlighting that instead put the cue, and the
+    // docked card, next to a paragraph the comment was never about.
+    let onNode = false;
+    try { onNode = markNodes(it.anchor.quote, it.id) > 0; }
+    catch (e) { console.error('sidecar: failed to highlight node', it.id, e); }
+    if (onNode) continue;
     try { wrapAnchor(it.anchor.quote, it.anchor.occurrence || 0, it.id); }
     catch (e) { console.error('sidecar: failed to highlight', it.id, e); }
-    try { markNodes(it.anchor.quote, it.id); }
-    catch (e) { console.error('sidecar: failed to highlight node', it.id, e); }
   }
 }
 // A diagram node whose label IS this item's quote gets the cue. Matched on the label rather than on
@@ -1633,14 +1643,16 @@ function markAnchors() {
 // quotes a node by name from the CLI lights it up too, without knowing diagrams exist.
 function markNodes(quote, id) {
   const want = String(quote || '').trim();
-  if (!want) return;
+  if (!want) return 0;
+  let hit = 0;
   for (const blockEl of $('doc').querySelectorAll('.block[data-atomic]')) {
     (blockEl.__flowNodes || []).forEach((n, i) => {
       if (n.label !== want) return;
       const g = blockEl.querySelector('.fl-node[data-node="' + i + '"]');
-      if (g) { g.classList.add('anchored'); g.dataset.itemId = id; }
+      if (g) { g.classList.add('anchored'); g.dataset.itemId = id; hit++; }
     });
   }
+  return hit;
 }
 function pulse(nodes) { nodes.forEach(m => m.classList.add('flash')); setTimeout(() => nodes.forEach(m => m.classList.remove('flash')), 1400); }
 // Tap a highlight in the doc → open its review (sheet on mobile) and flash the matching card.
@@ -1668,10 +1680,18 @@ window.addEventListener('blur', () => setModHeld(false));
 // Resize changes both the text reflow and the desktop/mobile cutoff, so the docked layout is recomputed
 // (or torn down, below 781px) on every resize.
 window.addEventListener('resize', scheduleDock);
+// Everything in the document that stands for this item: its prose highlights, or the diagram node
+// standing in for them. One helper so jumping, flashing and docking can never disagree about where an
+// item lives — they did, and a node comment flashed nothing while its card docked next to a paragraph.
+function anchorEls(id) {
+  const sel = cssId(id);
+  const marks = [...$('doc').querySelectorAll('mark.anchor[data-id="' + sel + '"]')];
+  return marks.length ? marks : [...$('doc').querySelectorAll('.fl-node.anchored[data-item-id="' + sel + '"]')];
+}
 function openReview(id) {
   toggleSheet(true);
   document.querySelectorAll('.flash').forEach(m => m.classList.remove('flash'));
-  pulse([...$('doc').querySelectorAll('mark.anchor[data-id="' + id + '"]')]);
+  pulse(anchorEls(id));
   const card = $('side').querySelector('.card[data-id="' + id + '"]');
   if (card) { card.scrollIntoView({ behavior: 'smooth', block: 'center' }); pulse([card]); }
 }
@@ -1680,7 +1700,7 @@ function locate(id) {
   toggleSheet(false);
   markAnchors();
   document.querySelectorAll('.flash').forEach(m => m.classList.remove('flash'));
-  const marks = [...$('doc').querySelectorAll('mark.anchor[data-id="' + id + '"]')];
+  const marks = anchorEls(id);
   if (!marks.length) return;
   marks[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
   pulse(marks);
