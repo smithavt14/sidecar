@@ -495,9 +495,15 @@ async function boot() {
     if (rel !== FILE) return;
     const fresh = await api('GET', '/api/state?path=' + encodeURIComponent(FILE));
     if (fresh.hash === state.hash) {          // our own save, or only the sidecar/presence moved — keep the caret
+      // A presence heartbeat fires every 15s while an agent is watching, and it
+      // arrives here with the review byte-identical. Rebuilding the rail for it
+      // threw away scroll position mid-sentence — the rail jumping under you
+      // every 15 seconds while writing a reply. Only re-render what moved.
+      const reviewMoved = JSON.stringify(fresh.review) !== JSON.stringify(state.review);
       state.review = fresh.review;
       state.presence = fresh.presence;        // presence pings arrive here (doc bytes unchanged)
-      renderSide();
+      if (reviewMoved) renderSide();
+      else renderPresence();
       return;
     }
     if (dirty) {                              // genuine external edit while we have unsaved text
@@ -1144,6 +1150,11 @@ function renderSide() {
     const card = ta.closest('[data-id]');
     if (card) drafts[card.dataset.id] = { value: ta.value, focused: ta === active, start: ta.selectionStart, end: ta.selectionEnd };
   }
+  // Draft text and caret were preserved here, but SCROLL was not — so a rebuild
+  // kept what you had typed and then moved it off screen, which reads as the
+  // page jumping. Capture both scrollers; restored after the rebuild and again
+  // after cards re-dock, since docking is what moves them.
+  const keepScroll = { side: side.scrollTop, win: window.scrollY };
   const isSettled = i => ['resolved', 'accepted', 'rejected'].includes(i.status);
   const isReplySug = i => i.kind === 'suggestion' && i.replyTo;
   // Reply suggestions render nested under their parent comment, not as their own top-level card.
@@ -1183,6 +1194,16 @@ function renderSide() {
   dockCards();     // …then place each card level with the mark markAnchors just laid down (order matters)
   renderTurn();    // right cluster: open / orphaned counts
   renderPresence();// center: claude is here ↔ waiting for claude
+  // Put the view back where it was. Twice on purpose: once now, and once after
+  // the next frame, because dockCards repositions cards and autogrow resizes
+  // textareas — both change layout height after this point, which would
+  // otherwise drag the scroll position with them.
+  const restoreScroll = () => {
+    if (side.scrollTop !== keepScroll.side) side.scrollTop = keepScroll.side;
+    if (window.scrollY !== keepScroll.win) window.scrollTo(0, keepScroll.win);
+  };
+  restoreScroll();
+  requestAnimationFrame(restoreScroll);
 }
 // ACTIVE tab — open threads, fully interactive (accept/reject, reply, resolve). This is the working surface.
 function renderActive(list, top, childSug) {
