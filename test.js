@@ -1905,3 +1905,46 @@ test('the published tarball carries SKILL.md — `files` dropping skills/ would 
   const { SKILL_PATH } = require('./lib/cli.js');
   assert.ok(fs.existsSync(SKILL_PATH), 'the path the CLI reads must exist in the package layout');
 });
+
+test('--version prints the package version and exits, instead of trying to serve "--version" as a dir', () => {
+  const d = cliDir();
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
+  assert.equal(cli(d, '--version').trim(), pkg.version);
+  assert.equal(cli(d, '-v').trim(), pkg.version);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('an unknown --flag is a typo, not a directory to serve — refuse instead of booting a server', () => {
+  const d = cliDir();
+  const e = cliFails(d, '--bogus');
+  assert.ok(e, 'must exit non-zero');
+  assert.equal(e.status, 1);
+  assert.match(e.stderr, /unknown option "--bogus"/);
+  // The bug this guards: falling through meant `sidecar --version` booted a server on a taken port
+  // and died with an unhandled 'error' stack dump.
+  assert.doesNotMatch(e.stderr, /EADDRINUSE|Unhandled 'error'/);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('/api/state ships codeDir + version, so doctor can tell a stale server from a different install', async () => {
+  // doctor compared its own code stamp against the server's blind. For anyone who installed from npm
+  // those are different installations by construction, so it reported STALE at every such user forever.
+  const d = cliDir();
+  const port = PORT + 13;
+  const srv = await new Promise((res, rej) => {
+    const p = spawn('node', [BIN, d], { env: { ...process.env, SIDECAR_PORT: String(port) }, stdio: 'pipe' });
+    p.stdout.on('data', (b) => { if (b.toString().includes('ready')) res(p); });
+    p.on('exit', () => rej(new Error('server died')));
+    setTimeout(() => rej(new Error('server never became ready')), 8000);
+  });
+  try {
+    const s = await (await fetch(`http://127.0.0.1:${port}/api/state?path=doc.md`)).json();
+    assert.equal(typeof s.codeDir, 'string');
+    assert.equal(path.resolve(s.codeDir), path.resolve(__dirname), 'codeDir is the server installation');
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
+    assert.equal(s.version, pkg.version);
+  } finally {
+    srv.kill();
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+});

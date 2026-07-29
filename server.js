@@ -63,15 +63,31 @@ const cli = require('./lib/cli.js');
 const arg0 = process.argv[2];
 const verb = (arg0 === '--help' || arg0 === '-h') ? 'help' : arg0;
 if (cli.isCommand(verb)) { cli.run(verb, process.argv.slice(3)); return; }
+if (arg0 === '--version' || arg0 === '-v') {
+  try { console.log(require('./package.json').version); } catch { console.log('?'); }
+  return;
+}
+// A bare path is a directory to serve, but an unrecognized FLAG is a typo. Falling through booted a
+// server on it, which then died on EADDRINUSE with an unhandled 'error' dump (`sidecar --version`).
+if (typeof arg0 === 'string' && arg0.startsWith('-')) {
+  console.error(`sidecar: unknown option "${arg0}"\ntry:  sidecar help`);
+  process.exit(1);
+}
 
 // Boot-time code stamp (§6b): the whole "false orphan" incident was a launchd server running a matcher
 // loaded hours before it was rewritten. Log the git sha + server.js mtime at startup, and surface it in
 // /api/state, so "is the live server on current code?" is answerable at a glance.
 const CODE_STAMP = (() => {
-  let s = 'nogit'; try { s = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: __dirname }).toString().trim(); } catch {}
+  let s = 'nogit'; try { s = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: __dirname, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch {}
   let mt = ''; try { mt = fs.statSync(__filename).mtime.toISOString().slice(0, 19).replace('T', ' '); } catch {}
   return s + (mt ? ' · ' + mt : '');
 })();
+// A stamp is only comparable against another stamp from the SAME installation. `doctor` runs from
+// whichever copy of the CLI is on PATH — for an npm/npx user that is never the server's copy, so
+// comparing stamps blind reported STALE at every such user, permanently. Ship the install dir and
+// the package version too, so the CLI can tell "different install" from "same install, old code".
+const CODE_DIR = __dirname;
+const VERSION = (() => { try { return require('./package.json').version || '?'; } catch { return '?'; } })();
 
 // ---------- api ----------
 // ---------- images referenced by a document ----------
@@ -136,7 +152,8 @@ app.get('/api/state', (req, res) => {
   // execFileSync + args array: no shell is spawned, so a filename with $(...) or backticks can't inject.
   try { diff = execFileSync('git', ['diff', '--', path.basename(abs)], { cwd: path.dirname(abs), stdio: ['ignore', 'pipe', 'ignore'] }).toString(); } catch {}
   res.json({ path: req.query.path, pwd: pwdFor(abs), markdown, review, diff, hash: sha(markdown),
-    presence: presenceFor(abs), code: CODE_STAMP, user: USER, agent: AGENT });
+    presence: presenceFor(abs), code: CODE_STAMP, codeDir: CODE_DIR, version: VERSION,
+    user: USER, agent: AGENT });
 });
 
 app.put('/api/save', (req, res) => {
@@ -299,10 +316,23 @@ chokidar.watch(BASE_DIR, {
 // their throws here automatically.
 app.use((err, req, res, next) => { res.status(err.status || 400).json({ error: err.message }); });
 
-app.listen(PORT, '127.0.0.1', () => {
+const server = app.listen(PORT, '127.0.0.1', () => {
   const f = rootIsFile ? `/?f=${encodeURIComponent(path.relative(BASE_DIR, ROOT))}` : '/';
   console.log(`sidecar ready → http://localhost:${PORT}${f}  [code ${CODE_STAMP}]`);
   // The startup line is the one moment a first-time reader is definitely looking, and a running
   // server is worth little until the agent on the other side knows the verbs.
   console.log(`agent needs the protocol → npx skills add smithavt14/sidecar   (or: sidecar skill)`);
+});
+
+// Starting a second server on a taken port is the likeliest startup failure, and Node's default for
+// it is an unhandled 'error' event with a stack dump. Say what happened, and where the other one is.
+server.on('error', (e) => {
+  if (e.code === 'EADDRINUSE') {
+    console.error(`sidecar: port ${PORT} is already in use — a server is probably already running.\n` +
+      `  check it:      sidecar doctor\n` +
+      `  or use another port:  SIDECAR_PORT=4881 sidecar <dir>`);
+  } else {
+    console.error(`sidecar: ${e.message}`);
+  }
+  process.exit(1);
 });
