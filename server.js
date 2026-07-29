@@ -58,7 +58,11 @@ function safePath(rel) {
 // Dispatch BEFORE express/ROOT setup: under a subcommand argv[2] is the verb, so ROOT/BASE_DIR below
 // would resolve to garbage. CLI commands resolve their own paths against cwd instead of safePath.
 const cli = require('./lib/cli.js');
-if (cli.isCommand(process.argv[2])) { cli.run(process.argv[2], process.argv.slice(3)); return; }
+// `--help`/`-h` normalize to the `help` verb. Bare `sidecar` still serves the cwd — `npm start` and
+// the launchd job depend on that, so the banner below carries the pointer instead.
+const arg0 = process.argv[2];
+const verb = (arg0 === '--help' || arg0 === '-h') ? 'help' : arg0;
+if (cli.isCommand(verb)) { cli.run(verb, process.argv.slice(3)); return; }
 
 // Boot-time code stamp (§6b): the whole "false orphan" incident was a launchd server running a matcher
 // loaded hours before it was rewritten. Log the git sha + server.js mtime at startup, and surface it in
@@ -298,4 +302,7 @@ app.use((err, req, res, next) => { res.status(err.status || 400).json({ error: e
 app.listen(PORT, '127.0.0.1', () => {
   const f = rootIsFile ? `/?f=${encodeURIComponent(path.relative(BASE_DIR, ROOT))}` : '/';
   console.log(`sidecar ready → http://localhost:${PORT}${f}  [code ${CODE_STAMP}]`);
+  // The startup line is the one moment a first-time reader is definitely looking, and a running
+  // server is worth little until the agent on the other side knows the verbs.
+  console.log(`agent needs the protocol → npx skills add smithavt14/sidecar   (or: sidecar skill)`);
 });

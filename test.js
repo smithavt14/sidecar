@@ -1869,3 +1869,39 @@ test('assets refuses traversal, absolute paths, URLs and non-images', async () =
     assert.match(r.headers.get('content-type') || '', /json/, `${why}: error must be JSON`);
   }
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+   `sidecar skill` / `sidecar help` — how an agent that has the package finds
+   out what the package can do. npx unpacks into ~/.npm/_npx/<hash>/, which no
+   agent harness scans, so shipping SKILL.md is only half of delivering it.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+test('CLI skill: prints SKILL.md verbatim, so the protocol matches the code that is running', () => {
+  const d = cliDir();
+  const out = cli(d, 'skill');
+  assert.equal(out, fs.readFileSync(path.join(__dirname, 'skills', 'sidecar', 'SKILL.md'), 'utf8'));
+  assert.match(out, /^---\nname: sidecar\n/, 'frontmatter intact — the output is installable as a skill');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('CLI help: --help, -h and help all reach the banner, and it names both routes to the skill', () => {
+  const d = cliDir();
+  const out = cli(d, 'help');
+  assert.equal(cli(d, '--help'), out);
+  assert.equal(cli(d, '-h'), out);
+  assert.match(out, /npx skills add smithavt14\/sidecar/, 'the install-where-the-agent-looks route');
+  assert.match(out, /sidecar skill/, 'the no-install route');
+  // Every verb the dispatcher knows should be discoverable from the banner, so a new one cannot be
+  // added without documenting it. `help` is excluded: a usage screen listing itself is noise.
+  const { COMMANDS } = require('./lib/cli.js');
+  for (const c of COMMANDS.filter(c => c !== 'help'))
+    assert.ok(out.includes(c), `help omits the ${c} verb`);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('the published tarball carries SKILL.md — `files` dropping skills/ would silently break `sidecar skill`', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
+  assert.ok(pkg.files.includes('skills/'), 'package.json files must ship skills/');
+  const { SKILL_PATH } = require('./lib/cli.js');
+  assert.ok(fs.existsSync(SKILL_PATH), 'the path the CLI reads must exist in the package layout');
+});

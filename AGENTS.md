@@ -1,13 +1,15 @@
 # AGENTS.md — driving sidecar as an agent
 
-The full protocol lives in **[skills/sidecar/SKILL.md](skills/sidecar/SKILL.md)**, which is also
-installable as an agent skill:
+The full protocol lives in **[skills/sidecar/SKILL.md](skills/sidecar/SKILL.md)**. One document
+rather than two, so the two cannot drift. Reach it either way:
 
 ```bash
-npx skills add smithavt14/sidecar
+npx skills add smithavt14/sidecar   # install it where your agent looks
+npx @spktr/sidecar skill            # or print it to stdout, no install
 ```
 
-One document rather than two, so the two cannot drift. Read it there.
+The second reads the copy inside the installed package, so it always describes the version of the
+code you are actually running.
 
 ---
 

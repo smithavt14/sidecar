@@ -29,21 +29,26 @@ synced across two machines mid-flight.
 
 ## Quickstart
 
-```bash
-npm i -g @spktr/sidecar          # requires Node ≥ 20
-sidecar ~/path/to/your/docs      # → http://localhost:4880
-```
-
-Or without installing: `npx @spktr/sidecar ~/path/to/your/docs`. It serves a single file or a whole
-directory.
-
-Give your agent the skill so it knows the commands:
+Start here. One line, run once, in the project you want to review documents in:
 
 ```bash
 npx skills add smithavt14/sidecar
 ```
 
-Then tell your agent: *"review draft.md in sidecar."* Behind that sentence, it runs commands like:
+That installs the skill where your agent looks for it. Now tell your agent *"review draft.md in
+sidecar"* — it fetches the tool, starts the server, and opens the review at
+[localhost:4880](http://localhost:4880). Node ≥ 20; nothing else to set up.
+
+To run the server yourself instead:
+
+```bash
+npm i -g @spktr/sidecar          # or prefix everything with npx @spktr/sidecar
+sidecar ~/path/to/your/docs      # a single file or a whole directory
+sidecar help                     # every command
+sidecar skill                    # the agent protocol, on stdout, no install
+```
+
+Behind *"review draft.md in sidecar,"* your agent runs commands like:
 
 ```bash
 sidecar suggest draft.md \

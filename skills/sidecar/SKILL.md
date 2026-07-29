@@ -45,6 +45,9 @@ npm i -g @spktr/sidecar       # puts `sidecar` on PATH
 No global install? Prefix every command below with `npx @spktr/sidecar` (e.g.
 `npx @spktr/sidecar doctor doc.md`).
 
+`sidecar help` lists every verb, and `sidecar skill` prints this file from inside the installed
+package — reach for that one when the installed version might be older than what you are reading.
+
 ```bash
 sidecar doctor                # is a server running, on what code, and what URLs to hand over
 sidecar doctor path/to/doc.md # …including the deep links for that specific file
