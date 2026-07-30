@@ -36,14 +36,20 @@ for three paragraphs.
 
 ## Start here
 
-Install the tool so the `sidecar <verb>` commands below work as written:
+**Setup is yours, not theirs. Never hand the human a shell command to run.** Installing this skill
+was their last terminal step; assume they do not have a terminal open and would not know what to do
+with one. Everything below you run yourself.
+
+Put `sidecar` on PATH:
 
 ```bash
-npm i -g @spktr/sidecar       # puts `sidecar` on PATH
+npm i -g @spktr/sidecar
 ```
 
-No global install? Prefix every command below with `npx @spktr/sidecar` (e.g.
-`npx @spktr/sidecar doctor doc.md`).
+If that fails — a permissioned or sandboxed npm prefix is the usual reason — **do not report it and
+do not ask them to fix it.** Prefix every command in this file with `npx -y @spktr/sidecar` instead
+(e.g. `npx -y @spktr/sidecar doctor doc.md`) and carry on. Nothing here needs the global install; it
+only shortens the commands.
 
 `sidecar help` lists every verb, and `sidecar skill` prints this file from inside the installed
 package — reach for that one when the installed version might be older than what you are reading.
@@ -53,14 +59,18 @@ sidecar doctor                # is a server running, on what code, and what URLs
 sidecar doctor path/to/doc.md # …including the deep links for that specific file
 ```
 
-If nothing is running, start one — it serves a file or a whole directory:
+If nothing is running, start one yourself — it serves a file or a whole directory:
 
 ```bash
-npx @spktr/sidecar ~/path/to/docs    # → http://localhost:4880
+sidecar ~/path/to/docs        # → http://localhost:4880
 ```
 
-The commands work with **no server running** — the filesystem is the sync layer. A server is only
-needed for the human's browser.
+**That command does not return** — it is the server. Start it in the background (Claude Code: Bash
+with `run_in_background`), or detached with `nohup … &`. Running it in the foreground hangs your
+turn and the human sees nothing happen.
+
+The other commands work with **no server running** — the filesystem is the sync layer. A server is
+only needed for the human's browser.
 
 **Always hand the human both URLs** when a review is ready; they are often on a phone, not at a desk.
 `sidecar doctor <file>` prints both, including the tailnet address if one is configured.
@@ -242,21 +252,52 @@ everywhere else in the document.
 
 ---
 
+## Waiting for them — the step agents skip
+
+**Nothing pushes into your session.** sidecar will not interrupt you, and the human's comment will
+not appear in your context on its own. If you hand over a URL and then stop talking, you will never
+see a word they write, and from their side you have simply gone silent with a comment sitting
+unanswered. **Arming a watcher is not optional; it is how you stay in the conversation.**
+
+```bash
+sidecar wait /abs/path/to/doc.md      # blocks until they act, then prints the digest
+```
+
+Pass an **absolute path**. A relative one resolves against your cwd, and `wait` exits `2` rather than
+watching the wrong file.
+
+**If your harness can run a command in the background and wake you when it exits, use that** — Claude
+Code: Bash with `run_in_background`. `wait` fs-watches, so it costs nothing while it sleeps and
+returns the instant they act. A 15-minute block is free.
+
+**Otherwise, poll.** Foreground with a short timeout, and run it again:
+
+```bash
+sidecar wait /abs/path/to/doc.md --timeout 60
+```
+
+- Exit **0** — they acted; the digest is on stdout. Respond to it.
+- Exit **1** — the timeout. It prints `still watching`, advances nothing, and means *run it again*.
+
+Never leave the 15-minute default blocking a foreground turn.
+
+**Re-arm after every response.** One `wait` covers one turn: respond to the digest, then wait again.
+You stop only when the digest says `DONE: true` or the human says they're finished. A review where
+you answered once and stopped watching is a review they think you abandoned.
+
+---
+
 ## The loop
 
 1. **Draft** the document (the first version is usually yours).
 2. **Suggest** — cards and comments anchored to real text.
-3. **Hand over both URLs**, then background `sidecar wait <file>` (absolute path). It fs-watches and
-   returns the instant they do anything, sleeping for free in between. *If your harness cannot run a
-   command in the background and wake you when it exits*, run it in the foreground with a short
-   `--timeout` (say 60) and treat a timeout exit as "nothing yet, run it again" — do not leave a
-   15-minute default blocking the session.
+3. **Hand over both URLs**, then arm `sidecar wait` as above.
 4. **When it returns, act on its digest.** In steady state that is enough — the digest is everything
    that changed since your last look (decisions with their reasons, new comments and replies in full,
    orphans, the doc diff), not just the one event that woke it. Reach for `sidecar digest` to re-check
    mid-turn, and `sidecar show` for the full picture when the delta isn't enough context: the first pass
    of a session, after an error, or before the final commit.
-5. **Respond**, then background `sidecar wait` again.
+5. **Respond**, then arm `sidecar wait` again.
 6. Repeat until the digest says `DONE: true`, then make **one commit**.
 
 Accepting a card leaves the tree dirty on purpose — the dirty diff *is* the review state. Don't

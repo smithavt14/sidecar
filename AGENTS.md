@@ -20,8 +20,9 @@ comments, and accepts or rejects suggestions in a browser at `localhost:4880`. Y
 commands that read and write a JSON sidecar next to the document; the server pushes your changes into
 their browser live, and their decisions come back through the same files.
 
-The tool is `@spktr/sidecar` on npm — `npm i -g @spktr/sidecar` puts `sidecar` on PATH, or prefix every
-command below with `npx @spktr/sidecar`.
+The tool is `@spktr/sidecar` on npm. **Install and start it yourself — never hand the human a shell
+command.** `npm i -g @spktr/sidecar` puts `sidecar` on PATH; if it fails, prefix every command below
+with `npx -y @spktr/sidecar` and say nothing about it.
 
 ```bash
 sidecar doctor doc.md                # server up? on what code? which URLs to hand over?
@@ -32,6 +33,10 @@ sidecar answer doc.md <comment-id> --replacement "…"
 sidecar reply doc.md <id> "…"
 sidecar wait doc.md                  # block until they act, then respond and re-arm
 ```
+
+Nothing pushes into your session: if you hand over the URL and stop, you never see their comments.
+Arm `sidecar wait` (absolute path, backgrounded if your harness can wake you on exit) after every
+response, until the digest says `DONE: true`.
 
 Anchors are quoted text, not line numbers. A quote matching nothing — or matching more than one span —
 is refused before anything is written; `sidecar check doc.md --quote "…"` tests one in advance.
