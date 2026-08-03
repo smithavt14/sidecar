@@ -1871,6 +1871,102 @@ test('assets refuses traversal, absolute paths, URLs and non-images', async () =
 });
 
 /* ────────────────────────────────────────────────────────────────────────────
+   IMAGES IN COMMENTS — a pasted screenshot becomes a file in `<doc>.review.assets/`
+   and a markdown link in the comment body. The review JSON never holds bytes, and
+   the reference is the same doc-relative form /assets already serves.
+   ──────────────────────────────────────────────────────────────────────────── */
+// A real 1×1 PNG. The upload sniffs magic bytes, so a fake buffer wouldn't get through — which is
+// the point of having it here rather than asserting against a stub.
+const PNG_1x1 = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+const postBytes = (url, buf, type = 'application/octet-stream') =>
+  fetchRetry(`${BASE}${url}`, { method: 'POST', headers: { 'Content-Type': type }, body: buf });
+
+test('asset upload writes a content-hashed file beside the review and returns doc-relative markdown', async () => {
+  const r = await postBytes('/api/asset?doc=doc.md', PNG_1x1);
+  assert.equal(r.status, 200);
+  const out = await r.json();
+  assert.match(out.src, /^doc\.md\.review\.assets\/[0-9a-f]{12}\.png$/);
+  assert.equal(out.markdown, `![](${out.src})`);
+  assert.ok(fs.existsSync(path.join(dir, out.src)), 'the bytes landed on disk');
+  assert.deepEqual(fs.readFileSync(path.join(dir, out.src)), PNG_1x1, 'byte-identical, not re-encoded');
+  // The whole design rests on this: the reference a comment stores is exactly what /assets resolves,
+  // so an attachment needs no serving code of its own. If this 404s, images render as broken icons.
+  const served = await fetchRetry(`${BASE}/assets?doc=doc.md&src=${encodeURIComponent(out.src)}`);
+  assert.equal(served.status, 200);
+  assert.match(served.headers.get('content-type') || '', /image\/png/);
+});
+
+test('the same image twice is one file — content-addressed, so re-pasting does not litter', async () => {
+  const a = await (await postBytes('/api/asset?doc=doc.md', PNG_1x1)).json();
+  const b = await (await postBytes('/api/asset?doc=doc.md', PNG_1x1)).json();
+  assert.equal(a.src, b.src);
+  const files = fs.readdirSync(path.join(dir, 'doc.md.review.assets'));
+  assert.equal(files.filter(f => f.endsWith('.png')).length, 1);
+  assert.equal(files.filter(f => f.endsWith('.tmp')).length, 0, 'no temp file left behind');
+});
+
+test('asset upload refuses non-images by their BYTES, not their claimed type', async () => {
+  // Content-Type says PNG and it is HTML. The extension decides how /assets serves it, so a file that
+  // lies about itself must never get one — sniffing is what keeps the two honest.
+  const r = await postBytes('/api/asset?doc=doc.md', Buffer.from('<html><script>alert(1)</script>'), 'image/png');
+  assert.equal(r.status, 400);
+  assert.match((await r.json()).error, /not an image/);
+});
+
+test('asset upload refuses an unknown document — an attachment is not a write primitive', async () => {
+  // Without the existence check this would create `<anything>.review.assets/` anywhere under the root.
+  const r = await postBytes('/api/asset?doc=nope.md', PNG_1x1);
+  assert.equal(r.status, 404);
+  assert.ok(!fs.existsSync(path.join(dir, 'nope.md.review.assets')), 'no directory created for a doc that is not there');
+  const esc = await postBytes(`/api/asset?doc=${encodeURIComponent('../../../../tmp/evil.md')}`, PNG_1x1);
+  assert.equal(esc.status, 403);
+});
+
+test('an image in a comment body survives the review round-trip as a path, never as bytes', async () => {
+  const up = await (await postBytes('/api/asset?doc=doc.md', PNG_1x1)).json();
+  const s = await state();
+  s.review.items.push({ id: 'cimg1', kind: 'comment', by: 'you', anchor: { quote: 'Closing paragraph.' },
+    status: 'open', thread: [{ by: 'you', at: new Date().toISOString(), text: `look:\n\n${up.markdown}` }] });
+  await put('/api/review', { path: 'doc.md', review: s.review });
+  const raw = fs.readFileSync(path.join(dir, 'doc.md.review.json'), 'utf8');
+  assert.match(raw, /doc\.md\.review\.assets\//);
+  assert.doesNotMatch(raw, /base64|data:image/, 'the sidecar stays a small text file');
+});
+
+test('CLI --image copies the file in and appends a markdown link to the comment', () => {
+  const d = cliDir();
+  fs.writeFileSync(path.join(d, 'shot.png'), PNG_1x1);
+  cli(d, 'comment', 'doc.md', '--quote', 'Success metrics are not defined yet.', '--text', 'see this', '--image', 'shot.png');
+  const review = JSON.parse(fs.readFileSync(path.join(d, 'doc.md.review.json'), 'utf8'));
+  const body = review.items[0].thread[0].text;
+  assert.match(body, /^see this\n\n!\[\]\(doc\.md\.review\.assets\/[0-9a-f]{12}\.png\)$/);
+  const rel = body.match(/\(([^)]+)\)/)[1];
+  // Copied, not referenced: the agent's screenshot usually sits in a scratch dir that gets cleaned up,
+  // and a review that renders only until then is a review that silently rots.
+  assert.deepEqual(fs.readFileSync(path.join(d, rel)), PNG_1x1);
+  fs.rmSync(path.join(d, 'shot.png'));
+  assert.ok(fs.existsSync(path.join(d, rel)), 'the attachment outlives the source file');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('CLI --image is repeatable, and refuses a path that is not there', () => {
+  const d = cliDir();
+  fs.writeFileSync(path.join(d, 'a.png'), PNG_1x1);
+  fs.writeFileSync(path.join(d, 'b.gif'), Buffer.concat([Buffer.from('GIF89a'), Buffer.alloc(20)]));
+  cli(d, 'comment', 'doc.md', '--quote', 'Success metrics are not defined yet.', '--text', 'two', '--image', 'a.png', '--image', 'b.gif');
+  const review = JSON.parse(fs.readFileSync(path.join(d, 'doc.md.review.json'), 'utf8'));
+  const links = [...review.items[0].thread[0].text.matchAll(/!\[\]\(([^)]+)\)/g)].map(m => m[1]);
+  assert.equal(links.length, 2);
+  assert.match(links[0], /\.png$/); assert.match(links[1], /\.gif$/);
+
+  const e = cliFails(d, 'reply', 'doc.md', review.items[0].id, 'here', '--image', 'ghost.png');
+  assert.equal(e.status, 2);
+  assert.match(e.stderr, /no image at/);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
    `sidecar skill` / `sidecar help` — how an agent that has the package finds
    out what the package can do. npx unpacks into ~/.npm/_npx/<hash>/, which no
    agent harness scans, so shipping SKILL.md is only half of delivering it.

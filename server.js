@@ -9,6 +9,8 @@ const { execFileSync } = require('child_process');
 const chokidar = require('chokidar');
 // Review-file load/save/merge lives in lib/review.js so the CLI runs the SAME logic (see lib/cli.js).
 const { sidecarPath, loadReview, saveReview, findAnchor, annotateOrphans, spliceRisk, replacementRisk, mergeItem } = require('./lib/review.js');
+// Where a review's images live and what counts as one — shared with the CLI's --image (lib/assets.js).
+const { IMAGE_TYPES, MAX_BYTES, saveAsset } = require('./lib/assets.js');
 
 // A terminal-style pwd for the doc: absolute path with $HOME collapsed to ~.
 function pwdFor(abs) {
@@ -90,12 +92,12 @@ const CODE_DIR = __dirname;
 const VERSION = (() => { try { return require('./package.json').version || '?'; } catch { return '?'; } })();
 
 // ---------- api ----------
-// ---------- images referenced by a document ----------
+// ---------- images referenced by a document, or attached to its review ----------
 // A relative `![](./flow.png)` is relative to the DOCUMENT, but the page is served from `/?f=…`, so the
 // browser resolves it against the app root and 404s. The client hands over both halves and resolution
 // happens here, through the same safePath the file API uses — one confinement check, not two.
-const IMAGE_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
-  '.webp': 'image/webp', '.avif': 'image/avif', '.svg': 'image/svg+xml' };
+// A comment's image is the same shape: the body holds `![](doc.md.review.assets/ab12….png)`, relative
+// to the document, and arrives here through exactly this route. Attachments needed no serving code.
 app.get('/assets', (req, res) => {
   const src = String(req.query.src || '');
   // Only a relative path off the document. A URL or an absolute path would make this route a general
@@ -114,6 +116,24 @@ app.get('/assets', (req, res) => {
   res.set('X-Content-Type-Options', 'nosniff');
   res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
   res.sendFile(abs);
+});
+
+// Paste, drop, or pick an image in a comment box → the bytes land here and become a file next to the
+// review. Raw body rather than base64-in-JSON: a screenshot is megabytes and base64 inflates it by a
+// third, on a path where the browser already holds the exact bytes. `express.json` above only parses
+// application/json, so an octet-stream body reaches this handler untouched.
+app.post('/api/asset', express.raw({ type: () => true, limit: MAX_BYTES }), (req, res) => {
+  let doc;
+  try { doc = safePath(String(req.query.doc || '')); }
+  catch { return res.status(403).json({ error: 'path escapes root' }); }
+  // Confined AND real: without this an upload could create `<anything>.review.assets/` anywhere under
+  // the root, which is a write primitive dressed up as an attachment.
+  if (!fs.existsSync(doc) || !fs.statSync(doc).isFile()) return res.status(404).json({ error: 'no such document' });
+  try {
+    const { rel } = saveAsset(doc, req.body);
+    // Hand back the markdown too, so the client never re-derives the reference format. One producer.
+    res.json({ ok: true, src: rel, markdown: `![](${rel})` });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 app.get('/api/files', (req, res) => {

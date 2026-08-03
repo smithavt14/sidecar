@@ -90,6 +90,12 @@ commenting on. Threads reply and resolve. Every open comment or suggestion softl
 document; tap the highlight to open its card, tap a card's quote to jump to the text. The review rail has two
 tabs — **active** threads (open, editable) and **archived** threads (settled, read-only).
 
+**Paste a screenshot into a comment.** Paste, drop, or pick an image in any comment or reply box and it
+attaches — usually faster than describing what's wrong with a layout. Click it to see it full size. Your
+agent can attach one too (`--image`), and can read the ones you attach. The images are files in
+`<doc>.review.assets/` next to the review, never bytes buried in JSON: they commit with the document and
+delete with it.
+
 **Suggest** (your agent). Suggestion cards propose a replacement for a quoted span, shown as a word-level
 diff. Accept applies it to the real file; reject leaves it.
 

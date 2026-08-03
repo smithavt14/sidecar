@@ -230,7 +230,15 @@
   .msg .t hr { border:0; border-top:1px solid var(--line); margin:11px 0; }
   .msg .t table { border-collapse:collapse; margin:8px 0; font-size:12.5px; display:block; overflow-x:auto; }
   .msg .t th, .msg .t td { border:1px solid var(--line-2); padding:4px 7px; text-align:left; }
-  .msg .t img { max-width:100%; height:auto; border-radius:6px; }
+  /* An attached screenshot in a 300px rail is unreadable at rail width — it's a thumbnail that
+     opens. zoom-in says so before the click does. */
+  .msg .t img { max-width:100%; height:auto; border-radius:6px; display:block; margin:7px 0;
+    border:1px solid var(--line-2); cursor:zoom-in; background:var(--fill); }
+  /* full-size view of an attached image — click anywhere or Esc to dismiss */
+  #lightbox { position:fixed; inset:0; z-index:60; display:none; place-items:center; padding:24px;
+    background:rgba(20,20,18,.82); cursor:zoom-out; }
+  #lightbox.on { display:grid; }
+  #lightbox img { max-width:100%; max-height:100%; border-radius:10px; box-shadow:0 20px 60px rgba(0,0,0,.45); }
   /* word-level diff — mono well; deletions strike out muted, insertions carry the agent's yellow */
   .diffbox { font:12.5px/1.6 'Geist Mono', ui-monospace, Menlo, monospace; background:var(--fill); border-radius:10px;
     padding:10px 12px; margin:9px 0; white-space:pre-wrap; word-break:break-word; color:#57574f; }
@@ -238,6 +246,9 @@
   .diffbox ins { background:var(--yellow); color:var(--chip-fg); text-decoration:none; border-radius:3px; padding:0 2px; }
   .row { display:flex; gap:8px; margin-top:11px; align-items:center; }
   .row.spread { justify-content:space-between; }
+  .row .spacer { flex:1; }
+  /* a compose box under a dragged image — the only cue that dropping here will do something */
+  .dropping { border-color:var(--ink-btn) !important; box-shadow:var(--ring); }
   .reply { width:100%; font:inherit; font-size:13px; border:1px solid var(--line-2); border-radius:9px;
     padding:8px 11px; background:var(--bg); color:var(--fg); resize:none; overflow:hidden; line-height:1.45;
     min-height:36px; max-height:40vh; overflow-y:auto; }
@@ -436,6 +447,10 @@
 </div>
 <div id="popover"></div>
 <div id="banner"></div>
+<div id="lightbox"><img alt=""></div>
+<!-- One file picker for every compose box, not one per card: the "image" button records which
+     textarea asked, then clicks this. accept is a hint, not a check — the server sniffs the bytes. -->
+<input type="file" id="picker" accept="image/*" multiple hidden>
 <div id="sheetBackdrop" onclick="toggleSheet(false)"></div>
 <button id="sheetToggle" onclick="toggleSheet()">review <span class="n" id="sheetCount"></span></button>
 
@@ -1073,18 +1088,113 @@ function openLinkInput() {
   });
 }
 
+// ---------- images in comments ----------
+// A pasted screenshot becomes a FILE next to the review and a markdown link in the comment body —
+// not a base64 blob in the sidecar. Three reasons it has to be a file: the .review.json is rewritten
+// and merged on every reply, and megabytes of base64 in there make every write and every SSE push
+// expensive; `sidecar show` would print an unreadable wall to the agent; and the whole promise is
+// "these are your files on your disk", which a blob inside a JSON quietly stops being true of.
+// Because the reference is ordinary markdown relative to the document, the agent that reads the
+// comment gets a path it can open with its own file tools, and rendering needed no new code.
+async function uploadImage(file) {
+  const r = await fetch('/api/asset?doc=' + encodeURIComponent(FILE), {
+    method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
+  const out = await r.json().catch(() => ({ error: r.statusText }));
+  if (!r.ok) throw new Error(out.error || 'upload failed');
+  return out;   // { src, markdown }
+}
+// Insert at the caret, on its own line — an image link jammed mid-sentence renders inline and breaks
+// the sentence around it. Keeps focus and caret after the insertion so typing continues naturally.
+function insertAtCaret(ta, text) {
+  const s = ta.selectionStart ?? ta.value.length, e = ta.selectionEnd ?? s;
+  const before = ta.value.slice(0, s), after = ta.value.slice(e);
+  const pad = (before && !before.endsWith('\n') ? '\n' : '') + text + (after && !after.startsWith('\n') ? '\n' : '');
+  ta.value = before + pad + after;
+  const caret = before.length + pad.length;
+  ta.selectionStart = ta.selectionEnd = caret;
+  ta.focus(); autogrow(ta);
+}
+// An upload spans an await, and renderSide() rebuilds every card from scratch whenever the review
+// changes — so the textarea we started on can be a detached node by the time the bytes land, and
+// writing the markdown into it would put it nowhere. Re-resolve the box by its slot instead of
+// holding the element: the popover's is a fixed id, a reply's is its card.
+function boxSlot(ta) {
+  const card = ta.closest && ta.closest('.card');
+  return card ? { card: card.dataset.id } : { id: ta.id };
+}
+function liveBox(slot) {
+  if (slot.card) { const c = $('side').querySelector(`.card[data-id="${CSS.escape(slot.card)}"]`); return c && c.querySelector('textarea.reply'); }
+  return document.getElementById(slot.id);
+}
+// Upload each file and drop its markdown in. A placeholder holds the spot while the bytes are written,
+// so a big paste doesn't look like nothing happened, and a failure leaves a visible reason in the box
+// rather than silently swallowing the image.
+async function attachFiles(ta, files) {
+  const slot = boxSlot(ta);
+  for (const f of files) {
+    if (!/^image\//.test(f.type || '') && !/\.(png|jpe?g|gif|webp|avif|svg)$/i.test(f.name || '')) continue;
+    const tag = '![uploading ' + (f.name || 'image') + '…]()';
+    insertAtCaret(ta, tag);
+    let out, err = null;
+    try { out = await uploadImage(f); } catch (e) { err = e; }
+    const box = liveBox(slot) || ta;
+    box.value = box.value.replace(tag, err
+      ? '`could not attach ' + (f.name || 'image') + ': ' + err.message + '`'
+      : out.markdown);
+    autogrow(box);
+    ta = box;   // subsequent files insert into the box that's actually on screen
+  }
+}
+// Paste and drop on any compose box. Bound per-textarea rather than delegated because both events need
+// preventDefault BEFORE the browser's own handling — a dropped PNG otherwise navigates the page to it,
+// and a pasted image with no handler is silently dropped.
+function wireAttach(ta) {
+  ta.addEventListener('paste', (e) => {
+    const files = [...(e.clipboardData?.files || [])];
+    if (!files.length) return;   // plain text paste — leave it entirely alone
+    e.preventDefault();
+    attachFiles(ta, files);
+  });
+  ta.addEventListener('dragover', (e) => { if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); ta.classList.add('dropping'); } });
+  ta.addEventListener('dragleave', () => ta.classList.remove('dropping'));
+  ta.addEventListener('drop', (e) => {
+    const files = [...(e.dataTransfer?.files || [])];
+    ta.classList.remove('dropping');
+    if (!files.length) return;
+    e.preventDefault();
+    attachFiles(ta, files);
+  });
+}
+// The file picker is shared, so it has to remember who opened it. On a phone this button IS the
+// feature — there is no drag, and iOS routes it to the camera roll.
+let pickerTarget = null;
+function pickImage(ta) { pickerTarget = ta; const p = $('picker'); p.value = ''; p.click(); }
+$('picker').addEventListener('change', (e) => {
+  const ta = pickerTarget; pickerTarget = null;
+  if (ta && e.target.files.length) attachFiles(ta, [...e.target.files]);
+});
+// Click any image in a comment to see it at full size. A screenshot is pasted in *because* the detail
+// matters, and the rail is 300px wide.
+const lightbox = $('lightbox');
+function openLightbox(src) { lightbox.querySelector('img').src = src; lightbox.classList.add('on'); }
+lightbox.addEventListener('click', () => lightbox.classList.remove('on'));
+addEventListener('keydown', (e) => { if (e.key === 'Escape') lightbox.classList.remove('on'); });
+
 function openComment() {
   hideTool();
   const po = $('popover');
   po.innerHTML = `<div class="po-head" id="poHead"><span class="po-title">comment</span><span class="po-grip">⠿</span></div>
-    <textarea id="pobody" placeholder="comment…"></textarea>
-    <div class="row"><button class="ghost" id="poCancel">cancel</button>
+    <textarea id="pobody" placeholder="comment… (paste or drop an image)"></textarea>
+    <div class="row"><button class="ghost" id="poImage">image</button><span class="spacer"></span>
+    <button class="ghost" id="poCancel">cancel</button>
     <button class="primary" id="poSubmit">comment</button></div>`;
   popoverAt();
   makeDraggable(po, $('poHead'));   // drag the header to move it off the text you're commenting on
   const ta = $('pobody'); ta.focus();
   $('poCancel').onclick = hidePopover;
   $('poSubmit').onclick = submitComment;
+  $('poImage').onclick = () => pickImage(ta);
+  wireAttach(ta);
   ta.addEventListener('input', () => autogrow(ta));
   ta.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submitComment(); }
@@ -1150,8 +1260,15 @@ function esc(s) { return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':
 // strings reach innerHTML on a page that's same-origin with the file API.
 // A body that is exactly one paragraph is unwrapped, so short replies stay on the author's line and
 // look as they always have; only genuinely structured text becomes blocks.
+// An image in a comment body is a relative path off the DOCUMENT, exactly like one in the document,
+// so it needs the same /assets rewrite — without it every attached screenshot resolves against the
+// app root and renders as a broken icon. Done on a detached node rather than by regex on the string:
+// the sanitized markup is already parsed, and one rewriter (rewriteAssetSrc) serves both surfaces.
 function proseHtml(s) {
-  const html = DOMPurify.sanitize(marked.parse(String(s ?? ''), { breaks: true })).trim();
+  const box = document.createElement('div');
+  box.innerHTML = DOMPurify.sanitize(marked.parse(String(s ?? ''), { breaks: true }));
+  box.querySelectorAll('img[src]').forEach(rewriteAssetSrc);
+  const html = box.innerHTML.trim();
   const one = html.match(/^<p>([\s\S]*)<\/p>$/);
   return one && !/<p[ >]/.test(one[1]) ? one[1] : html;
 }
@@ -1374,7 +1491,8 @@ function renderActive(list, top, childSug) {
       body += threadHtml(it.thread);
       for (const sug of (childSug[it.id] || [])) if (['pending', 'orphaned'].includes(sug.status)) body += nestedSugHtml(sug);
       actions = `<div class="row"><textarea class="reply" rows="1" placeholder="reply…" oninput="autogrow(this)" data-action="reply"></textarea></div>
-                 <div class="row spread"><button class="ghost" data-action="resolve">resolve</button>
+                 <div class="row"><button class="ghost" data-action="resolve">resolve</button>
+                 <button class="ghost" data-action="image">image</button><span class="spacer"></span>
                  <button class="primary" data-action="send">send</button></div>`;
     }
     el.innerHTML = `<div class="cbody">${head + body}</div>` + actions;
@@ -1509,6 +1627,10 @@ async function decide(id, verb) {
 // the item id off its .card[data-id] — no id ever interpolated into markup. reply/send find the card's
 // own .reply textarea via closest('.card'). (autogrow stays on the textarea's static oninput.)
 $('side').addEventListener('click', (e) => {
+  // An attached image opens full-size. Checked before the data-action lookup because an <img> sits
+  // inside a .msg, which sits inside a card carrying data-action controls — closest() would otherwise
+  // walk past it and fire whatever the card's nearest action happens to be.
+  if (e.target.tagName === 'IMG' && e.target.closest('.msg')) { openLightbox(e.target.src); return; }
   const tabEl = e.target.closest('[data-tab]');
   if (tabEl) { if (sideTab !== tabEl.dataset.tab) { sideTab = tabEl.dataset.tab; renderSide(); } return; }
   const el = e.target.closest('[data-action]');
@@ -1525,6 +1647,7 @@ $('side').addEventListener('click', (e) => {
     case 'reject': decide(id, 'reject'); break;
     case 'resolve': resolveItem(id); break;
     case 'send': reply(id, holder.querySelector('.reply')); break;
+    case 'image': pickImage(holder.querySelector('.reply')); break;
   }
 });
 // Enter-to-send in a reply textarea (Shift+Enter still newlines) — delegated keydown, same id source.
@@ -1534,6 +1657,22 @@ $('side').addEventListener('keydown', (e) => {
   e.preventDefault();
   const card = ta.closest('.card'); if (card) reply(card.dataset.id, ta);
 });
+// Paste/drop an image onto a reply box. Delegated rather than wired per-textarea: renderSide() rebuilds
+// every card from scratch on each review change, so anything bound to a specific .reply element is gone
+// the next time the agent posts a comment.
+for (const type of ['paste', 'dragover', 'dragleave', 'drop']) {
+  $('side').addEventListener(type, (e) => {
+    const ta = e.target.closest && e.target.closest('.reply');
+    if (!ta) return;
+    if (type === 'dragover') { if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); ta.classList.add('dropping'); } return; }
+    if (type === 'dragleave') { ta.classList.remove('dropping'); return; }
+    const files = [...((type === 'paste' ? e.clipboardData : e.dataTransfer)?.files || [])];
+    ta.classList.remove('dropping');
+    if (!files.length) return;   // plain text — leave the browser's own paste alone
+    e.preventDefault();
+    attachFiles(ta, files);
+  });
+}
 
 // ---------- mobile bottom sheet ----------
 function toggleSheet(force) {

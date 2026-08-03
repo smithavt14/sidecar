@@ -97,6 +97,23 @@ sidecar suggest doc.md \
   --note "Optional one-line rationale, shown under the diff."
 ```
 
+### Attaching an image
+
+`comment` and `reply` take `--image <path>`, repeatable. The file is copied into
+`<doc>.review.assets/` and appended to your message as a markdown link — so it keeps rendering after
+whatever scratch directory you generated it in is gone.
+
+```bash
+sidecar comment doc.md --quote "the hero section" --text "This is what it looks like at 375px:" \
+  --image /tmp/mobile.png
+```
+
+**They can attach images too** — pasting or dropping a screenshot into a comment box puts the same
+markdown link in the message. So a comment whose body contains
+`![](doc.md.review.assets/ab12cd34ef56.png)` is a screenshot they wanted you to look at: **open that
+path with your own file tools and actually read it before you answer.** The path is relative to the
+document. Replying to a screenshot you never opened is the fastest way to answer the wrong question.
+
 ### Responding to them
 
 ```bash
@@ -243,7 +260,7 @@ opaque to a reader of the raw file, where a fence stays legible in a `git diff`.
 
 **Images work by relative path** — `![wireframe](./wireframe.svg)` resolves against the document.
 Generating an `.svg` next to the file and linking it is the right move for anything the flow syntax
-can't express.
+can't express. The same path form works inside a comment; `--image` above is the shortcut for it.
 
 **Both render as islands the human cannot type into.** That is deliberate: the editor saves by
 re-serializing edited blocks, and an `<svg>` cannot survive that trip. So *you* change a diagram by
@@ -340,6 +357,10 @@ It stays uncommitted until the review ends (you commit it once with the document
 or `git stash` mid-review discards the whole review — every card and comment, not just an anchor. There
 is also a `foo.md.review.seen.json` cursor tracking what you have already read; that one is agent state,
 never committed (it's gitignored).
+
+Images attached to comments are files in `<doc>.review.assets/`, named by content hash, referenced
+from the message as ordinary markdown. Nothing is stored as bytes inside the JSON, so it stays a small
+text file you can diff — and the pictures commit and delete alongside the review that holds them.
 
 Statuses: suggestions run `pending → accepted | rejected`; comments run `open → resolved`; either can
 become `orphaned`. Items are stamped with `by` (your agent name — set `SIDECAR_AGENT` if `claude` is
