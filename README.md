@@ -11,7 +11,7 @@
 
 ![Reviewing a document in sidecar: a suggestion card with a word-level diff, and a comment thread](https://raw.githubusercontent.com/smithavt14/sidecar/main/docs/example.png)
 
-Reviewing a document your agent drafted is clumsy today: the file lives on your disk, the conversation about it lives in a chat window, and marking up raw markdown by hand is annoying. The tools actually built for review — Google Docs, Notion — do it well, but they live in the cloud: your agent only reaches them through a connector, every change crosses the network, and your document sits on someone else's server. sidecar brings the review to the file instead: suggestion cards, word-level diffs, and comment threads on the markdown already on your disk — 100% local, as modern as any SaaS tool, and accepting a card writes the real bytes.
+Reviewing a document your agent drafted is clumsy today: the file lives on your disk, the conversation about it lives in a chat window, and marking up raw markdown by hand is annoying. The tools actually built for review — Google Docs, Notion — do it well, but they live in the cloud: your agent only reaches them through a connector, every change crosses the network, and your document sits on someone else's server. sidecar brings the review to the file instead: suggestion cards, word-level diffs, and comment threads you can drop a screenshot into, on the markdown already on your disk — 100% local, as modern as any SaaS tool, and accepting a card writes the real bytes.
 
 **Why sidecar**
 
@@ -61,7 +61,8 @@ sidecar suggest draft.md \
 for the full command set.
 
 **Review on your phone** (optional): `tailscale serve --bg 4880` proxies sidecar onto your private
-[Tailscale](https://tailscale.com) tailnet. Tailnet-only: sidecar has no auth, so never `tailscale funnel`
+[Tailscale](https://tailscale.com) tailnet. The picture button opens your camera roll there, so a comment
+can carry the screenshot you just took. Tailnet-only: sidecar has no auth, so never `tailscale funnel`
 it publicly.
 
 <img alt="sidecar on a phone: the document, and the review as a pull-up sheet" src="https://raw.githubusercontent.com/smithavt14/sidecar/main/docs/screenshot.png" width="420">
@@ -90,11 +91,11 @@ commenting on. Threads reply and resolve. Every open comment or suggestion softl
 document; tap the highlight to open its card, tap a card's quote to jump to the text. The review rail has two
 tabs — **active** threads (open, editable) and **archived** threads (settled, read-only).
 
-**Paste a screenshot into a comment.** Paste, drop, or pick an image in any comment or reply box and it
-attaches — usually faster than describing what's wrong with a layout. Click it to see it full size. Your
-agent can attach one too (`--image`), and can read the ones you attach. The images are files in
-`<doc>.review.assets/` next to the review, never bytes buried in JSON: they commit with the document and
-delete with it.
+**Screenshots.** Paste or drop an image into any comment or reply box, or use the picture button beside
+**resolve**; click it to see it full size. Showing a broken layout beats describing one. Your agent can
+attach images with `--image` and read the ones you attach, so *"here's what it does at 375px"* is a
+thing you can hand it directly. They live as files in `<doc>.review.assets/` next to the review, so they
+commit with the document and delete with it.
 
 **Suggest** (your agent). Suggestion cards propose a replacement for a quoted span, shown as a word-level
 diff. Accept applies it to the real file; reject leaves it.

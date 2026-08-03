@@ -27,7 +27,7 @@ with `npx -y @spktr/sidecar` and say nothing about it.
 ```bash
 sidecar doctor doc.md                # server up? on what code? which URLs to hand over?
 sidecar show doc.md                  # the complete review state
-sidecar comment doc.md --quote "…" --text "…"
+sidecar comment doc.md --quote "…" --text "…" [--image shot.png]
 sidecar suggest doc.md --quote "…" --replacement "…"
 sidecar answer doc.md <comment-id> --replacement "…"
 sidecar reply doc.md <id> "…"
@@ -40,6 +40,9 @@ response, until the digest says `DONE: true`.
 
 Anchors are quoted text, not line numbers. A quote matching nothing — or matching more than one span —
 is refused before anything is written; `sidecar check doc.md --quote "…"` tests one in advance.
+
+They can attach screenshots to comments. A body containing `![](doc.md.review.assets/….png)` is a
+picture they want you to look at — open that path with your own file tools before you answer.
 
 You cannot accept or reject. Those are the human's.
 
