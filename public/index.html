@@ -61,8 +61,11 @@
   /* buttons — ink primary, thin-outline secondary, text ghost. Depth, not weight. */
   button { font:600 13px 'Geist', ui-sans-serif, sans-serif; padding:8px 16px; border:1px solid var(--line-strong);
     border-radius:9px; background:var(--bg); color:var(--fg); cursor:pointer;
-    transition:background .15s ease, border-color .15s ease, box-shadow .15s ease; }
+    transition:background .15s ease, border-color .15s ease, box-shadow .15s ease, transform .12s ease-out; }
   button:hover { background:var(--fill); }
+  /* Press feedback. Deliberately shallow and fast: accept/reject get hit dozens of times in a review,
+     and anything deeper or slower starts reading as lag rather than as response. */
+  button:active { transform:scale(.98); }
   button.primary { background:var(--ink-btn); color:#fff; border-color:var(--ink-btn); padding:8px 18px; }
   button.primary:hover { background:#000; }
   button.ghost { border:none; background:none; color:var(--muted); font-weight:500; padding:8px 4px; }
@@ -176,9 +179,17 @@
   .side-list.docked .card.has-more .more:hover { color:var(--ink); background:none; }
   /* review card — no border; a soft depth shadow lifts it off the rail */
   .card { background:var(--bg); border-radius:14px; padding:15px 16px; font-size:13px; box-shadow:var(--shadow);
-    transition:box-shadow .2s ease; }
+    transition:box-shadow .2s ease, background .2s ease; }
   .card.flash { box-shadow:var(--shadow), 0 0 0 3px rgba(255,235,0,.55); }
-  /* orphaned: the anchor text is gone — greyed surface, muted identity */
+  /* A decided card leaves toward the document it was anchored to, which is where the change just
+     landed. Short, because the list rebuild is waiting on it. */
+  .card.leaving { opacity:0; transform:translateX(-10px); transition:opacity .18s ease-out, transform .18s ease-out; }
+  /* A newly arrived card fades up rather than appearing mid-list. Marked by renderSide, which knows
+     which ids it had not rendered before. */
+  @keyframes cardIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+  .card.entering { animation:cardIn .22s ease-out; }
+  /* orphaned: the anchor text is gone — greyed surface, muted identity. The background transition on
+     .card above carries this, so an item going orphaned under you fades rather than blinks. */
   .card.orphaned { background:#fafaf8; }
   /* identity — the agent is a yellow chip (its color); the human is an ink dot + name. Classed
      .agent / .human, not by literal name, so any SIDECAR_USER / SIDECAR_AGENT colors correctly. */
@@ -336,6 +347,10 @@
     #banner { transition:opacity .15s ease-out, visibility 0s linear .15s; transform:translate(-50%, 0); }
     #banner.open { transition:opacity .15s ease-out, visibility 0s; transform:translate(-50%, 0); }
     .presence.working .dot { animation:none; opacity:.6; }
+    /* Cards: no travel. The JS also skips the exit wait entirely, so a decision stays instant. */
+    .card.leaving { transform:none; transition:opacity .12s ease-out; }
+    .card.entering { animation:none; }
+    button:active { transform:none; }
   }
   /* docs is a LINK (leaves the page) — mark it as one so it reads differently from status + actions */
   .doclink::after { content:'\2197'; font-size:.82em; margin-left:2px; opacity:.6; }
@@ -1489,6 +1504,10 @@ function renderSide() {
     ta.value = d.value; autogrow(ta);
     if (d.focused) { ta.focus(); try { ta.setSelectionRange(d.start, d.end); } catch (_) {} }
   }
+  // Mark cards this render is showing for the first time, so a newly arrived comment fades up instead
+  // of appearing mid-list. Compared against the ids the LAST render put on screen, not against the
+  // review data, because renderSide also fires on presence heartbeats where nothing has changed.
+  markEntering(side);
   markAnchors();   // refresh the in-doc highlight cues to match the current items
   dockCards();     // …then place each card level with the mark markAnchors just laid down (order matters)
   renderTurn();    // right cluster: open / orphaned counts
@@ -1503,6 +1522,21 @@ function renderSide() {
   };
   restoreScroll();
   requestAnimationFrame(restoreScroll);
+}
+// Which card ids the previous render actually put on screen. Seeded on the first render so the whole
+// column doesn't animate in on load — an entrance you didn't cause reads as jitter, not as feedback.
+let shownCardIds = null;
+function markEntering(side) {
+  const ids = [...side.querySelectorAll('.card[data-id]')].map(c => c.dataset.id);
+  if (shownCardIds === null) { shownCardIds = new Set(ids); return; }
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    for (const card of side.querySelectorAll('.card[data-id]')) {
+      if (shownCardIds.has(card.dataset.id)) continue;
+      card.classList.add('entering');
+      card.addEventListener('animationend', () => card.classList.remove('entering'), { once: true });
+    }
+  }
+  shownCardIds = new Set(ids);
 }
 // ACTIVE tab — open threads, fully interactive (accept/reject, reply, resolve). This is the working surface.
 function renderActive(list, top, childSug) {
@@ -1665,9 +1699,26 @@ async function resolveItem(id) {
   state.review = r.review;
   renderSide();
 }
+// A decided card leaves before the list rebuilds. renderSide() replaces the whole list via innerHTML,
+// so without this the card vanishes mid-air and everything below it jumps up with no bridge. The exit
+// runs first, the write goes out in parallel, and the rebuild lands after both.
 async function decide(id, verb) {
-  try { await api('POST', '/api/' + verb, { path: FILE, id }); await reloadFile(); }
+  const card = $('side').querySelector(`.card[data-id="${CSS.escape(id)}"]`);
+  const gone = card ? leaveCard(card) : Promise.resolve();
+  try { await api('POST', '/api/' + verb, { path: FILE, id }); await gone; await reloadFile(); }
   catch (e) { alert(verb + ' failed: ' + e.message); reloadFile(); }
+}
+// Resolves when the card has finished leaving, or immediately under reduced motion. Never hangs: a
+// transition that is cancelled (the list rebuilt underneath it) still settles the promise on a timer.
+function leaveCard(card) {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return Promise.resolve();
+  card.classList.add('leaving');
+  return new Promise(res => {
+    let done = false;
+    const finish = () => { if (!done) { done = true; res(); } };
+    card.addEventListener('transitionend', e => { if (e.target === card && e.propertyName === 'opacity') finish(); });
+    setTimeout(finish, 260);
+  });
 }
 // Delegated card dispatch: one click listener on #side reads data-action off the clicked control and
 // the item id off its .card[data-id] — no id ever interpolated into markup. reply/send find the card's
