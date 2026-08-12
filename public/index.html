@@ -359,25 +359,15 @@
   .presence.sent .dot { background:var(--muted); box-shadow:none; }
   @keyframes presPulse { 0%,100%{opacity:.35} 50%{opacity:1} }
   .presence.working .dot { animation:presPulse 1.4s ease-in-out infinite; }
-  /* Per-thread presence: the card the agent is answering right now. A 3×3 pixel grid with a chevron
-     wavefront driving right, and the label itself shimmering — plain body text, no chip, no dot.
-     Appears when the agent's wait exit names the thread, clears when the reply lands (or goes stale). */
-  .replying { display:flex; align-items:center; gap:8px; margin-top:8px; }
-  .replying .pxgrid { display:grid; grid-template-columns:repeat(3,4px); gap:1.5px; flex:none; }
-  .replying .pxgrid i { width:4px; height:4px; border-radius:1px; background:var(--fg); opacity:.15;
-    animation:pixelOn .65s ease-in-out infinite; }
-  /* chevron: delay = (col + |row-1|) * 90ms — the 650ms cycle is shorter than the sweep, so two
-     wavefronts are always in flight */
-  .replying .pxgrid i:nth-child(1) { animation-delay:90ms; }  .replying .pxgrid i:nth-child(2) { animation-delay:180ms; }
-  .replying .pxgrid i:nth-child(3) { animation-delay:270ms; } .replying .pxgrid i:nth-child(4) { animation-delay:0ms; }
-  .replying .pxgrid i:nth-child(5) { animation-delay:90ms; }  .replying .pxgrid i:nth-child(6) { animation-delay:180ms; }
-  .replying .pxgrid i:nth-child(7) { animation-delay:90ms; }  .replying .pxgrid i:nth-child(8) { animation-delay:180ms; }
-  .replying .pxgrid i:nth-child(9) { animation-delay:270ms; }
+  /* Per-thread presence: the card the agent is answering right now. Just the label, plain body
+     text with a shimmer sweeping through it — no chip, no dot, no spinner. The motion IS the
+     signal. Appears when the agent's wait exit names the thread, clears when the reply lands
+     (or goes stale). */
+  .replying { display:flex; align-items:center; margin-top:8px; }
   .replying .lbl { font-size:12.5px; font-weight:500; color:transparent;
     background:linear-gradient(90deg, var(--muted) 35%, var(--fg) 50%, var(--muted) 65%);
     background-size:200% 100%; -webkit-background-clip:text; background-clip:text;
     animation:shimmerText 1.4s linear infinite; }
-  @keyframes pixelOn { 0%,100%{opacity:.15} 50%{opacity:1} }
   @keyframes shimmerText { from { background-position:200% 0; } to { background-position:-200% 0; } }
   /* Reduced motion: cut the movement, keep the meaning. The toast still fades so it doesn't teleport,
      the sheet still slides (a sheet that jump-cuts loses where it came from), and the presence dot
@@ -386,8 +376,7 @@
     #banner { transition:opacity .15s ease-out, visibility 0s linear .15s; transform:translate(-50%, 0); }
     #banner.open { transition:opacity .15s ease-out, visibility 0s; transform:translate(-50%, 0); }
     .presence.working .dot { animation:none; opacity:.6; }
-    /* grid frozen at its dim state; the label drops the shimmer for static muted text */
-    .replying .pxgrid i { animation:none; }
+    /* the label drops the shimmer for static muted text — still legible, just not moving */
     .replying .lbl { animation:none; background:none; color:var(--muted); }
     /* Cards: no travel. The JS also skips the exit wait entirely, so a decision stays instant. */
     .card.leaving { transform:none; transition:opacity .12s ease-out; }
@@ -1402,8 +1391,7 @@ function replyingHtml(it) {
   if (!m) return '';
   const last = (it.thread || []).slice(-1)[0];
   if (last && last.by === m.agent) return '';
-  return `<div class="replying"><span class="pxgrid" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>`
-       + `<span class="lbl">${esc(m.agent)} is replying</span></div>`;
+  return `<div class="replying"><span class="lbl">${esc(m.agent)} is replying</span></div>`;
 }
 // One re-render scheduled at the earliest future expiry (marks or the header state), so stale
 // presence disappears without waiting for the next SSE event. Cleared and re-armed on every render.
