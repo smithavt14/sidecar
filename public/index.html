@@ -1695,8 +1695,13 @@ async function reply(id, input) {
 async function resolveItem(id) {
   const it = state.review.items.find(i => i.id === id);
   it.status = 'resolved'; it.decidedAt = new Date().toISOString();
+  // Same exit as accept/reject: resolving also removes the card from the active column, so it needs the
+  // same bridge. Runs alongside the write rather than before it.
+  const card = $('side').querySelector(`.card[data-id="${CSS.escape(id)}"]`);
+  const gone = card ? leaveCard(card) : Promise.resolve();
   const r = await api('PUT', '/api/review', { path: FILE, review: state.review });
   state.review = r.review;
+  await gone;
   renderSide();
 }
 // A decided card leaves before the list rebuilds. renderSide() replaces the whole list via innerHTML,
