@@ -15,7 +15,7 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const FORCED = /^(readme|license|licence|changelog|notice)/i;
-const KEEP = new Set(['README.md', 'LICENSE']);   // the real ones, which SHOULD ship
+const KEEP = new Set(['README.md', 'LICENSE', 'CHANGELOG.md']);   // the real ones, which SHOULD ship
 
 const strays = fs.readdirSync(ROOT)
   .filter(f => FORCED.test(f) && !KEEP.has(f) && fs.statSync(path.join(ROOT, f)).isFile());

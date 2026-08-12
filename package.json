@@ -30,7 +30,8 @@
     "public/",
     "skills/",
     "scripts/",
-    "AGENTS.md"
+    "AGENTS.md",
+    "CHANGELOG.md"
   ],
   "bin": {
     "sidecar": "./server.js"
