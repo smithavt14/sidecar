@@ -40,6 +40,10 @@
     --dark:#1b1a15;          /* toast surface */
     --shadow:0 1px 2px rgba(20,20,15,.05), 0 10px 30px -20px rgba(20,20,15,.35);
     --ring:0 0 0 3px rgba(20,20,15,.08);   /* focus — ink-tinted, not yellow (yellow is the agent's) */
+    /* Release spring for pressable things. Solved from stiffness 500 / damping 30 / mass 0.6, which is
+       zeta 0.87 — it overshoots by 0.4%, so the "pop" is the curve's shape rather than a bounce. A real
+       bounce on a button you hit fifty times in a review would read as slop. */
+    --spring-press:linear(0,0.088,0.266,0.457,0.624,0.754,0.849,0.913,0.954,0.979,0.993,1.001,1.004);
     color-scheme:light;
   }
   * { box-sizing: border-box; }
@@ -61,13 +65,20 @@
   /* buttons — ink primary, thin-outline secondary, text ghost. Depth, not weight. */
   button { font:600 13px 'Geist', ui-sans-serif, sans-serif; padding:8px 16px; border:1px solid var(--line-strong);
     border-radius:9px; background:var(--bg); color:var(--fg); cursor:pointer;
-    transition:background .15s ease, border-color .15s ease, box-shadow .15s ease, transform .12s ease-out; }
+    transition:background .15s ease, border-color .15s ease, box-shadow .15s ease,
+               transform .2s var(--spring-press); }
   button:hover { background:var(--fill); }
-  /* Press feedback. Deliberately shallow and fast: accept/reject get hit dozens of times in a review,
-     and anything deeper or slower starts reading as lag rather than as response. */
-  button:active { transform:scale(.98); }
-  button.primary { background:var(--ink-btn); color:#fff; border-color:var(--ink-btn); padding:8px 18px; }
-  button.primary:hover { background:#000; }
+  /* Lift on hover, compress on press, spring back on release. The press uses a plain fast ease-out on
+     the way DOWN (a spring there fights the finger) and the spring only on the way back up, which is
+     where the pop lives. Hover lift is pointer-gated: on touch there is no hover, and without the gate
+     the scale sticks after a tap. */
+  @media (hover:hover) and (pointer:fine) { button:hover { transform:scale(1.02); } }
+  button:active { transform:scale(.96); transition:transform .1s ease-out; }
+  /* Dark buttons: a faint light edge so they read as a surface rather than a slab, and a faint white
+     wash on hover instead of going darker (going darker on a near-black button reads as nothing). */
+  button.primary { background:var(--ink-btn); color:#fff; border-color:rgba(255,255,255,.16);
+    padding:8px 18px; }
+  button.primary:hover { background:#26251e; border-color:rgba(255,255,255,.3); }
   button.ghost { border:none; background:none; color:var(--muted); font-weight:500; padding:8px 4px; }
   button.ghost:hover { color:var(--fg); background:none; }
   /* The only icon button in the tool — everything else here is a word. It sits in a row of text
@@ -350,7 +361,7 @@
     /* Cards: no travel. The JS also skips the exit wait entirely, so a decision stays instant. */
     .card.leaving { transform:none; transition:opacity .12s ease-out; }
     .card.entering { animation:none; }
-    button:active { transform:none; }
+    button:active, button:hover { transform:none; }
   }
   /* docs is a LINK (leaves the page) — mark it as one so it reads differently from status + actions */
   .doclink::after { content:'\2197'; font-size:.82em; margin-left:2px; opacity:.6; }
