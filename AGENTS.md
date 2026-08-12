@@ -38,15 +38,15 @@ Nothing pushes into your session: if you hand over the URL and stop, you never s
 Arm `sidecar wait` (absolute path, backgrounded if your harness can wake you on exit) after every
 response, until the digest says `DONE: true`.
 
-When `wait` returns it prints a **digest**: everything since your last look — decisions with their
-reasons, new comments and replies in full, orphans, and the document's changed hunks. The baseline
-is your own cursor, not git, so it works the same on untracked files and non-git directories, and a
-mid-review commit costs nothing.
+When `wait` returns it prints a **digest**: everything since your last look (decisions with their
+reasons, new comments and replies in full, orphans, and the document's changed hunks). The baseline
+is your own cursor rather than git, so it works the same on untracked files and non-git
+directories, and a mid-review commit costs nothing.
 
 **The human sees your side of the loop.** While your `wait` is armed their browser reads *claude is
 here*; when it wakes, each thread that woke you shows *claude is replying* until your reply lands.
-This comes free from `wait` — nothing to call — but it cuts both ways: respond and re-arm promptly,
-because a wake you sit on is visible as exactly that.
+`wait` does this on its own; there is no presence command to call. It also cuts both ways: respond
+and re-arm promptly, because a wake you sit on is visible as exactly that.
 
 Anchors are quoted text, not line numbers. A quote matching nothing — or matching more than one span —
 is refused before anything is written; `sidecar check doc.md --quote "…"` tests one in advance.

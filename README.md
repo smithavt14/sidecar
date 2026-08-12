@@ -20,7 +20,7 @@ Reviewing a document your agent drafted is clumsy today: the file lives on your 
   original bytes — `git diff` shows just what changed, and git is your undo.
 - **Any agent with a shell.** Claude Code, Cursor, Codex, … — one small CLI, no plugin, no API key.
 - **A live loop, not a mailbox.** Your agent can watch the review and answer inside your comment threads
-  the moment you act — and the thread shows *claude is replying* while the answer is being written.
+  the moment you act, and the thread shows *claude is replying* while the answer is being written.
 - **Anchored to content, not line numbers.** If text moves, anchors follow; if it's gone, the item goes
   orphaned — loudly — instead of editing the wrong place.
 

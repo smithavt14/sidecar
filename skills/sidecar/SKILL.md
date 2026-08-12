@@ -307,8 +307,8 @@ you answered once and stopped watching is a review they think you abandoned.
 
 **The human can see this loop.** While your `wait` is armed the browser header reads *claude is
 here*, and when it wakes, the threads it woke on show *claude is replying* until your reply lands.
-That comes free from the `wait` exit — nothing for you to call — but it means a wake you sit on
-looks exactly like what it is.
+The `wait` exit does that on its own; there is no presence command for you to call. It also means a
+wake you sit on looks exactly like what it is.
 
 ---
 
