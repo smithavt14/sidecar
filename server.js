@@ -20,7 +20,12 @@ function pwdFor(abs) {
 
 const sha = (s) => crypto.createHash('sha1').update(s).digest('hex').slice(0, 12);
 
-const ROOT = path.resolve(process.argv[2] || '.');
+// Canonicalize ROOT through symlinks at boot. safePath's containment check compares against
+// BASE_DIR verbatim, and `sidecar wait` realpaths its file before pinging /api/presence — a server
+// launched via a symlinked dir (/tmp, /var/folders on macOS) would otherwise reject every one of
+// those pings as "escapes root" and presence silently never lights.
+const ROOT = (() => { const r = path.resolve(process.argv[2] || '.');
+  try { return fs.realpathSync(r); } catch { return r; } })();
 const PORT = process.env.SIDECAR_PORT || 4880;
 const rootIsFile = fs.existsSync(ROOT) && fs.statSync(ROOT).isFile();
 const BASE_DIR = rootIsFile ? path.dirname(ROOT) : ROOT;
@@ -291,10 +296,14 @@ app.post('/api/format', (req, res) => {
 });
 
 // ---------- presence (P1): "is the agent watching this file right now?" ----------
-// Ephemeral + in-memory (keyed by absolute path), written by `sidecar wait` via POST /api/presence and
-// read back in /api/state. In-memory, NOT the sidecar, so it never contends with review writes and never
-// lands in git. A missing/stale (>40s, no heartbeat) or idle entry reads as "not here".
-const presence = {};
+// Ephemeral + in-memory, written by `sidecar wait` via POST /api/presence and read back in /api/state.
+// In-memory, NOT the sidecar, so it never contends with review writes and never lands in git. A
+// missing/stale (no heartbeat) or idle entry reads as "not here".
+// Keyed per (realpath, agent), one record each: two agents on one file hold independent state, so
+// agent B's watching heartbeat can never wipe agent A's "working" record or the item ids it carries
+// (the per-thread "replying" marks in the browser). Records carry `items` — the thread ids the
+// agent's wait exit said it now has in hand.
+const presence = {};   // realpath → { agentName → { state, at, items } }
 const PRESENCE_TTL = 40000;    // "watching" is heartbeated every 15s, so a short TTL keeps it honest
 const WORKING_TTL = 180000;    // "working" has NO heartbeat (the wait already exited while the agent composes),
                                // so give it a generous window; it's overwritten by the next "watching"/"idle".
@@ -304,15 +313,33 @@ const WORKING_TTL = 180000;    // "working" has NO heartbeat (the wait already e
 // presence dot silently never lights. realpathSync throws if the file doesn't exist yet — fall back
 // to the resolved path so a not-yet-created doc still keys consistently on both sides.
 function realKey(abs) { try { return fs.realpathSync(abs); } catch { return abs; } }
+// Merge the live per-agent records into one readout. The header state is the STRONGEST live claim —
+// working outranks watching regardless of recency, so one agent composing while another heartbeats
+// "watching" cannot flap the header. Items union across agents, each mark naming its agent (the
+// browser needs the name to clear the mark once that agent's reply lands). `until` is when the
+// record goes stale with no further ping — sent so the browser can expire marks on its own clock
+// instead of showing a dead agent as working forever.
 function presenceFor(abs) {
-  const p = presence[realKey(abs)];
-  if (!p || p.state === 'idle') return null;
-  const ttl = p.state === 'working' ? WORKING_TTL : PRESENCE_TTL;
-  return Date.now() - p.at < ttl ? { state: p.state, at: p.at } : null;
+  const rec = presence[realKey(abs)];
+  if (!rec) return null;
+  const now = Date.now();
+  const rank = (p) => p.state === 'working' ? 1 : 0;
+  let best = null; const items = [];
+  for (const agent of Object.keys(rec)) {
+    const p = rec[agent];
+    if (p.state === 'idle') continue;
+    const until = p.at + (p.state === 'working' ? WORKING_TTL : PRESENCE_TTL);
+    if (until <= now) continue;
+    if (!best || rank(p) > rank(best) || (rank(p) === rank(best) && p.at > best.at)) best = { ...p, until };
+    for (const id of p.items || []) items.push({ id, agent, until });
+  }
+  return best ? { state: best.state, at: best.at, until: best.until, items } : null;
 }
 app.post('/api/presence', (req, res) => {
   let abs; try { abs = safePath(req.body.path); } catch { return res.json({ ok: true }); }   // unknown file → ignore (fail-safe)
-  presence[realKey(abs)] = { state: req.body.state || 'watching', at: Date.now() };
+  const agent = String(req.body.agent || AGENT);
+  (presence[realKey(abs)] ||= {})[agent] = { state: req.body.state || 'watching', at: Date.now(),
+    items: Array.isArray(req.body.items) ? req.body.items.map(String) : [] };
   const rel = path.relative(BASE_DIR, abs);
   for (const c of clients) c.write(`data: ${JSON.stringify({ event: 'presence', rel })}\n\n`);
   res.json({ ok: true });

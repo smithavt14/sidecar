@@ -858,6 +858,55 @@ test('presence keys by realpath — a ping via a symlinked path surfaces on the 
   }
 });
 
+test('presence is per-agent: items merge, working outranks a later watching, one agent cannot clear another', async () => {
+  try {
+    // Agent a1 exits its wait holding two threads.
+    await post('/api/presence', { path: 'doc.md', state: 'working', agent: 'a1', items: ['t1', 't2'] });
+    let p = (await state()).presence;
+    assert.equal(p.state, 'working');
+    assert.deepEqual(p.items.map(x => x.id).sort(), ['t1', 't2']);
+    assert.equal(p.items[0].agent, 'a1', 'each mark names the agent that holds it');
+    assert.ok(p.until > Date.now(), 'readout carries its staleness horizon');
+    // Agent b2's watching heartbeat lands AFTER a1's working ping: the header must not flap and
+    // a1's marks must survive — the case the per-file store got wrong by construction.
+    await post('/api/presence', { path: 'doc.md', state: 'watching', agent: 'b2', items: [] });
+    p = (await state()).presence;
+    assert.equal(p.state, 'working', 'working outranks a more recent watching');
+    assert.deepEqual(p.items.map(x => x.id).sort(), ['t1', 't2'], "b2's empty heartbeat must not clear a1's marks");
+    // a1 re-arms its wait (watching, empty-handed): its own marks clear, header falls back to watching.
+    await post('/api/presence', { path: 'doc.md', state: 'watching', agent: 'a1', items: [] });
+    p = (await state()).presence;
+    assert.equal(p.state, 'watching');
+    assert.deepEqual(p.items, [], "the agent's next ping with the item absent clears the mark");
+  } finally {
+    await post('/api/presence', { path: 'doc.md', state: 'idle', agent: 'a1' });
+    await post('/api/presence', { path: 'doc.md', state: 'idle', agent: 'b2' });
+  }
+});
+
+test('wait exit ping carries the woken item ids — news and replies mark, a decided item does not', async () => {
+  const wf = path.join(dir, 'waitpres.md');
+  fs.writeFileSync(wf, '# WP\n\nPresence target line.\n');
+  fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [] }));
+  // SIDECAR_PORT points at the REAL test server, so the exit ping lands where /api/state can read it.
+  const w = spawn('node', [path.join(__dirname, 'server.js'), 'wait', wf, '--timeout', '10'],
+    { env: { ...process.env, SIDECAR_PORT: String(PORT), SIDECAR_AGENT: 'pwaiter' }, stdio: 'pipe' });
+  await new Promise((res) => setTimeout(res, 900));   // let the fs-watcher attach
+  fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [
+    { id: 'pc1', kind: 'comment', by: 'alex', status: 'open',
+      anchor: { quote: 'Presence target line.', occurrence: 0 },
+      thread: [{ by: 'alex', at: '2026-08-12T12:00:00Z', text: 'mark me' }] },
+    { id: 'ps1', kind: 'suggestion', by: 'pwaiter', status: 'accepted',
+      anchor: { quote: 'Presence target line.', occurrence: 0 }, replacement: 'x' }] }));
+  const code = await new Promise((res) => w.on('exit', res));
+  assert.equal(code, 0, 'wait exits 0 once Alex acts');
+  const s = await j(await fetchRetry(BASE + '/api/state?path=' + encodeURIComponent('waitpres.md')));
+  assert.equal(s.presence?.state, 'working');
+  assert.deepEqual(s.presence.items.map(x => x.id), ['pc1'],
+    'only the new comment marks — the decided suggestion gets no "replying" light');
+  assert.equal(s.presence.items[0].agent, 'pwaiter');
+});
+
 test('SIDECAR_USER / SIDECAR_AGENT are surfaced in /api/state (default and override)', async () => {
   const boot = (env) => new Promise((res, rej) => {
     const p = spawn('node', [path.join(__dirname, 'server.js'), dir], { env, stdio: 'pipe' });

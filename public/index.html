@@ -359,6 +359,26 @@
   .presence.sent .dot { background:var(--muted); box-shadow:none; }
   @keyframes presPulse { 0%,100%{opacity:.35} 50%{opacity:1} }
   .presence.working .dot { animation:presPulse 1.4s ease-in-out infinite; }
+  /* Per-thread presence: the card the agent is answering right now. A 3×3 pixel grid with a chevron
+     wavefront driving right, and the label itself shimmering — plain body text, no chip, no dot.
+     Appears when the agent's wait exit names the thread, clears when the reply lands (or goes stale). */
+  .replying { display:flex; align-items:center; gap:8px; margin-top:8px; }
+  .replying .pxgrid { display:grid; grid-template-columns:repeat(3,4px); gap:1.5px; flex:none; }
+  .replying .pxgrid i { width:4px; height:4px; border-radius:1px; background:var(--fg); opacity:.15;
+    animation:pixelOn .65s ease-in-out infinite; }
+  /* chevron: delay = (col + |row-1|) * 90ms — the 650ms cycle is shorter than the sweep, so two
+     wavefronts are always in flight */
+  .replying .pxgrid i:nth-child(1) { animation-delay:90ms; }  .replying .pxgrid i:nth-child(2) { animation-delay:180ms; }
+  .replying .pxgrid i:nth-child(3) { animation-delay:270ms; } .replying .pxgrid i:nth-child(4) { animation-delay:0ms; }
+  .replying .pxgrid i:nth-child(5) { animation-delay:90ms; }  .replying .pxgrid i:nth-child(6) { animation-delay:180ms; }
+  .replying .pxgrid i:nth-child(7) { animation-delay:90ms; }  .replying .pxgrid i:nth-child(8) { animation-delay:180ms; }
+  .replying .pxgrid i:nth-child(9) { animation-delay:270ms; }
+  .replying .lbl { font-size:12.5px; font-weight:500; color:transparent;
+    background:linear-gradient(90deg, var(--muted) 35%, var(--fg) 50%, var(--muted) 65%);
+    background-size:200% 100%; -webkit-background-clip:text; background-clip:text;
+    animation:shimmerText 1.4s linear infinite; }
+  @keyframes pixelOn { 0%,100%{opacity:.15} 50%{opacity:1} }
+  @keyframes shimmerText { from { background-position:200% 0; } to { background-position:-200% 0; } }
   /* Reduced motion: cut the movement, keep the meaning. The toast still fades so it doesn't teleport,
      the sheet still slides (a sheet that jump-cuts loses where it came from), and the presence dot
      holds a steady dim instead of breathing — the "working" state is still legible, just not moving. */
@@ -366,6 +386,9 @@
     #banner { transition:opacity .15s ease-out, visibility 0s linear .15s; transform:translate(-50%, 0); }
     #banner.open { transition:opacity .15s ease-out, visibility 0s; transform:translate(-50%, 0); }
     .presence.working .dot { animation:none; opacity:.6; }
+    /* grid frozen at its dim state; the label drops the shimmer for static muted text */
+    .replying .pxgrid i { animation:none; }
+    .replying .lbl { animation:none; background:none; color:var(--muted); }
     /* Cards: no travel. The JS also skips the exit wait entirely, so a decision stays instant. */
     .card.leaving { transform:none; transition:opacity .12s ease-out; }
     .card.entering { animation:none; }
@@ -599,9 +622,14 @@ async function boot() {
       // threw away scroll position mid-sentence — the rail jumping under you
       // every 15 seconds while writing a reply. Only re-render what moved.
       const reviewMoved = JSON.stringify(fresh.review) !== JSON.stringify(state.review);
+      // The rail must also rebuild when the per-thread marks changed (a wait exit delivering item
+      // ids, or a re-arm clearing them) — but NOT on the plain 15s watching heartbeat, whose empty
+      // item list matches the previous one and would otherwise rebuild the rail under the caret.
+      const marksMoved = JSON.stringify((fresh.presence || {}).items || []) !==
+                         JSON.stringify((state.presence || {}).items || []);
       state.review = fresh.review;
       state.presence = fresh.presence;        // presence pings arrive here (doc bytes unchanged)
-      if (reviewMoved) renderSide();
+      if (reviewMoved || marksMoved) renderSide();
       else renderPresence();
       return;
     }
@@ -1357,6 +1385,37 @@ function proseHtml(s) {
 // agent name from /api/state, never a literal, so legacy 'alex', the default 'you', and any custom
 // name all color as the human.
 function whoCls(by) { return (state && by === state.agent) ? 'agent' : 'human'; }
+// ---------- per-thread presence: which card is the agent answering right now? ----------
+// The agent's `wait` exit pings the server with the ids it woke on; they arrive here as
+// state.presence.items [{id, agent, until}]. A mark is live until its `until` (the server's staleness
+// horizon — a killed agent goes quiet instead of "replying" forever); expiry is enforced on OUR clock
+// because a dead agent sends no further pings to trigger a re-render.
+function liveMarks() {
+  const now = Date.now();
+  return ((state.presence && state.presence.items) || []).filter(m => !m.until || m.until > now);
+}
+// The card row: "<agent> is replying ···". Shown only while the thread's latest message is NOT the
+// marking agent's — the moment the reply lands the row clears here, per thread, even though the
+// server-side set only shrinks on the agent's next ping.
+function replyingHtml(it) {
+  const m = liveMarks().find(x => x.id === it.id);
+  if (!m) return '';
+  const last = (it.thread || []).slice(-1)[0];
+  if (last && last.by === m.agent) return '';
+  return `<div class="replying"><span class="pxgrid" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>`
+       + `<span class="lbl">${esc(m.agent)} is replying</span></div>`;
+}
+// One re-render scheduled at the earliest future expiry (marks or the header state), so stale
+// presence disappears without waiting for the next SSE event. Cleared and re-armed on every render.
+let presenceExpiryTimer = null;
+function schedulePresenceExpiry() {
+  clearTimeout(presenceExpiryTimer);
+  const now = Date.now();
+  const untils = [...liveMarks().map(m => m.until),
+                  state.presence && state.presence.until].filter(u => u && u > now);
+  if (!untils.length) return;
+  presenceExpiryTimer = setTimeout(renderSide, Math.min(...untils) - now + 250);
+}
 // A suggestion's inner word-level diff (old → new), monochrome+accent.
 function diffHtml(quote, replacement) {
   return '<div class="diffbox">' + Diff.diffWords(quote, replacement).map(p =>
@@ -1594,6 +1653,7 @@ function renderActive(list, top, childSug) {
                  ${imgBtn('data-action="image"')}<span class="spacer"></span>
                  <button class="primary" data-action="send">send</button></div>`;
     }
+    body += replyingHtml(it);   // per-thread presence row, cleared per thread as replies land
     el.innerHTML = `<div class="cbody">${head + body}</div>` + actions;
     } catch (e) {
       console.error('sidecar: failed to render item', it.id, e);
@@ -1672,7 +1732,10 @@ function renderTurn() {
 // `sidecar wait` is heartbeating presence; falls back to "waiting for claude" when no agent is watching.
 function renderPresence() {
   const el = $('presence'); if (!el) return;
-  const st = state.presence && state.presence.state;
+  // Expired on our clock reads as away — a killed agent's last "working" ping must not glow forever.
+  const live = state.presence && (!state.presence.until || state.presence.until > Date.now());
+  const st = live && state.presence.state;
+  schedulePresenceExpiry();
   const done = !!(state.review.session && state.review.session.done);
   let cls, txt;
   if (st === 'working') { cls = 'here working'; txt = 'claude is working…'; }   // Alex acted; I'm composing
