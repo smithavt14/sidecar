@@ -20,7 +20,7 @@ Reviewing a document your agent drafted is clumsy today: the file lives on your 
   original bytes — `git diff` shows just what changed, and git is your undo.
 - **Any agent with a shell.** Claude Code, Cursor, Codex, … — one small CLI, no plugin, no API key.
 - **A live loop, not a mailbox.** Your agent can watch the review and answer inside your comment threads
-  the moment you act.
+  the moment you act — and the thread shows *claude is replying* while the answer is being written.
 - **Anchored to content, not line numbers.** If text moves, anchors follow; if it's gone, the item goes
   orphaned — loudly — instead of editing the wrong place.
 
@@ -73,7 +73,8 @@ it publicly.
 2. It seeds the review — suggestion cards and comments anchored to real text.
 3. You read, accept, reject, reply, and edit rich text in place. Desk or phone.
 4. The agent, backgrounded on `sidecar wait`, answers the moment you act — proposing rewrites right
-   inside your comment threads.
+   inside your comment threads. While it composes, the thread it's answering shows a quiet
+   *claude is replying*, which clears as each reply lands.
 5. You click **done reviewing** → the agent makes one commit. The dirty diff *was* the review state.
 
 ## What you can do
