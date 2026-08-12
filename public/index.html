@@ -297,9 +297,16 @@
   #popover textarea:focus { border-color:var(--ink-btn); box-shadow:var(--ring); }
   #popover .row { justify-content:flex-end; }
   /* toast — the one dark surface; light action buttons (your decisions stay monochrome) */
-  #banner { display:none; position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:var(--dark);
+  /* Enters and leaves by the same edge it lives on. `display` can't transition, so visibility carries
+     the hiding and the transform/opacity carry the motion — translateX(-50%) has to stay inside every
+     transform or the centering snaps. */
+  #banner { visibility:hidden; position:fixed; bottom:18px; left:50%; background:var(--dark);
     color:#faf9f4; padding:13px 18px; border-radius:12px; z-index:40; font-size:13.5px;
-    box-shadow:0 1px 2px rgba(0,0,0,.2), 0 18px 40px -18px rgba(0,0,0,.5); }
+    box-shadow:0 1px 2px rgba(0,0,0,.2), 0 18px 40px -18px rgba(0,0,0,.5);
+    opacity:0; transform:translate(-50%, 12px);
+    transition:opacity .2s ease-out, transform .2s ease-out, visibility 0s linear .2s; }
+  #banner.open { visibility:visible; opacity:1; transform:translate(-50%, 0);
+    transition:opacity .2s ease-out, transform .2s ease-out, visibility 0s; }
   #banner button { margin-left:10px; background:#fff; color:var(--ink); border:none; font-size:12.5px; padding:6px 12px; }
   #banner button:hover { background:#f0f0ea; }
   /* quiet docs link — a text link in the header chrome, never a CTA */
@@ -322,6 +329,14 @@
   .presence.sent .dot { background:var(--muted); box-shadow:none; }
   @keyframes presPulse { 0%,100%{opacity:.35} 50%{opacity:1} }
   .presence.working .dot { animation:presPulse 1.4s ease-in-out infinite; }
+  /* Reduced motion: cut the movement, keep the meaning. The toast still fades so it doesn't teleport,
+     the sheet still slides (a sheet that jump-cuts loses where it came from), and the presence dot
+     holds a steady dim instead of breathing — the "working" state is still legible, just not moving. */
+  @media (prefers-reduced-motion: reduce) {
+    #banner { transition:opacity .15s ease-out, visibility 0s linear .15s; transform:translate(-50%, 0); }
+    #banner.open { transition:opacity .15s ease-out, visibility 0s; transform:translate(-50%, 0); }
+    .presence.working .dot { animation:none; opacity:.6; }
+  }
   /* docs is a LINK (leaves the page) — mark it as one so it reads differently from status + actions */
   .doclink::after { content:'\2197'; font-size:.82em; margin-left:2px; opacity:.6; }
   /* "done reviewing" is a review ACTION → it lives at the foot of the review column, not the nav bar. */
@@ -585,7 +600,19 @@ function renderPwd() {
     : `<span class="file">${esc(p)}</span>`;
 }
 function setStatus(s) { $('status').textContent = s; }
-function hideBanner() { $('banner').style.display = 'none'; $('banner').innerHTML = ''; }
+// The text is cleared on transitionend, not immediately: emptying it mid-flight would collapse the
+// toast to a dot and animate that instead. A guard covers the case where the class is re-added before
+// the exit finishes (a second banner raised straight after a dismissal).
+function hideBanner() {
+  const b = $('banner');
+  if (!b.classList.contains('open')) { b.innerHTML = ''; return; }
+  b.classList.remove('open');
+  b.addEventListener('transitionend', function done(e) {
+    if (e.target !== b || e.propertyName !== 'opacity') return;
+    b.removeEventListener('transitionend', done);
+    if (!b.classList.contains('open')) b.innerHTML = '';
+  });
+}
 function showBanner(text, actions) { // actions: [{label, fn}]
   const b = $('banner');
   b.innerHTML = '';
@@ -596,7 +623,9 @@ function showBanner(text, actions) { // actions: [{label, fn}]
     btn.onclick = () => { hideBanner(); a.fn(); };
     b.appendChild(btn);
   }
-  b.style.display = 'block';
+  // No rAF dance needed: the toast is `visibility:hidden`, not `display:none`, so it always has a
+  // resting opacity/transform to animate FROM. Re-raising mid-exit just retargets the transition.
+  b.classList.add('open');
 }
 
 // marked v12 ships no sanitizer, so its HTML output — including any raw HTML embedded in the source
