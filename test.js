@@ -1717,6 +1717,116 @@ test('wait: an accept prints the digest exactly once (double-print regression)',
   fs.rmSync(d, { recursive: true, force: true });
 });
 
+/* ---------------------------------------------------------------------------
+   Doc baseline — the digest's own copy of the document (lib/digest.js basePath).
+   The doc half of the digest diffs against the agent's last look, not git HEAD:
+   untracked docs, non-git dirs, and mid-review commits must all produce real
+   hunks, and nothing may be re-sent across looks.
+   --------------------------------------------------------------------------- */
+
+const basefile = (d, agent = 'claude', doc = 'doc.md') => path.join(d, doc + '.review.seen.base.' + agent);
+// The fixture without git — sidecar's serverless contract says this must work identically.
+function cliDirNoGit() {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-cli-'));
+  fs.writeFileSync(path.join(d, 'doc.md'), CLI_DOC);
+  return d;
+}
+
+test('baseline: written on digest advance, not on --peek, not on a wait timeout', async () => {
+  const d = cliDir();
+  cli(d, 'comment', 'doc.md', '--quote', 'Success metrics', '--text', 'targets?');
+  cli(d, 'digest', 'doc.md', '--peek');
+  assert.ok(!fs.existsSync(basefile(d)), 'peek advances neither cursor nor baseline');
+  cli(d, 'digest', 'doc.md');
+  assert.equal(fs.readFileSync(basefile(d), 'utf8'), CLI_DOC, 'advance writes the doc text as-of-this-look');
+  const before = fs.readFileSync(basefile(d), 'utf8');
+  const { code } = await spawnWait(d, { timeout: 1 });          // nothing happens → times out
+  assert.equal(code, 1);
+  assert.equal(fs.readFileSync(basefile(d), 'utf8'), before, 'a timeout must not move the baseline');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('baseline: two SIDECAR_AGENT values hold independent baselines', () => {
+  const d = cliDir();
+  cli(d, 'comment', 'doc.md', '--quote', 'Success metrics', '--text', 'targets?');
+  cliE(d, { SIDECAR_AGENT: 'claude' }, 'digest', 'doc.md');
+  assert.ok(fs.existsSync(basefile(d, 'claude')) && !fs.existsSync(basefile(d, 'gpt')), 'only claude has a baseline so far');
+  cliE(d, { SIDECAR_AGENT: 'gpt' }, 'digest', 'doc.md');
+  assert.ok(fs.existsSync(basefile(d, 'gpt')), 'both baselines coexist as separate files');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('digest: a doc edit produces hunks in an UNTRACKED file (the empty-digest hole)', () => {
+  const d = cliDir();
+  fs.writeFileSync(path.join(d, 'new.md'), CLI_DOC);            // never committed — git diff sees nothing
+  cli(d, 'comment', 'new.md', '--quote', 'Success metrics', '--text', 'targets?');
+  cli(d, 'digest', 'new.md');                                   // cursor + baseline
+  fs.writeFileSync(path.join(d, 'new.md'), CLI_DOC.replace('Success metrics are not defined yet.', 'Success metrics: 200 signups.'));
+  const out = cli(d, 'digest', 'new.md');
+  assert.match(out, /### doc changes \(since your last look\)/, 'the diff section renders');
+  assert.match(out, /-Success metrics are not defined yet\./, 'the removed line');
+  assert.match(out, /\+Success metrics: 200 signups\./, 'the added line');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('digest: same, in a directory that is not a git repo at all', () => {
+  const d = cliDirNoGit();
+  cli(d, 'comment', 'doc.md', '--quote', 'Success metrics', '--text', 'targets?');
+  cli(d, 'digest', 'doc.md');
+  fs.writeFileSync(path.join(d, 'doc.md'), CLI_DOC.replace('# Plan', '# The Plan'));
+  const out = cli(d, 'digest', 'doc.md');
+  assert.match(out, /-# Plan/, 'hunks with no git anywhere');
+  assert.match(out, /\+# The Plan/);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('digest: hunks are since the LAST LOOK — an earlier, already-reported edit is not re-sent', () => {
+  const d = cliDir();
+  cli(d, 'comment', 'doc.md', '--quote', 'Success metrics', '--text', 'targets?');
+  cli(d, 'digest', 'doc.md');
+  fs.writeFileSync(path.join(d, 'doc.md'),                       // edit A, near the top
+    fs.readFileSync(path.join(d, 'doc.md'), 'utf8').replace('We will ship all six features in week one.', 'Week one ships three.'));
+  assert.match(cli(d, 'digest', 'doc.md'), /\+Week one ships three\./, 'edit A reported once');
+  fs.writeFileSync(path.join(d, 'doc.md'),                       // edit B, far from A
+    fs.readFileSync(path.join(d, 'doc.md'), 'utf8').replace('3. **Write** it back.', '3. **Write** it back, atomically.'));
+  const out = cli(d, 'digest', 'doc.md');
+  assert.match(out, /\+3\. \*\*Write\*\* it back, atomically\./, 'edit B reported');
+  assert.ok(!out.includes('Week one ships three'), 'edit A does NOT ride along again');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('digest: a mid-review commit no longer blanks the diff channel', () => {
+  const d = cliDir();
+  cli(d, 'comment', 'doc.md', '--quote', 'Success metrics', '--text', 'targets?');
+  cli(d, 'digest', 'doc.md');
+  execSync('git add -A && git -c user.email=t@t -c user.name=t commit -qm checkpoint', { cwd: d });
+  fs.writeFileSync(path.join(d, 'doc.md'), CLI_DOC.replace('# Plan', '# The Plan'));
+  const out = cli(d, 'digest', 'doc.md');                        // git diff vs HEAD would show this too — but
+  execSync('git add -A && git -c user.email=t@t -c user.name=t commit -qm edit', { cwd: d });
+  const out2Setup = fs.readFileSync(path.join(d, 'doc.md'), 'utf8');   // now HEAD == worktree: git diff is EMPTY
+  fs.writeFileSync(path.join(d, 'doc.md'), out2Setup.replace('Repeated line here.\n\nRepeated line here.', 'One line here.'));
+  const out2 = cli(d, 'digest', 'doc.md');
+  assert.match(out, /\+# The Plan/, 'hunks after a checkpoint commit');
+  assert.match(out2, /\+One line here\./, 'hunks even when the worktree is clean at HEAD');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('digest: missing or stale baseline with a live cursor → flagged, no crash, self-heals', () => {
+  const d = cliDir();
+  cli(d, 'comment', 'doc.md', '--quote', 'Success metrics', '--text', 'targets?');
+  cli(d, 'digest', 'doc.md');
+  fs.writeFileSync(basefile(d), 'some other version entirely');  // hash no longer matches cursor.docHash
+  fs.writeFileSync(path.join(d, 'doc.md'), CLI_DOC.replace('# Plan', '# The Plan'));
+  const out = cli(d, 'digest', 'doc.md');                        // must not throw, must not diff the wrong text
+  assert.match(out, /doc changed \(no baseline/, 'stale baseline degrades loudly');
+  assert.ok(!out.includes('some other version'), 'and never diffs against the wrong version');
+  assert.equal(fs.readFileSync(basefile(d), 'utf8'), fs.readFileSync(path.join(d, 'doc.md'), 'utf8'),
+    'the advance rewrote the baseline');
+  fs.writeFileSync(path.join(d, 'doc.md'), fs.readFileSync(path.join(d, 'doc.md'), 'utf8').replace('# The Plan', '# The Real Plan'));
+  assert.match(cli(d, 'digest', 'doc.md'), /\+# The Real Plan/, 'next look diffs normally again');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
 /* ---------------------------------------------------------------------------------------------
    VISUALS — ```flow diagrams, raw-HTML islands, and the /assets image route.
 

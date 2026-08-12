@@ -1,5 +1,5 @@
 node_modules/
 .DS_Store
 *.review.json
-*.review.seen.json
+*.review.seen*
 *.review.assets/

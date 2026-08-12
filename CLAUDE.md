@@ -75,8 +75,10 @@ hover title in the UI.
   Keep that when you change the surrounding code; delete them when the reason stops being true.
 - Safety properties that tests cover and should stay covered: atomic sidecar writes, merge-by-id never
   dropping the other side's work, decided statuses never regressing, path confinement to the served
-  root, Host-header allowlisting, DOMPurify on rendered markdown, `git diff` run without a shell,
-  and atomic blocks emitting their source bytes rather than going through turndown.
+  root, Host-header allowlisting, DOMPurify on rendered markdown, `git diff` run without a shell
+  (the two surviving call sites: the server's /api/state and `show`'s --stat; the digest diffs
+  in-process against its own baseline), and atomic blocks emitting their source bytes rather than
+  going through turndown.
 
 ## Attached images
 

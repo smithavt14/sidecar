@@ -177,10 +177,13 @@ sidecar check doc.md --quote "…"   # pre-flight one quote before you write it
 
 `wait` and `digest` share a persistent last-seen cursor (a sibling `foo.md.review.seen.json`, keyed by
 your `SIDECAR_AGENT`), so each reports only what changed since the last time you looked and advances the
-marker. `wait` blocks until there IS a change and returns that digest; `digest` reports the delta right
+marker. That covers the document too: a sibling `foo.md.review.seen.base.<agent>` holds the doc text as
+of your last look, and the digest's doc-changes section is a diff against it — since your last look, not
+since the last commit, and independent of git entirely (untracked files and non-git directories diff the
+same). `wait` blocks until there IS a change and returns that digest; `digest` reports the delta right
 now. Both print ids, so you can `reply`/`answer` straight off a digest without a `show`. `--peek` reads
-without advancing. The cursor is agent workspace state — never commit it (it's git-ignored); delete it to
-replay everything.
+without advancing. Cursor and baseline are agent workspace state — never commit them (they're
+git-ignored, pattern `*.review.seen*`); delete them to replay everything.
 
 ---
 
@@ -317,8 +320,9 @@ you answered once and stopped watching is a review they think you abandoned.
 5. **Respond**, then arm `sidecar wait` again.
 6. Repeat until the digest says `DONE: true`, then make **one commit**.
 
-Accepting a card leaves the tree dirty on purpose — the dirty diff *is* the review state. Don't
-auto-commit mid-review.
+Committing mid-review is safe — the digest diffs against its own baseline, not against HEAD, so a
+checkpoint commit costs nothing. Still prefer to land the finished doc and its `.review.json` together
+in that final commit: half-decided reviews make weak history.
 
 **The digest is complete since your last look — trust it, don't skip it.** It is baselined on a
 persistent cursor, so anything the human does while you are composing is still there on the next `wait`
@@ -353,10 +357,12 @@ Each reviewed `foo.md` gets a sibling `foo.md.review.json` holding the items. Yo
 read or write it directly — `sidecar show` is the readable view and the commands are the writable one —
 but it is plain JSON, it belongs in git alongside the document, and the schema is stable.
 
-It stays uncommitted until the review ends (you commit it once with the document), so a `git checkout -f`
-or `git stash` mid-review discards the whole review — every card and comment, not just an anchor. There
-is also a `foo.md.review.seen.json` cursor tracking what you have already read; that one is agent state,
-never committed (it's gitignored).
+Commit it with the document when the review ends — and until you do, remember a `git checkout -f`
+or `git stash` discards the whole review — every card and comment, not just an anchor (checkpoint
+commits mid-review are safe and protect against exactly that). There are also two agent-state siblings,
+never committed (gitignored as `*.review.seen*`): `foo.md.review.seen.json`, the cursor of what you have
+already read, and `foo.md.review.seen.base.<agent>`, the doc text as of your last look, which the
+digest's doc-changes diff is computed against.
 
 Images attached to comments are files in `<doc>.review.assets/`, named by content hash, referenced
 from the message as ordinary markdown. Nothing is stored as bytes inside the JSON, so it stays a small

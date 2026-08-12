@@ -124,7 +124,8 @@ Hardened for exactly its threat model — single-user, single-machine, localhost
 
 Single-machine matters: finish a review before syncing clones — merge-by-id reconciles concurrent writes
 to one file, not two divergent histories. (The agent also keeps a `<file>.review.seen.json` cursor of what
-it has read — local agent state, not review content; leave it out of git.)
+it has read and a `<file>.review.seen.base.<agent>` copy of the doc as of its last look, which its digest
+diffs against — local agent state, not review content; gitignore both as `*.review.seen*`.)
 
 ## Development
 
