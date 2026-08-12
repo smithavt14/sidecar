@@ -1764,6 +1764,12 @@ function wrapAnchor(quote, occurrence, id) {
   }
   let first = null;
   for (const sl of slices) {
+    // A span crossing a block boundary also covers the structural newline BETWEEN the blocks, which is
+    // its own whitespace text node. Wrapping it produced a 2px cue floating in the paragraph gap,
+    // highlighting nothing. Skip whitespace-only slices that carry a newline: an inter-word space
+    // between two inline elements is whitespace too, but never contains one, so it still gets marked.
+    const slice = sl.node.textContent.slice(sl.s, sl.e);
+    if (!slice.trim() && slice.includes('\n')) continue;
     const r = document.createRange(); r.setStart(sl.node, sl.s); r.setEnd(sl.node, sl.e);
     const mark = document.createElement('mark'); mark.className = 'anchor'; mark.dataset.id = id; mark.contentEditable = 'false';
     try { r.surroundContents(mark); if (!first) first = mark; } catch {}

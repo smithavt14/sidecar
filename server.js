@@ -60,6 +60,10 @@ function safePath(rel) {
 // Dispatch BEFORE express/ROOT setup: under a subcommand argv[2] is the verb, so ROOT/BASE_DIR below
 // would resolve to garbage. CLI commands resolve their own paths against cwd instead of safePath.
 const cli = require('./lib/cli.js');
+// One extension list for the whole tool. The picker and the file watcher below both used a bare
+// `.endsWith('.md')`, which silently disagreed with the CLI's allowlist: a `.mdx` the CLI accepted
+// was missing from the picker and never fired a live-reload event.
+const isMarkdown = (p) => cli.MARKDOWN.includes(path.extname(p).toLowerCase());
 // `--help`/`-h` normalize to the `help` verb. Bare `sidecar` still serves the cwd — `npm start` and
 // the launchd job depend on that, so the banner below carries the pointer instead.
 const arg0 = process.argv[2];
@@ -143,7 +147,7 @@ app.get('/api/files', (req, res) => {
       if (e.name.startsWith('.') || e.name === 'node_modules') continue;
       const abs = path.join(dir, e.name);
       if (e.isDirectory()) walk(abs);
-      else if (e.name.endsWith('.md')) {
+      else if (isMarkdown(e.name)) {
         const rel = path.relative(BASE_DIR, abs);
         const review = loadReview(abs);
         const open = review.items.filter(i => ['open', 'pending', 'orphaned'].includes(i.status)).length;
@@ -326,7 +330,7 @@ chokidar.watch(BASE_DIR, {
   ignored: (p) => p.includes('node_modules') || path.basename(p).startsWith('.git'),
   ignoreInitial: true, depth: 6,
 }).on('all', (event, p) => {
-  if (!p.endsWith('.md') && !p.endsWith('.review.json')) return;
+  if (!isMarkdown(p) && !p.endsWith('.review.json')) return;
   const rel = path.relative(BASE_DIR, p.replace(/\.review\.json$/, ''));
   for (const c of clients) c.write(`data: ${JSON.stringify({ event, rel })}\n\n`);
 });
