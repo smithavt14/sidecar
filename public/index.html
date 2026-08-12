@@ -363,7 +363,9 @@
      text with a shimmer sweeping through it — no chip, no dot, no spinner. The motion IS the
      signal. Appears when the agent's wait exit names the thread, clears when the reply lands
      (or goes stale). */
-  .replying { display:flex; align-items:center; margin-top:8px; }
+  /* padding-left matches .msg's 10px horizontal padding, so the label lines up with the message
+     TEXT in the bubbles above it, not with the card's content edge */
+  .replying { display:flex; align-items:center; margin-top:8px; padding-left:10px; }
   .replying .lbl { font-size:12.5px; font-weight:500; color:transparent;
     background:linear-gradient(90deg, var(--muted) 35%, var(--fg) 50%, var(--muted) 65%);
     background-size:200% 100%; -webkit-background-clip:text; background-clip:text;
@@ -1641,8 +1643,10 @@ function renderActive(list, top, childSug) {
                  ${imgBtn('data-action="image"')}<span class="spacer"></span>
                  <button class="primary" data-action="send">send</button></div>`;
     }
-    body += replyingHtml(it);   // per-thread presence row, cleared per thread as replies land
-    el.innerHTML = `<div class="cbody">${head + body}</div>` + actions;
+    // The replying row sits OUTSIDE .cbody: the body is what a docked card clips, and a presence
+    // signal hidden behind "show more" defeats its purpose. Below the body (dockCards slots the
+    // show-more toggle between them) and above the reply box, it stays visible at any card height.
+    el.innerHTML = `<div class="cbody">${head + body}</div>` + replyingHtml(it) + actions;
     } catch (e) {
       console.error('sidecar: failed to render item', it.id, e);
       el.className = 'card orphaned';
