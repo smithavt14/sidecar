@@ -184,7 +184,7 @@
   .side-list.docked .card.clipped .cbody::after { content:''; position:absolute; left:0; right:0; bottom:0;
     height:44px; pointer-events:none; background:linear-gradient(to bottom, rgba(255,255,255,0), var(--bg)); }
   .side-list .card .more { display:none; }
-  .side-list.docked .card.has-more .more { display:block; width:100%; text-align:left; margin:7px 0 0;
+  .side-list.docked .card.has-more .more { display:block; width:100%; text-align:center; margin:7px 0 0;
     padding:2px 0; border:0; background:none; box-shadow:none; cursor:pointer;
     font:600 12px 'Geist', ui-sans-serif, sans-serif; color:var(--muted); }
   .side-list.docked .card.has-more .more:hover { color:var(--ink); background:none; }
@@ -1490,7 +1490,10 @@ function dockCards() {
     let more = card.querySelector(':scope > .more');
     if (tall) {
       if (!more) { more = document.createElement('button'); more.className = 'more'; more.dataset.action = 'more'; }
-      if (more.previousElementSibling !== cbody) cbody.after(more);   // between the body and the actions
+      // Anchor after the replying row when the card has one: the presence signal reads as the tail
+      // of the thread (where the reply will land), with the toggle below it, above the actions.
+      const anchor = card.querySelector(':scope > .replying') || cbody;
+      if (more.previousElementSibling !== anchor) anchor.after(more);
       more.textContent = expanded ? 'show less' : 'show more';
     } else if (more) more.remove();
     // An orphan (or anything whose quote no longer matches) has no mark to measure, so it just takes the
