@@ -234,10 +234,18 @@
   .card.orphaned .quote { border-left-color:var(--line-2); color:var(--faint); text-decoration:line-through; }
   .card .when { font-size:11px; color:var(--fainter); margin-left:auto; }
   /* thread messages — bold name (no chip, no dot; the header carries identity) + body */
-  .msg { margin:8px 0; font-size:13px; line-height:1.5; color:var(--fg); }
-  .msg .who { background:none; padding:0; color:inherit; font-size:13px; }
-  .msg .who::before { display:none; }
-  .msg .who.agent, .msg .who.human { margin-right:5px; }
+  /* A thread message is a block with its own tint, so who said what is legible at a glance instead of
+     depending on reading the name. The tints are the identity colors already in use elsewhere: the
+     agent's yellow chip, the human's neutral well. Left border carries it when tints get subtle. */
+  .msg { margin:8px 0; padding:7px 10px; border-radius:9px; font-size:13px; line-height:1.5;
+    color:var(--fg); background:var(--fill); border-left:2px solid var(--line-strong); }
+  .msg.by-agent { background:var(--chip); border-left-color:var(--yellow); }
+  .msg .who { background:none; padding:0; color:inherit; font-size:12px; display:block; margin-bottom:2px; }
+  /* The dot comes back in-thread — it is the fastest identity read, and hiding it was why replies all
+     looked alike. Inline-flex on the name row keeps it aligned with the text. */
+  .msg .who::before { display:inline-block; vertical-align:middle; margin-right:5px; }
+  .msg .who.agent { color:var(--chip-fg); }
+  .msg .who.human { color:var(--ink); }
   .msg .t { color:var(--fg); }
   /* A message body is rendered markdown (proseHtml). One-paragraph bodies come back inline and sit on
      the author's line; anything structured brings real blocks, styled tight so a card stays scannable. */
@@ -1648,7 +1656,7 @@ function renderArchived(list, archived, childSug) {
 // thread merge preserves the same order.
 function threadHtml(thread) {
   return (thread || [])
-    .map(m => `<div class="msg"><span class="who ${whoCls(m.by)}">${esc(m.by)}</span> <span class="t">${proseHtml(m.text)}</span></div>`).join('');
+    .map(m => `<div class="msg by-${whoCls(m.by)}"><span class="who ${whoCls(m.by)}">${esc(m.by)}</span><span class="t">${proseHtml(m.text)}</span></div>`).join('');
 }
 // Right cluster — pure STATUS: the open + orphaned counts (no actions, no presence).
 function renderTurn() {
