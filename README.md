@@ -137,7 +137,7 @@ npm start -- ~/path/to/your/docs      # → http://localhost:4880
 npm test                              # end-to-end tests against a real server + temp fixture repo, plus round-trip/anchor units
 ```
 
-It's a ~1,000-line tool with no build step: `public/index.html` is the whole frontend, `server.js` the
+It's a ~3,800-line tool with no build step: `public/index.html` is the whole frontend, `server.js` the
 whole backend. The shared matcher (`public/anchor.js`) and serializer (`public/serialize.js`) run in both
 the browser and Node, so the tests exercise the real logic.
 
