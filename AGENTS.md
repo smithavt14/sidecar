@@ -15,7 +15,7 @@ code you are actually running.
 
 ## The short version
 
-sidecar is a local review tool for a document a human and an agent work on together. The human reads,
+Sidecar is a local review tool for a document a human and an agent work on together. The human reads,
 comments, and accepts or rejects suggestions in a browser at `localhost:4880`. You work through
 commands that read and write a JSON sidecar next to the document; the server pushes your changes into
 their browser live, and their decisions come back through the same files.

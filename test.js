@@ -1369,6 +1369,64 @@ test('replacementRisk refuses structure injected mid-block, allows a whole-block
   assert.match(risk(para, 'Alpha paragraph here.', 'has **one opener'), /unbalanced/);
 });
 
+/* The one block-structured replacement a list can take safely, and the reason the rule above grew a
+   second branch: "add a bullet here" is the most common suggestion an agent writes about a list, and
+   an item-for-items splice at the same level leaves the same list behind. Everything else stays
+   refused, so these pin both sides of that line. */
+test('replacementRisk allows list items spliced over a whole list item, and refuses the rest', () => {
+  const { replacementRisk } = require('./lib/review.js');
+  const Anchor = require('./public/anchor.js');
+  const risk = (raw, q, rep) => { const h = Anchor.findNth(raw, q, 0); return replacementRisk(raw, h.start, h.end, rep); };
+
+  const list = 'Intro para.\n\n- alpha item\n- beta item\n- gamma item\n';
+  assert.equal(risk(list, '- beta item', '- new item\n- beta item'), null, 'insert a bullet before');
+  assert.equal(risk(list, '- gamma item', '- gamma item\n- new item'), null, 'append after the last item');
+  assert.equal(risk(list, '- beta item', '- beta item\n- new item\n  wrapped onto a second line'), null);
+  assert.equal(risk(list, '- beta item', '- beta item\n  - nested under it'), null);
+
+  // The quote has to cover the marker. Without it the span is part of a line, the old marker stays
+  // put, and the first new item lands behind it.
+  assert.match(risk(list, 'beta item', '- new item\n- beta item'), /part of a line/);
+  // A different bullet character opens a SECOND list in CommonMark, and a different indent moves the
+  // item to another level, so both are refused instead of guessed at.
+  assert.match(risk(list, '- beta item', '* new item\n- beta item'), /same indentation/);
+  assert.match(risk(list, '- beta item', '  - deeper item\n- beta item'), /own marker/);
+  assert.match(risk(list, '- beta item', '- beta item\n\n## Heading'), /blank line/);
+  assert.match(risk(list, '- beta item', '- beta item\n- new item\nloose paragraph'), /not a list item/);
+
+  // Ordered lists: the first marker is kept verbatim, since CommonMark takes the list's start number
+  // from the first item alone. Later numbers may be anything, and `1)` is a different list from `1.`.
+  const ord = '1. first\n2. second\n3. third\n';
+  assert.equal(risk(ord, '2. second', '2. second\n3. inserted'), null);
+  assert.equal(risk(ord, '2. second', '2. second\n9. renumbering does not reach the render'), null);
+  assert.match(risk(ord, '2. second', '5. second\n6. inserted'), /own marker/);
+  assert.match(risk(ord, '2. second', '2. second\n3) inserted'), /not a list item/);
+
+  // A continuation line left outside the span would reparent onto whichever item the replacement
+  // ends with, so the span has to cover the whole item.
+  const wrap = '- one item\n  wraps to here\n- two\n';
+  assert.match(risk(wrap, '- one item', '- one item\n- new item'), /continues it/);
+  assert.equal(risk(wrap, '- one item wraps to here', '- one item\n  wraps to here\n- new item'), null);
+
+  // Blockquotes stay refused: every injected line would need its own `>` prefix to stay in the quote,
+  // and one line of a quote is not a whole block the way a list item is.
+  assert.match(risk('> quoted line\n', '> quoted line', '> quoted line\n> more'), /blockquote/);
+});
+
+test('accept splices a new bullet into a list at the same level', async () => {
+  const md = '# T\n\nIntro.\n\n- alpha item\n- beta item\n';
+  fs.writeFileSync(path.join(dir, 'bullet.md'), md);
+  // No --force: this one passes the write-time check too, which is half the point.
+  execFileSync('node', [BIN, 'add', 'bullet.md'], { cwd: dir, encoding: 'utf8',
+    input: JSON.stringify([{ quote: '- beta item', replacement: '- inserted item\n- beta item' }]),
+    stdio: ['pipe', 'pipe', 'pipe'] });
+  const id = JSON.parse(fs.readFileSync(path.join(dir, 'bullet.md.review.json'), 'utf8')).items[0].id;
+  const r = await post('/api/accept', { path: 'bullet.md', id });
+  assert.equal(r.status, 200);
+  assert.equal(fs.readFileSync(path.join(dir, 'bullet.md'), 'utf8'),
+    '# T\n\nIntro.\n\n- alpha item\n- inserted item\n- beta item\n');
+});
+
 test('accept refuses a replacement that would inject a heading into a list item', async () => {
   const md = '# T\n\nIntro.\n\n- item one\n- item two\n';
   fs.writeFileSync(path.join(dir, 'inject.md'), md);
@@ -1392,6 +1450,22 @@ test('CLI suggest refuses the same replacement at write time', () => {
   cli(d, 'suggest', 'doc.md', '--quote', 'Success metrics are not defined yet.',
     '--replacement', 'Metrics.\n\n## Targets\n\n200 signups by March.');
   assert.equal(sc(d).items.length, 1);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('CLI suggest writes a new list item, and still refuses a mismatched one', () => {
+  const d = cliDir();
+  // The heredoc case from the skill: a whole ordered item becomes itself plus a new step.
+  cliStdin(d, '1. **Read** the sidecar.\n2. **Check** the anchor.', 'suggest', 'doc.md',
+    '--quote', '1. **Read** the sidecar.', '--replacement', '-');
+  assert.equal(sc(d).items.length, 1);
+  assert.equal(sc(d).items[0].kind, 'suggestion');
+  // Same shape, wrong marker style: refused at write time rather than at accept time.
+  const e = cliFailsStdin(d, '- **Merge** by id.\n- **New step.** Added here.', 'suggest', 'doc.md',
+    '--quote', '2. **Merge** by id.', '--replacement', '-');
+  assert.ok(e);
+  assert.match(e.stderr, /own marker/);
+  assert.equal(sc(d).items.length, 1, 'nothing written');
   fs.rmSync(d, { recursive: true, force: true });
 });
 

@@ -7,7 +7,7 @@ description: |
   community post, or any markdown file on disk. Triggers include naming it ("open this in sidecar,"
   "respond to my comments in sidecar") and generic collaborative-review intent without the word
   ("let's review this doc," "let's edit this together," "look this over and suggest changes," "work
-  through this proposal with me," "let's revise this"). sidecar gives tracked suggestion cards with
+  through this proposal with me," "let's revise this"). Sidecar gives tracked suggestion cards with
   word-level diffs, comment threads, and rich-text editing on the real file, anchored by content
   rather than line numbers. NOT for a quick one-line take or a prose-tightening pass, and not for
   code review. Needs the document as a file on disk.
@@ -15,7 +15,7 @@ description: |
 
 # sidecar — reviewing a document with a human
 
-sidecar has two sides.
+Sidecar has two sides.
 
 - **The human** uses the browser at `http://localhost:4880`. They read, comment, accept or reject
   your suggestion cards, and edit the rich text directly.
@@ -208,6 +208,27 @@ So: quote within a single block, quote the raw markdown (`**bold** text`, not `b
 span touches emphasis or code, and only introduce new blocks when your quote covers a whole
 paragraph. To point at something spanning blocks, use a comment — comments only anchor, so they are
 unrestricted.
+
+**Proposing a NEW list item is the one exception**, because it is item-for-items at the same level and
+the list comes out the same list. Quote the **whole** item, marker included, and make every line of the
+replacement an item carrying that same marker:
+
+```bash
+sidecar suggest plan.md --quote "- **Ship the beta.** By March." --replacement - <<'MD'
+- **Ship the beta.** By March.
+- **Write the launch note.** Same week.
+MD
+```
+
+Four things this asks of you, each of which is refused otherwise. The quote covers the marker (`- …`,
+not just the text) and the item's continuation lines, if it wraps onto an indented second line. Every
+replacement line is an item at that same indent with that same marker character, or a line indented
+under one; a `*` where the list uses `-` opens a second list in markdown. The first line repeats the
+original marker verbatim, ordered number included, and later items may number however you like, since
+markdown counts from the first item. No blank lines, which would split the list in two.
+
+Refused, and use a comment instead: a nested (indented) item, whose marker sits outside the span the
+matcher can anchor; a replacement mixing in a paragraph or heading; and anything inside a blockquote.
 
 **What is left to your judgment is choosing a quote that identifies exactly one span.** Everything
 else is enforced:
