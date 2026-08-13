@@ -59,6 +59,9 @@ sidecar doctor                # is a server running, on what code, and what URLs
 sidecar doctor path/to/doc.md # …including the deep links for that specific file
 ```
 
+`doctor` also warns when the host repo has not gitignored your digest state (`*.review.seen*`). Act
+on that warning when you see it; sidecar never edits a host `.gitignore` itself.
+
 If nothing is running, start one yourself — it serves a file or a whole directory:
 
 ```bash
@@ -328,8 +331,10 @@ you answered once and stopped watching is a review they think you abandoned.
 
 **The human can see this loop.** While your `wait` is armed the browser header reads *claude is
 here*, and when it wakes, the threads it woke on show *claude is replying* until your reply lands.
-The `wait` exit does that on its own; there is no presence command for you to call. It also means a
-wake you sit on looks exactly like what it is.
+A rejection that carries a reason lights its card the same way, because the reason is an invitation
+to retry and you are presumed to be composing one. The `wait` exit does that on its own, and every
+write verb you run refreshes the signal as a side effect; there is no presence command for you to
+call. It also means a wake you sit on looks exactly like what it is.
 
 ---
 

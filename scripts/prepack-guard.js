@@ -30,8 +30,8 @@ const strays = fs.readdirSync(ROOT)
 
 if (strays.length) {
   console.error(
-    `\nprepack refused: ${strays.length} file(s) match npm's always-included README*/LICENSE*/CHANGELOG*\n` +
-    `glob and would be published no matter what \`files\` says:\n\n` +
+    `\nprepack refused: ${strays.length} file(s) match the README*/LICENSE*/CHANGELOG*/NOTICE* pattern\n` +
+    `(npm force-includes the first two regardless of \`files\`; the rest are guarded on principle):\n\n` +
     strays.map(f => `  ${f}`).join('\n') +
     `\n\nMove or delete them, then pack again.\n`
   );
