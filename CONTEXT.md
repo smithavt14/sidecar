@@ -39,6 +39,10 @@ _Avoid_: poster (one use of an asset, not the concept)
 The isolated surface that renders an asset with full styling. The asset's own scripts never run
 in it.
 
+**Picker**:
+Sidecar's own script injected into the asset frame: it highlights the element under the
+cursor and reports picks and geometry out to the page. The only script that runs in a frame.
+
 **Orphaned**:
 An item whose anchor no longer resolves. It revives on its own if the anchor resolves again.
 
