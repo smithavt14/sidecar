@@ -877,10 +877,62 @@ test('presence is per-agent: items merge, working outranks a later watching, one
     await post('/api/presence', { path: 'doc.md', state: 'watching', agent: 'a1', items: [] });
     p = (await state()).presence;
     assert.equal(p.state, 'watching');
-    assert.deepEqual(p.items, [], "the agent's next ping with the item absent clears the mark");
+    assert.deepEqual(p.items, [], "the agent's next ping with an explicit empty list clears the mark");
   } finally {
     await post('/api/presence', { path: 'doc.md', state: 'idle', agent: 'a1' });
     await post('/api/presence', { path: 'doc.md', state: 'idle', agent: 'b2' });
+  }
+});
+
+test('presence: an ABSENT items field keeps the marks and refreshes the clock; an empty array clears', async () => {
+  // The distinction the CLI re-ping rides on. A working record has no heartbeat, so a five-minute reply
+  // used to outlive its own marks; a write verb pings with no `items` at all, which must read as "still
+  // here, leave my threads alone" rather than as the clear an empty list means.
+  try {
+    await post('/api/presence', { path: 'doc.md', state: 'working', agent: 'w1', items: ['t9'] });
+    const first = (await state()).presence.until;
+    await new Promise((r) => setTimeout(r, 20));   // so a refreshed `at` is visibly later
+    await post('/api/presence', { path: 'doc.md', state: 'working', agent: 'w1' });   // items ABSENT
+    let p = (await state()).presence;
+    assert.deepEqual(p.items.map(x => x.id), ['t9'], 'an absent items field keeps what the agent already holds');
+    assert.ok(p.until > first, 'and pushes the staleness horizon out, which is the whole point');
+    await post('/api/presence', { path: 'doc.md', state: 'working', agent: 'w1', items: [] });
+    p = (await state()).presence;
+    assert.deepEqual(p.items, [], 'an explicit empty array is still the authoritative clear');
+    // First contact with no items field creates the record empty-handed rather than failing.
+    await post('/api/presence', { path: 'doc.md', state: 'working', agent: 'w2' });
+    p = (await state()).presence;
+    assert.equal(p.state, 'working');
+    assert.deepEqual(p.items, [], 'a first ping with no items field holds nothing');
+  } finally {
+    await post('/api/presence', { path: 'doc.md', state: 'idle', agent: 'w1' });
+    await post('/api/presence', { path: 'doc.md', state: 'idle', agent: 'w2' });
+  }
+});
+
+test('a CLI write verb re-pings presence: the clock moves, the marks it did not set survive', async () => {
+  const f = path.join(dir, 'clipres.md');
+  fs.writeFileSync(f, '# CP\n\nThe line the agent will comment on.\n');
+  const read = () => fetchRetry(BASE + '/api/state?path=' + encodeURIComponent('clipres.md')).then(j);
+  try {
+    // Stand in for the wait exit: this agent came out of its wait holding two threads.
+    await post('/api/presence', { path: 'clipres.md', state: 'working', agent: 'cliwriter', items: ['h1', 'h2'] });
+    const first = (await read()).presence.until;
+    await new Promise((r) => setTimeout(r, 20));
+    // SIDECAR_PORT points at the REAL test server, so the write verb's ping lands where /api/state reads.
+    execFileSync('node', [path.join(__dirname, 'server.js'), 'comment', 'clipres.md',
+      '--quote', 'The line the agent will comment on.', '--text', 'still composing'],
+      { cwd: dir, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env, SIDECAR_PORT: String(PORT), SIDECAR_AGENT: 'cliwriter' } });
+    const p = (await read()).presence;
+    assert.equal(p.state, 'working', 'the write says the agent is still on this document');
+    assert.ok(p.until > first, 'a write verb pushes the working window out');
+    assert.deepEqual(p.items.map(x => x.id).sort(), ['h1', 'h2'],
+      'the threads still in hand keep their marks — the write verb never declares items');
+  } finally {
+    await post('/api/presence', { path: 'clipres.md', state: 'idle', agent: 'cliwriter' });
+    fs.rmSync(f + '.review.json', { force: true });
+    fs.rmSync(f, { force: true });
   }
 });
 
@@ -1678,6 +1730,27 @@ test('add happy paths unchanged: replyTo, flag, and kind inference all pass thro
   assert.ok(answer, 'replyTo passes through');
   assert.equal(answer.kind, 'suggestion', 'replacement present → suggestion');
   assert.equal(answer.by, 'claude');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+// SIDECAR_PORT points at a dead port so doctor takes its no-server path and never reaches whatever the
+// developer happens to be running on the default one.
+const doctorIn = (d, ...args) => execFileSync('node', [BIN, 'doctor', ...args],
+  { cwd: d, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, SIDECAR_PORT: '4990' } });
+
+test('doctor warns when the digest state files are not gitignored, and goes quiet once they are', () => {
+  const d = cliDir();   // a git repo with no .gitignore, which is the state a host repo starts in
+  assert.match(doctorIn(d, 'doc.md'), /\*\.review\.seen\*/, 'the warning names the exact pattern to add');
+  assert.match(doctorIn(d, 'doc.md'), /\.gitignore/, 'and says where it goes');
+  fs.writeFileSync(path.join(d, '.gitignore'), '*.review.seen*\n');
+  assert.doesNotMatch(doctorIn(d, 'doc.md'), /review\.seen/, 'ignored → nothing extra to say');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('doctor says nothing about gitignore outside a git work tree', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-nogit-'));
+  fs.writeFileSync(path.join(d, 'doc.md'), CLI_DOC);
+  assert.doesNotMatch(doctorIn(d, 'doc.md'), /review\.seen/, 'no repo, nothing to ignore');
   fs.rmSync(d, { recursive: true, force: true });
 });
 
