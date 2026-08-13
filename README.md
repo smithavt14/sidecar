@@ -7,36 +7,38 @@
 [![npm](https://img.shields.io/npm/v/%40spktr%2Fsidecar)](https://www.npmjs.com/package/@spktr/sidecar)
 [![license](https://img.shields.io/badge/license-MIT-black)](LICENSE)
 
-**A better way to work on documents with your AI agent.**
+# **A better way to work on documents with your AI agent.**
 
 ![Reviewing a document in sidecar: a suggestion card with a word-level diff, and a comment thread](https://raw.githubusercontent.com/smithavt14/sidecar/main/docs/example.png)
 
-Reviewing a document your agent drafted is clumsy today: the file lives on your disk, the conversation about it lives in a chat window, and marking up raw markdown by hand is annoying. The tools actually built for review — Google Docs, Notion — do it well, but they live in the cloud: your agent only reaches them through a connector, every change crosses the network, and your document sits on someone else's server. sidecar brings the review to the file instead: suggestion cards, word-level diffs, and comment threads you can drop a screenshot into, on the markdown already on your disk — 100% local, as modern as any SaaS tool, and accepting a card writes the real bytes.
+Reviewing a document your agent drafted can be clumsy. The file lives on your disk, the conversation about it lives in a chat window, and marking up raw markdown by hand is annoying. 
+
+The tools actually built for review, like Google Docs and Notion, do it well, but they live in the cloud. Your agent only reaches them through a connector, every change crosses the network, and your document sits on someone else's server. 
+
+Sidecar brings the review to the file instead: suggestion cards, word-level diffs, and comment threads you can drop a screenshot into, on the markdown already on your disk. 100% local, and as modern as any SaaS tool.
 
 **Why sidecar**
 
 - **100% local.** No upload, no network requests, no account. The files on your disk are the whole system.
-- **Real files, real diffs.** Edits write the actual markdown, and untouched blocks keep their exact
-  original bytes — `git diff` shows just what changed, and git is your undo.
-- **Any agent with a shell.** Claude Code, Cursor, Codex, … — one small CLI, no plugin, no API key.
-- **A live loop, not a mailbox.** Your agent can watch the review and answer inside your comment threads
-  the moment you act, and the thread shows *claude is replying* while the answer is being written.
-- **Anchored to content, not line numbers.** If text moves, anchors follow; if it's gone, the item goes
-  orphaned — loudly — instead of editing the wrong place.
+- **Real files, real diffs.** Edits write the actual markdown, and untouched blocks keep their exact original bytes, so `git diff` shows just what changed, and git is your undo.
+- **Any agent with a shell.** Claude Code, Cursor, Codex, and the rest. One small CLI, no plugin, no API key.
+- **A live loop, not a mailbox.** Your agent can watch the review and answer inside your comment threads the moment you act, and the thread shows _claude is replying_ while the answer is being written.
+- **Anchored to content, not line numbers.** If text moves, anchors follow; if it's gone, the item goes orphaned, loudly, instead of editing the wrong place.
+- **Cheap turns.** After the first read, your agent sees only what changed since its last look, so a long review doesn't mean re-reading the document every turn.
+- **Mobile friendly.** One `tailscale serve` line puts the review on your phone over your own tailnet, where a comment can carry the screenshot you just took.
 
-**When not to use it:** multi-user editing (single-user by design), non-markdown files, or a review
-synced across two machines mid-flight.
+**When not to use it:** multi-user editing (this app is single-user by design), non-markdown files, or a review synced across two machines mid-flight.
 
 ## Quickstart
 
-Start here. One line, run once, in the project you want to review documents in:
+Start here. You can copy and paste this in your project directory:
 
 ```bash
 npx skills add smithavt14/sidecar
 ```
 
 That installs the skill where your agent looks for it. Now tell your agent *"review draft.md in
-sidecar"* — it fetches the tool, starts the server, and opens the review at
+sidecar"*, and it fetches the tool, starts the server, and opens the review at
 [localhost:4880](http://localhost:4880). Node ≥ 20; nothing else to set up.
 
 To run the server yourself instead:
@@ -60,6 +62,8 @@ sidecar suggest draft.md \
 …and the card appears in your browser, live, as a diff with accept/reject. See [AGENTS.md](AGENTS.md)
 for the full command set.
 
+Each turn your agent reads a digest rather than the document: the decisions you made with your reasons, new comments and replies in full, and the document's changed hunks. Reviewing this README, the file runs about 8,800 characters while the digests ran between 180 and 1,800. The first look of a session is still a full read; everything after it just costs whatever has changed.
+
 **Review on your phone** (optional): `tailscale serve --bg 4880` proxies sidecar onto your private
 [Tailscale](https://tailscale.com) tailnet. The picture button opens your camera roll there, so a comment
 can carry the screenshot you just took. Tailnet-only: sidecar has no auth, so never `tailscale funnel`
@@ -70,9 +74,9 @@ it publicly.
 ## The loop
 
 1. Your agent drafts a markdown file (or you open one of yours).
-2. It seeds the review — suggestion cards and comments anchored to real text.
+2. It seeds the review with suggestion cards and comments anchored to real text.
 3. You read, accept, reject, reply, and edit rich text in place. Desk or phone.
-4. The agent, backgrounded on `sidecar wait`, answers the moment you act — proposing rewrites right
+4. The agent, backgrounded on `sidecar wait`, answers the moment you act, proposing rewrites right
    inside your comment threads. While it composes, the thread it's answering shows a quiet
    *claude is replying*, which clears as each reply lands.
 5. You click **done reviewing** → the agent makes one commit. The dirty diff *was* the review state.
@@ -89,8 +93,7 @@ it publicly.
 
 **Comment.** Select text, then comment. The comment box is draggable, so you can move it off the text you're
 commenting on. Threads reply and resolve. Every open comment or suggestion softly highlights its span in the
-document; tap the highlight to open its card, tap a card's quote to jump to the text. The review rail has two
-tabs — **active** threads (open, editable) and **archived** threads (settled, read-only).
+document; tap the highlight to open its card, tap a card's quote to jump to the text. The review rail has two tabs: **active** threads (open, editable) and **archived** threads (settled, read-only).
 
 **Screenshots.** Paste or drop an image into any comment or reply box, or use the picture button beside
 **resolve**; click it to see it full size. Showing a broken layout beats describing one. Your agent can
@@ -102,18 +105,17 @@ commit with the document and delete with it.
 diff. Accept applies it to the real file; reject leaves it.
 
 **Show a flow, and comment on it.** A ` ```flow ` fence renders as a diagram, and clicking a box opens a
-comment thread on *that step* rather than on the line of markdown describing it — which is usually the
+comment thread on *that step* rather than on the line of markdown describing it, which is usually the
 thing you actually wanted to say. `A --> B` is an edge, `-->|label|` labels it, `{…}` is a decision, a
 leading `LR` turns it sideways. The source stays plain text in your file, so it still reads in a
-`git diff`. Raw HTML renders too (inline styles only), and relative image paths — `![](./wireframe.svg)`
-— resolve against the document.
+`git diff`. Raw HTML renders too (inline styles only), and relative image paths like `![](./wireframe.svg)` resolve against the document.
 
 **Save.** Edits autosave to the real file (debounced), preserving the exact bytes of every block you didn't
 touch.
 
 ## Safety mechanics
 
-Hardened for exactly its threat model — single-user, single-machine, localhost, no auth:
+Hardened for exactly its threat model, which is single-user, single-machine, localhost, and no auth:
 
 - Binds to `127.0.0.1` and validates the `Host` header against an allowlist (`SIDECAR_HOSTS`), because
   loopback binding alone doesn't stop DNS rebinding.
@@ -123,10 +125,10 @@ Hardened for exactly its threat model — single-user, single-machine, localhost
 - Sidecar writes are atomic and merge by id; saves take an optimistic lock (409 on a stale file) and never
   silently clobber changes made on disk.
 
-Single-machine matters: finish a review before syncing clones — merge-by-id reconciles concurrent writes
+Single-machine matters: finish a review before syncing clones. Merge-by-id reconciles concurrent writes
 to one file, not two divergent histories. (The agent also keeps a `<file>.review.seen.json` cursor of what
 it has read and a `<file>.review.seen.base.<agent>` copy of the doc as of its last look, which its digest
-diffs against — local agent state, not review content; gitignore both as `*.review.seen*`.)
+diffs against. That is local agent state rather than review content; gitignore both as `*.review.seen*`.)
 
 ## Development
 
@@ -146,7 +148,7 @@ the browser and Node, so the tests exercise the real logic.
 ## Credits
 
 Built by [spktr](https://spktr.ai), an applied-AI studio. We help small businesses put AI to work, and we
-build tools for the people building *with* AI — sidecar is one of those tools.
+build tools for the people building *with* AI. Sidecar is one of those tools.
 
 ## License
 
