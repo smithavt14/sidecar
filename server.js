@@ -338,8 +338,16 @@ function presenceFor(abs) {
 app.post('/api/presence', (req, res) => {
   let abs; try { abs = safePath(req.body.path); } catch { return res.json({ ok: true }); }   // unknown file → ignore (fail-safe)
   const agent = String(req.body.agent || AGENT);
-  (presence[realKey(abs)] ||= {})[agent] = { state: req.body.state || 'watching', at: Date.now(),
-    items: Array.isArray(req.body.items) ? req.body.items.map(String) : [] };
+  const rec = (presence[realKey(abs)] ||= {});
+  // Three readings of `items`, and the third is what keeps a long turn visible. An array replaces this
+  // agent's marks; an EMPTY array clears them, which is the wait's heartbeat saying it holds nothing;
+  // an ABSENT field means "refresh my clock, leave my marks alone". Every CLI write verb sends that
+  // third form, because a working record expires after WORKING_TTL with nothing heartbeating it and a
+  // five-minute reply used to outlive its own marks. Present but not an array is malformed: treat it
+  // as the clear, which is what this route did for every shape before the distinction existed.
+  const items = Array.isArray(req.body.items) ? req.body.items.map(String)
+    : ('items' in req.body ? [] : ((rec[agent] || {}).items || []));
+  rec[agent] = { state: req.body.state || 'watching', at: Date.now(), items };
   const rel = path.relative(BASE_DIR, abs);
   for (const c of clients) c.write(`data: ${JSON.stringify({ event: 'presence', rel })}\n\n`);
   res.json({ ok: true });
