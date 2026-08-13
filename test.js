@@ -959,6 +959,51 @@ test('wait exit ping carries the woken item ids — news and replies mark, a dec
   assert.equal(s.presence.items[0].agent, 'pwaiter');
 });
 
+// A rejection carrying a reason is the one decided status that gets an answer: the reason says what to
+// try instead, so the agent goes off to compose a retry and the card should say so. The board showed
+// nothing through that whole window until the decided category started marking.
+test('wait exit ping marks a rejection that carries a reason', async () => {
+  const wf = path.join(dir, 'waitreject.md');
+  fs.writeFileSync(wf, '# WR\n\nReject target line.\n');
+  fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [
+    { id: 'rs1', kind: 'suggestion', by: 'rwaiter', status: 'pending',
+      anchor: { quote: 'Reject target line.', occurrence: 0 }, replacement: 'Rewritten target line.' }] }));
+  const w = spawn('node', [path.join(__dirname, 'server.js'), 'wait', wf, '--timeout', '10'],
+    { env: { ...process.env, SIDECAR_PORT: String(PORT), SIDECAR_AGENT: 'rwaiter' }, stdio: 'pipe' });
+  await new Promise((res) => setTimeout(res, 900));   // let the fs-watcher attach
+  fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [
+    { id: 'rs1', kind: 'suggestion', by: 'rwaiter', status: 'rejected', decidedAt: '2026-08-13T00:00:00Z',
+      anchor: { quote: 'Reject target line.', occurrence: 0 }, replacement: 'Rewritten target line.',
+      thread: [{ by: 'alex', at: '2026-08-13T00:00:01Z', text: 'wrong tense, try the imperative' }] }] }));
+  const code = await new Promise((res) => w.on('exit', res));
+  assert.equal(code, 0, 'wait exits 0 on the decision');
+  const s = await j(await fetchRetry(BASE + '/api/state?path=' + encodeURIComponent('waitreject.md')));
+  assert.equal(s.presence?.state, 'working');
+  assert.deepEqual(s.presence.items.map(x => x.id), ['rs1'],
+    'a reasoned rejection marks the card, because a retry is coming');
+});
+
+// The other half of the rule. "Just no" usually ends the thread, so a light promising a reply would be
+// lying, and a lying status light is worse than a dark one.
+test('wait exit ping leaves a bare rejection dark', async () => {
+  const wf = path.join(dir, 'waitbare.md');
+  fs.writeFileSync(wf, '# WB\n\nBare target line.\n');
+  fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [
+    { id: 'bs1', kind: 'suggestion', by: 'bwaiter', status: 'pending',
+      anchor: { quote: 'Bare target line.', occurrence: 0 }, replacement: 'Rewritten bare line.' }] }));
+  const w = spawn('node', [path.join(__dirname, 'server.js'), 'wait', wf, '--timeout', '10'],
+    { env: { ...process.env, SIDECAR_PORT: String(PORT), SIDECAR_AGENT: 'bwaiter' }, stdio: 'pipe' });
+  await new Promise((res) => setTimeout(res, 900));
+  fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [
+    { id: 'bs1', kind: 'suggestion', by: 'bwaiter', status: 'rejected', decidedAt: '2026-08-13T00:00:00Z',
+      anchor: { quote: 'Bare target line.', occurrence: 0 }, replacement: 'Rewritten bare line.' }] }));
+  const code = await new Promise((res) => w.on('exit', res));
+  assert.equal(code, 0, 'the rejection still wakes the wait');
+  const s = await j(await fetchRetry(BASE + '/api/state?path=' + encodeURIComponent('waitbare.md')));
+  assert.equal(s.presence?.state, 'working');
+  assert.deepEqual(s.presence.items, [], 'a rejection with no reason marks nothing');
+});
+
 test('SIDECAR_USER / SIDECAR_AGENT are surfaced in /api/state (default and override)', async () => {
   const boot = (env) => new Promise((res, rej) => {
     const p = spawn('node', [path.join(__dirname, 'server.js'), dir], { env, stdio: 'pipe' });
@@ -1912,6 +1957,47 @@ test('digest: reject + human reply carries the reason text IN FULL', () => {
   const out = cli(d, 'digest', 'doc.md');
   assert.match(out, /REJECTED/);
   assert.ok(out.includes(reason), 'the full rejection reason is present, unclipped');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+/* The removed list had no authorship check, so `sidecar drop` on the agent's own card came back at that
+   same agent as REMOVED and woke its own `wait` one turn later (reproduced 2026-08-13). The news path
+   had filtered on authorship since the start; removals never did. */
+test('digest: the agent dropping its own card wakes nothing', () => {
+  const d = cliDir();
+  cli(d, 'suggest', 'doc.md', '--quote', 'Success metrics', '--replacement', 'Success metrics (defined below)');
+  cli(d, 'digest', 'doc.md');                        // cursor holds the card, authored by claude
+  cli(d, 'drop', 'doc.md', sc(d).items[0].id);
+  assert.match(cli(d, 'digest', 'doc.md'), /nothing new since/, 'I withdrew it, so it is not news to me');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+// The guard on that fix: it scopes by author, never by "a removal is boring". Someone else's card
+// disappearing is a real change to the review and has to keep reporting.
+test('digest: a card someone else authored still reports when it is removed', () => {
+  const d = cliDir();
+  fs.writeFileSync(path.join(d, 'doc.md.review.json'), JSON.stringify({ schema: 1, items: [
+    { id: 'c-human', kind: 'comment', by: 'alex', status: 'open',
+      anchor: { quote: 'Success metrics', occurrence: 0 }, thread: [] }] }, null, 2));
+  cli(d, 'digest', 'doc.md');                        // cursor records it as alex's
+  patchReview(d, (r) => { r.items = r.items.filter(i => i.id !== 'c-human'); });
+  assert.match(cli(d, 'digest', 'doc.md'), /REMOVED c-human/, "the human's card vanishing is still news");
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+// A cursor written before `by` existed cannot say who owned the card. It reports rather than staying
+// silent, so the change fails noisy: one stale wake, and the next cursor advance heals it. No migration.
+test('digest: a legacy cursor entry with no author still reports the removal', () => {
+  const d = cliDir();
+  cli(d, 'suggest', 'doc.md', '--quote', 'Success metrics', '--replacement', 'Success metrics (defined below)');
+  cli(d, 'digest', 'doc.md');
+  const id = sc(d).items[0].id;
+  const sp = path.join(d, 'doc.md.review.seen.json');
+  const all = JSON.parse(fs.readFileSync(sp, 'utf8'));
+  delete all.claude.items[id].by;                    // as an older sidecar would have written it
+  fs.writeFileSync(sp, JSON.stringify(all, null, 2));
+  cli(d, 'drop', 'doc.md', id);                      // the agent's OWN card, but the cursor cannot know
+  assert.match(cli(d, 'digest', 'doc.md'), new RegExp('REMOVED ' + id), 'an unattributable removal reports');
   fs.rmSync(d, { recursive: true, force: true });
 });
 

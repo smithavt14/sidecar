@@ -1744,7 +1744,11 @@ function renderArchived(list, archived, childSug) {
               + diffHtml(sug.anchor.quote, sug.replacement)
               + (sug.note ? `<div class="msg"><span class="t">${proseHtml(sug.note)}</span></div>` : '') + `</div>`;
     }
-    el.innerHTML = body;
+    // A rejected card is archived and still live conversation: when the rejection carried a reason, the
+    // agent's `wait` marks it and is composing a retry, so the row belongs here too. Same replyingHtml
+    // as the active rail, so the clearing rules come along unchanged: the agent's next empty-handed
+    // ping, the staleness horizon, and the latest-message check once the reply lands on the thread.
+    el.innerHTML = body + replyingHtml(it);
     } catch (e) {
       console.error('sidecar: failed to render archived item', it.id, e);
       el.innerHTML = `<div class="chead"><span class="badge orphaned">could not render — see console</span></div>`
