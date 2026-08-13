@@ -1740,6 +1740,50 @@ test('digest: comment + reply + accept stacked between two looks → ONE digest 
   fs.rmSync(d, { recursive: true, force: true });
 });
 
+/* The gap that made suggestion threads unsafe to ship. A card the agent creates AFTER its last look is
+   outside the cursor, and the "not news to me, I wrote it" branch used to skip the whole item, taking
+   any message someone else had already put on it down with it. `suggest` then `wait` is the normal
+   order, so Alex's first reply on a fresh suggestion landed in that gap and `wait` slept to its timeout.
+   Reachable on a comment too; threaded suggestion cards just make it the common path. */
+test('digest: a reply on the agent’s OWN new card surfaces as a REPLY', () => {
+  const d = cliDir();
+  cli(d, 'digest', 'doc.md');                       // cursor established while the review is empty
+  cli(d, 'suggest', 'doc.md', '--quote', 'Success metrics', '--replacement', 'Success metrics (defined below)');
+  const sug = sc(d).items[0].id;
+  cli(d, 'comment', 'doc.md', '--quote', 'week one', '--text', 'is this the right scope?');
+  const com = sc(d).items.find(i => i.kind === 'comment').id;
+  cliE(d, { SIDECAR_AGENT: 'alex' }, 'reply', 'doc.md', sug, 'why drop that word?');
+  cliE(d, { SIDECAR_AGENT: 'alex' }, 'reply', 'doc.md', com, 'scope is fine, ship it');
+  const out = cli(d, 'digest', 'doc.md');
+  assert.match(out, /REPLY .*why drop that word\?/, 'the reply on the agent’s own suggestion');
+  assert.match(out, /REPLY .*scope is fine, ship it/, 'and on its own comment');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+// The guard on that fix: it keys on WHO wrote the message, never on "this card has a thread". An agent
+// reporting its own replies back to itself would make every `reply` wake its own `wait`.
+test('digest: the agent’s own fresh card stays silent when only the agent has written on it', () => {
+  const d = cliDir();
+  cli(d, 'digest', 'doc.md');
+  cli(d, 'suggest', 'doc.md', '--quote', 'Success metrics', '--replacement', 'Success metrics (defined below)');
+  cli(d, 'reply', 'doc.md', sc(d).items[0].id, 'a second thought of my own');
+  assert.match(cli(d, 'digest', 'doc.md'), /nothing new since/, 'nothing here is addressed to me');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+// A full replay has no cursor, so the card itself is news and its last message is the text shown. The
+// reply must not ALSO be listed separately, or the first look double-reports every discussed card.
+test('digest: a discussed agent card reports once on a full replay, as NEW', () => {
+  const d = cliDir();
+  cli(d, 'suggest', 'doc.md', '--quote', 'Success metrics', '--replacement', 'Success metrics (defined below)');
+  cliE(d, { SIDECAR_AGENT: 'alex' }, 'reply', 'doc.md', sc(d).items[0].id, 'say more about this');
+  const out = cli(d, 'digest', 'doc.md');
+  assert.match(out, /no last-seen marker/, 'this is the full-replay path');
+  assert.match(out, /NEW suggestion .*say more about this/, 'reported as the new card');
+  assert.equal(out.match(/say more about this/g).length, 1, 'reported exactly once, not as NEW and REPLY');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
 test('digest --peek reports the delta but does NOT advance the cursor', () => {
   const d = cliDir();
   cli(d, 'suggest', 'doc.md', '--quote', 'Success metrics', '--replacement', 'Success metrics (defined below)');
@@ -1821,6 +1865,21 @@ test('wait: a timeout exit does NOT advance the cursor', async () => {
   assert.equal(code, 1, 'timeout exit code');
   assert.match(out, /still watching/);
   assert.equal(JSON.stringify(seen(d)), before, 'a timeout must not move the cursor');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+// The end of the loop the digest fix exists to close: the agent suggests, arms `wait`, and Alex asks a
+// question on the card instead of deciding it. Before the fix this slept to the timeout (exit 1) with
+// the reply sitting on disk, leaving the agent silent on a direct question.
+test('wait: wakes on a reply to a suggestion the agent made after its last look', async () => {
+  const d = cliDir();
+  cli(d, 'digest', 'doc.md');                        // cursor established before the card exists
+  cli(d, 'suggest', 'doc.md', '--quote', 'Success metrics', '--replacement', 'Success metrics (defined below)');
+  const id = sc(d).items[0].id;
+  const { code, out } = await spawnWait(d, { timeout: 10, onReady: () =>
+    cliE(d, { SIDECAR_AGENT: 'alex' }, 'reply', 'doc.md', id, 'talk me through this one first') });
+  assert.equal(code, 0, 'woke and emitted, rather than timing out');
+  assert.match(out, /REPLY .*talk me through this one first/, 'the question is in the digest');
   fs.rmSync(d, { recursive: true, force: true });
 });
 

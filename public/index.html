@@ -1419,6 +1419,15 @@ function diffHtml(quote, replacement) {
 const orphanLabel = (it) => it.orphanReason === 'never-matched'
   ? 'orphaned — anchor never matched' : 'orphaned — text changed';
 
+// How many replies a suggestion has picked up, as a quiet header badge. A comment needs no such cue,
+// since its body IS the thread and a conversation on one is self-evident. A pending suggestion's body
+// is a diff, and the rail clips a docked card's body at CARD_CAP, so a thread under a long diff can sit
+// behind "show more" and read as a bare accept/reject card while scanning. The count says "this one has
+// been talked about" without opening it. Same idiom as the kind label: muted uppercase text, no color.
+function replyCount(it) {
+  const n = (it.thread || []).length;
+  return n ? ` <span class="badge">${n} ${n === 1 ? 'reply' : 'replies'}</span>` : '';
+}
 // A suggestion that answers a comment (replyTo) renders INSIDE that thread — its own diff + accept/reject,
 // carrying its own data-id so the delegated dispatcher targets the suggestion, not the parent comment.
 function nestedSugHtml(sug) {
@@ -1426,6 +1435,10 @@ function nestedSugHtml(sug) {
   return `<div class="subcard" data-id="${esc(sug.id)}"><span class="who agent">claude</span> <span class="badge suggestion">suggestion</span>${orphan}`
     + diffHtml(sug.anchor.quote, sug.replacement)
     + (sug.note ? `<div class="msg"><span class="t">${proseHtml(sug.note)}</span></div>` : '')
+    // Its thread renders, but it gets no reply box of its own: this card already sits inside the parent
+    // comment's thread, whose compose box is a few pixels below. A second box in the same card would
+    // make "which one am I answering" a question the human has to ask.
+    + threadHtml(sug.thread)
     + `<div class="row"><button class="primary" data-action="accept">accept</button>
        <button data-action="reject">reject</button></div></div>`;
 }
@@ -1625,6 +1638,7 @@ function renderActive(list, top, childSug) {
     try {
     const label = it.flag ? 'flag' : it.kind;
     let head = `<span class="who ${whoCls(it.by)}">${esc(it.by)}</span> <span class="badge ${label}">${label}</span>`;
+    if (it.kind === 'suggestion') head += replyCount(it);
     if (it.status === 'orphaned') head += ` <span class="badge orphaned">${orphanLabel(it)}</span>`;
     // No interpolated inline handlers: the id lives on the card's data-id (set safely above) and every
     // control carries a static data-action, dispatched by the delegated listeners on #side (see below).
@@ -1636,8 +1650,20 @@ function renderActive(list, top, childSug) {
     if (it.kind === 'suggestion') {
       body += diffHtml(it.anchor.quote, it.replacement);
       if (it.note) body += `<div class="msg"><span class="t">${proseHtml(it.note)}</span></div>`;
-      actions = `<div class="row"><button class="primary" data-action="accept">accept</button>
-                 <button data-action="reject">reject</button></div>`;
+      body += threadHtml(it.thread);
+      // A suggestion is discussable before it is decided: same thread and same reply box a comment
+      // gets, so a question about a change can be asked on the change itself instead of accept/reject
+      // being the only two things sayable about it.
+      //
+      // No resolve button, deliberately. A suggestion settles by accept or reject, the rule lib/cli.js
+      // enforces by refusing `resolve` and `reply --resolve` on one. A resolve here would put that same
+      // forged decision one click away instead of one flag away. Accept stays the only primary: send is
+      // the secondary move on a card whose job is a decision.
+      actions = `<div class="row"><textarea class="reply" rows="1" placeholder="reply…" oninput="autogrow(this)" data-action="reply"></textarea></div>
+                 <div class="row"><button class="primary" data-action="accept">accept</button>
+                 <button data-action="reject">reject</button>
+                 ${imgBtn('data-action="image"')}<span class="spacer"></span>
+                 <button data-action="send">send</button></div>`;
     } else {
       body += threadHtml(it.thread);
       for (const sug of (childSug[it.id] || [])) if (['pending', 'orphaned'].includes(sug.status)) body += nestedSugHtml(sug);
@@ -1683,11 +1709,15 @@ function renderArchived(list, archived, childSug) {
     el.className = 'card archived'; el.dataset.id = it.id;
     try {
     const when = it.decidedAt ? `<span class="when">${esc(timeAgo(Date.parse(it.decidedAt)))}</span>` : '';
-    let body = `<div class="chead"><span class="who ${whoCls(it.by)}">${esc(it.by)}</span> <span class="badge ${it.status}">${it.status}</span>${when}</div>`;
+    let body = `<div class="chead"><span class="who ${whoCls(it.by)}">${esc(it.by)}</span> <span class="badge ${it.status}">${it.status}</span>`
+             + (it.kind === 'suggestion' ? replyCount(it) : '') + `${when}</div>`;
     body += `<div class="quote">${esc(it.anchor.quote)}</div>`;
     if (it.kind === 'suggestion') {
       body += diffHtml(it.anchor.quote, it.replacement);
       if (it.note) body += `<div class="msg"><span class="t">${proseHtml(it.note)}</span></div>`;
+      // The conversation is half the record of why this was accepted or rejected. Dropping it here
+      // would archive the decision and lose the argument that produced it.
+      body += threadHtml(it.thread);
     } else {
       body += threadHtml(it.thread);
       for (const sug of (childSug[it.id] || [])) if (['accepted', 'rejected'].includes(sug.status))
@@ -1763,7 +1793,11 @@ function autogrow(el) { el.style.height = 'auto'; el.style.height = el.scrollHei
 async function reply(id, input) {
   if (!input.value.trim()) return;
   const it = state.review.items.find(i => i.id === id);
-  it.thread.push({ by: state.user, at: new Date().toISOString(), text: input.value.trim() });
+  // Seed the array rather than assuming one. `sidecar suggest` writes no `thread` (a suggestion is born
+  // as a diff, not a conversation), so the first reply on one used to throw here and the message went
+  // nowhere. Fixed on this side rather than in the CLI because every suggestion ALREADY on disk is
+  // missing the field too, and those cards have to be repliable without being rewritten first.
+  (it.thread = it.thread || []).push({ by: state.user, at: new Date().toISOString(), text: input.value.trim() });
   input.value = '';   // clear before any re-render so the capture/restore above doesn't repopulate the sent text
   const r = await api('PUT', '/api/review', { path: FILE, review: state.review });
   state.review = r.review;
