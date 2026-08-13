@@ -1356,6 +1356,34 @@ test('spliceRisk: rejects spans that cross block structure, allows ordinary ones
   assert.match(spliceRisk(two, across.start, across.end), /blank line/);
 });
 
+/* `2)` opens an ordered list exactly as `2.` does, and CommonMark treats the delimiter as part of the
+   list's identity. replacementRisk was widened to `\d{1,9}[.)]` in fda64d8 and spliceRisk was left
+   matching `\d+\.`, so a span that swallowed a `2)` marker read as safe and accept would have written
+   the same destroyed list the `2.` case exists to prevent. */
+test('spliceRisk: a span crossing a `2)` ordered-list marker is refused', () => {
+  const { spliceRisk } = require('./lib/review.js');
+  const Anchor = require('./public/anchor.js');
+
+  const paren = '1) **Read** the sidecar.\n2) **Merge** by id.\n';
+  const hit = Anchor.findNth(paren, '1) **Read** the sidecar. 2) **Merge** by id.', 0);
+  assert.ok(hit, 'the matcher still finds it');
+  const risk = spliceRisk(paren, hit.start, hit.end);
+  assert.match(risk, /crosses a block boundary/);
+  assert.match(risk, /"2\)"/, 'and names the marker it found');
+
+  // Mixed delimiters reach the same span from the other side: the matcher strips the `1. ` it already
+  // knows, and the `2)` rides along inside the quote.
+  const mixed = '1. Read the sidecar.\n2) Merge by id.\n';
+  const m = Anchor.findNth(mixed, 'Read the sidecar. 2) Merge by id.', 0);
+  assert.ok(m);
+  assert.match(spliceRisk(mixed, m.start, m.end), /crosses a block boundary/);
+
+  // Ten digits is past CommonMark's ordered-marker limit, so `\d{1,9}` leaves real prose alone and
+  // the widened pattern refuses nothing it did not already refuse.
+  const num = 'Order line\n1234567890) shipped.\n';
+  assert.equal(spliceRisk(num, 0, num.length - 1), null);
+});
+
 test('CLI suggest refuses a cross-block span; comment on the same quote is allowed', () => {
   const d = cliDir();
   const e = cliFails(d, 'suggest', 'doc.md', '--quote', 'Read the sidecar. Merge by id.', '--replacement', 'One step.');
