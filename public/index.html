@@ -988,6 +988,25 @@ function onSelectEnd(e) {
 }
 document.addEventListener('mouseup', onSelectEnd);
 document.addEventListener('touchend', onSelectEnd);   // mobile: text selection ends with touchend, not mouseup
+// A keyboard selection (Shift+arrows, Shift+Home/End, Cmd/Ctrl+A) fires neither of those two, so the
+// toolbar never appeared at all for anyone selecting without a pointer (reported 2026-08-13).
+// Filtered keyup rather than a debounced `selectionchange`: selectionchange also fires on every caret
+// move and all the way through a mouse drag, so it would raise the toolbar mid-drag and would need its
+// own pointer-down and composition suppression to leave the pointer path alone. Keyup reaches the same
+// selections through the same onSelectEnd, and a character key is not in the list, so typing stays
+// quiet. What it gives up is a selection made by neither pointer nor keyboard (a menu's Select All, a
+// programmatic range); nothing in sidecar makes one.
+// Meta and Control are in the list because macOS swallows the keyup of a letter held under Cmd, so the
+// modifier's own release is the only event Cmd+A reliably delivers.
+const SELECTION_KEYS = new Set([
+  'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown',
+  'Shift', 'Meta', 'Control', 'a', 'A',
+]);
+document.addEventListener('keyup', (e) => {
+  if (e.isComposing || !SELECTION_KEYS.has(e.key)) return;   // IME: mid-composition the composing run reads as a selection
+  if ((e.key === 'a' || e.key === 'A') && !(e.metaKey || e.ctrlKey)) return;   // a bare "a" is typing
+  onSelectEnd(e);   // same gate the pointer path uses: under 3 chars, a collapsed caret included, hides it
+});
 
 // ---------- a diagram node -> a comment anchored to that node ----------
 // The picture is not the source. A node comment anchors to the node's LABEL TEXT inside the fence,
