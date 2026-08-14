@@ -3276,15 +3276,39 @@ test('an element anchor may be stored by path and signature alone, and a bad pat
   assert.match((await empty.json()).error, /needs a sel or a path/);
 });
 
-test('check prints a path-only anchor by its path rather than by an absent sel', () => {
+test('check reports a path anchor as a third state, never as ok, and prints it by its path', () => {
+  // Node cannot run a structural path without a DOM, so it abstains, and `check` has to SAY that
+  // rather than print `ok`, which would report a check that never happened. Three states, and the
+  // path-only anchor still prints by its path (an absent sel used to read as "undefined").
   const d = assetDir();
-  fs.writeFileSync(path.join(d, 'poster.html.sidecar.json'), JSON.stringify({ schema: 1, items: [
-    { id: 'c-bare', kind: 'comment', by: 'claude', status: 'open',
-      anchor: { element: { path: 'main>footer', sig: '© 2026 spktr' }, quote: 'footer · © 2026 spktr' },
-      thread: [{ by: 'claude', at: '2026-08-13T10:00:00Z', text: 'the year is wrong' }] }] }, null, 2));
+  const sc = (items) => fs.writeFileSync(path.join(d, 'poster.html.sidecar.json'),
+    JSON.stringify({ schema: 1, items }, null, 2));
+  const bare = (element) => ({ id: 'c-bare', kind: 'comment', by: 'claude', status: 'open',
+    anchor: { element, quote: 'footer · © 2026 spktr' },
+    thread: [{ by: 'claude', at: '2026-08-13T10:00:00Z', text: 'the year is wrong' }] });
+
+  sc([bare({ path: 'main>footer', sig: '© 2026 spktr' })]);
   const out = cli(d, 'check', 'poster.html');
-  assert.match(out, /ok {3}c-bare {2}main>footer \(\+sig\)/);
+  assert.match(out, /\? {4}c-bare {2}main>footer \(\+sig\)/);
   assert.doesNotMatch(out, /undefined/);
+  assert.doesNotMatch(out, /^ok/m, 'an unverified anchor is never reported as ok');
+  assert.match(out, /1 anchor pins by a structural path/);
+  assert.match(out, /cannot say whether the path still lands on that element/);
+  assert.match(out, /resolves each one for real when the document is next opened/);
+
+  // The signature is information, both ways, and a signature that stopped matching is NOT death: the
+  // element is the referent and its text is evidence.
+  sc([bare({ path: 'main>footer', sig: 'a year that is not in the file' })]);
+  assert.match(cli(d, 'check', 'poster.html'), /\? {4}c-bare {2}main>footer \(\+sig\)/);
+  sc([bare({ path: 'main>div>img' })]);
+  assert.match(cli(d, 'check', 'poster.html'), /\? {4}c-bare {2}main>div>img \(no sig\)/);
+
+  // And the abstention does not swallow the answer Node CAN give. A sel anchor is still checked.
+  sc([{ id: 'c-sel', kind: 'comment', by: 'claude', status: 'open',
+    anchor: { element: { sel: '[data-sc=ghost]' }, quote: 'ghost' }, thread: [] }]);
+  const miss = cliFails(d, 'check', 'poster.html');
+  assert.equal(miss.status, 1);
+  assert.match(miss.stdout, /MISS c-sel/);
   fs.rmSync(d, { recursive: true, force: true });
 });
 
@@ -3301,8 +3325,13 @@ test('a comment on a picture survives: no attribute, no text, and Node abstains 
   assert.equal(cand.path, 'main>div>img');
   const element = { path: cand.path, sig: cand.sig };
   assert.equal(Element.isLive(poster, element), true, 'Node abstains on a path it cannot run');
-  // It still orphans on the evidence it DOES have: a signature that stopped matching is a real answer.
-  assert.equal(Element.isLive('<main><p>caption</p></main>', { path: 'main>h1', sig: 'gone now' }), false);
+  assert.equal(Element.liveness(poster, element), 'unverified', 'and says so as its own state');
+  // The abstention covers a path anchor that HAS a signature too, and that is the change: a signature
+  // that stopped matching is evidence of an edit. Node still judges what it can see, so an anchor with
+  // a signature and no path is answered outright.
+  assert.equal(Element.liveness('<main><p>caption</p></main>', { path: 'main>h1', sig: 'gone now' }), 'unverified');
+  assert.equal(Element.liveness('<main><p>caption</p></main>', { sig: 'gone now' }), 'missing');
+  assert.equal(Element.liveness('<main><p>caption</p></main>', { sig: 'caption' }), 'live');
 
   // And the store takes it, so the comment can actually be written.
   const { annotateOrphans } = require('./lib/review.js');
@@ -3380,5 +3409,197 @@ test('the picker, booted inside the real srcdoc, speaks the whole protocol', () 
   // An anchor whose element is gone reports missing, which is what the card's orphan badge reads.
   say({ type: 'sidecar:init', items: [{ id: 'c9', element: { sel: '[data-sc=ghost]', sig: 'nothing here' } }] });
   assert.deepEqual(sent.find(m => m.type === 'sidecar:anchors').anchors, { c9: 'missing' });
+  dom.window.close();
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+   Drift: the element is the referent, its text is only evidence
+
+   The incident, from live testing: a card said "change this to Alex Smith", the change was made, and
+   the card orphaned, so acting on a comment destroyed the comment. Any text edit to an unlabelled
+   element did it, because the stored signature was the text as it read when the card was written.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+// A frame around one asset, driven the way the boot test drives it: the real srcdoc, jsdom with
+// scripts on, the outbound channel captured.
+function bootFrame(html) {
+  const srcdoc = AssetFrame.buildFrame({ html, docRel: 'poster.html', purify: purifier(),
+    picker: fs.readFileSync(path.join(__dirname, 'public', 'picker.js'), 'utf8') });
+  const dom = new JSDOM(srcdoc, { runScripts: 'dangerously', pretendToBeVisual: true });
+  const win = dom.window, sent = [];
+  win.postMessage = (msg) => sent.push(msg);
+  win.SidecarPicker.boot(win);
+  return { dom, win, doc: win.document, sent,
+    say: (data) => { sent.length = 0; win.dispatchEvent(new win.MessageEvent('message', { data })); } };
+}
+
+test('a text edit at a stable path keeps the card and backfills the new signature', () => {
+  // THE INCIDENT. The card asks for the footer to read "Alex Smith"; the edit is made; the element is
+  // the same element at the same path with different words in it. It stays live, and the picker hands
+  // back the new signature so the next resolution starts from what the file says now.
+  const edited = POSTER.replace('© 2026 spktr', '© 2026 Alex Smith');
+  const { doc, sent, say, dom } = bootFrame(edited);
+  const stored = { path: 'main>footer', sig: '© 2026 spktr' };
+
+  say({ type: 'sidecar:init', items: [{ id: 'c-bare', element: stored }] });
+  assert.deepEqual(sent.find(m => m.type === 'sidecar:anchors').anchors, { 'c-bare': 'resolved' });
+  const bf = sent.find(m => m.type === 'sidecar:backfill');
+  assert.deepEqual(bf.element, { path: 'main>footer', sig: '© 2026 Alex Smith' });
+  assert.equal(doc.querySelector('footer').classList.contains('sc-anchored'), true);
+  assert.equal(Picker.resolve(doc, stored).by, 'path-edited', 'the same element, its text edited');
+
+  // The guard that makes case 3 safe. The old signature turning up somewhere ELSE means the element
+  // moved, so the search wins and the element that now sits at the stale path does not impersonate it.
+  const moved = POSTER.replace('© 2026 spktr', 'Ten minutes, no GPU required.');
+  const two = bootFrame(moved);
+  const hit = Picker.resolve(two.doc, { path: 'main>footer', sig: 'Ten minutes, no GPU required.' });
+  assert.equal(hit.by, 'path', 'the path itself still agrees here');
+  two.say({ type: 'sidecar:init', items: [{ id: 'c-moved',
+    element: { path: 'main>h1', sig: 'Ten minutes, no GPU required.' } }] });
+  const found = Picker.resolve(two.doc, { path: 'main>h1', sig: 'Ten minutes, no GPU required.' });
+  assert.equal(found.by, 'sig', 'the stale path resolves to the h1, whose text disagrees, so the search runs');
+  assert.equal(found.el.tagName, 'P', 'and it lands on the element the text moved to');
+  const bf2 = two.sent.find(m => m.type === 'sidecar:backfill');
+  assert.equal(bf2.element.path, 'main>p', 'the new path is backfilled, not the old one kept');
+  dom.window.close(); two.dom.window.close();
+});
+
+test('resolution order: sel, path+sig, sig anywhere, then the same path with edited text', () => {
+  // The full ladder in one place, because the last two rungs are the ones that trade off against each
+  // other. Two paragraphs share a path shape; the second holds the text the first used to hold.
+  const doc = pickerDom('<main><p>Old words</p><p>New words</p></main>');
+  // Nothing else in the document reads "Only here", so the path is trusted despite the mismatch.
+  const solo = pickerDom('<main><p>Different words now</p></main>');
+  assert.equal(Picker.resolve(solo, { path: 'main>p', sig: 'Only here' }).by, 'path-edited');
+  assert.equal(Picker.resolve(solo, { path: 'main>p', sig: 'Only here' }).el.tagName, 'P');
+  // The same mismatch, except the stored text is alive elsewhere: that is a move, and it wins.
+  const moved = Picker.resolve(doc, { path: 'main>p:nth-of-type(2)', sig: 'Old words' });
+  assert.equal(moved.by, 'sig');
+  assert.equal(Picker.textOf(moved.el), 'Old words');
+  // A path that resolves to nothing and a signature that is nowhere is still death.
+  assert.equal(Picker.resolve(solo, { path: 'main>h1', sig: 'Only here' }), null);
+});
+
+test('Node never orphans a path anchor, and still orphans one whose sel is deleted', () => {
+  const d = assetDir();
+  // An item with no attribute at all: what the picker writes when the human clicks a bare element.
+  // Its signature is deliberately stale, which used to read as "the element is gone".
+  fs.writeFileSync(path.join(d, 'poster.html.sidecar.json'), JSON.stringify({ schema: 1, items: [
+    { id: 'c-bare', kind: 'comment', by: 'claude', status: 'open',
+      anchor: { element: { path: 'main>footer', sig: '© 2026 spktr' }, quote: 'footer · © 2026 spktr' },
+      thread: [{ by: 'claude', at: '2026-08-13T10:00:00Z', text: 'change this to Alex Smith' }] }] }, null, 2));
+  fs.writeFileSync(path.join(d, 'poster.html'), POSTER.replace('© 2026 spktr', '© 2026 Alex Smith'));
+  cli(d, 'show', 'poster.html');
+  assert.equal(scAt(d, 'poster.html').items[0].status, 'open', 'the card survives the edit it asked for');
+  // Even the element being cut leaves it open here: a path is the frame's to judge, and the frame
+  // reports missing on the next open. Node reporting it dead would be a guess dressed as a fact.
+  fs.writeFileSync(path.join(d, 'poster.html'), POSTER.replace(/<footer>[^<]*<\/footer>/, ''));
+  cli(d, 'show', 'poster.html');
+  assert.equal(scAt(d, 'poster.html').items[0].status, 'open', 'Node defers rather than guessing');
+
+  // A sel anchor is a different matter: Node can read the attribute out of the file, so it answers.
+  fs.writeFileSync(path.join(d, 'poster.html'), POSTER);
+  cli(d, 'comment', 'poster.html', '--element', 'cta', '--text', 'the link goes nowhere');
+  const id = scAt(d, 'poster.html').items.find(i => i.id !== 'c-bare').id;
+  const at = (name) => scAt(d, 'poster.html').items.find(i => i.id === id).status;
+  fs.writeFileSync(path.join(d, 'poster.html'), POSTER.replace('>Get started<', '>Start now<'));
+  cli(d, 'show', 'poster.html');
+  assert.equal(at(), 'open', 'rewriting the text does not orphan a sel anchor either');
+  fs.writeFileSync(path.join(d, 'poster.html'), POSTER.replace("data-sc='cta'", 'class="btn"'));
+  cli(d, 'show', 'poster.html');
+  assert.equal(at(), 'orphaned', 'deleting the attribute does');
+  assert.equal(scAt(d, 'poster.html').items.find(i => i.id === id).orphanReason, 'element-changed');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+   Layer stepping: reaching what the paint stack buries
+
+   The incident: a poster's background image could not be commented on anywhere except one gap,
+   because scrims covered the rest of it and hover only ever finds the top of the stack.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+const LAYERED = `<!doctype html>
+<html><body>
+  <main>
+    <img data-sc="art" src="./art.jpg">
+    <div data-sc="scrim"></div>
+  </main>
+</body></html>
+`;
+
+test('the layer stack is the pickable elements under a point, top first and deduped', () => {
+  const doc = pickerDom('<main><img data-sc="art" src="./art.jpg"><div data-sc="scrim"></div></main>');
+  const scrim = doc.querySelector('[data-sc=scrim]'), art = doc.querySelector('img');
+  const main = doc.querySelector('main');
+  // jsdom does no layout, so the browser's hit test is stubbed. What is under test is the filtering
+  // and the ordering, which is all the picker contributes.
+  doc.elementsFromPoint = () => [scrim, art, art, main, doc.body, doc.documentElement];
+  assert.deepEqual(Picker.stackAt(doc, 5, 5, null), [scrim, art, main],
+    'body, html and the repeat are dropped; paint order is kept');
+  // No hit test at all (jsdom without the stub, an older engine): the event target carries it.
+  const bare = pickerDom('<main><p>x</p></main>');
+  assert.deepEqual(Picker.stackAt(bare, 0, 0, bare.querySelector('p')), [bare.querySelector('p')]);
+  assert.deepEqual(Picker.stackAt(bare, 0, 0, bare.body), [], 'and body is never a pick');
+
+  // The step wraps, and a step left over from a deeper stack reads as the top rather than as nothing.
+  const stack = [scrim, art, main];
+  assert.equal(Picker.stepped(stack, 0), scrim);
+  assert.equal(Picker.stepped(stack, 2), main);
+  assert.equal(Picker.stepped(stack, 3), scrim, 'it wraps at the bottom');
+  assert.equal(Picker.stepped([], 1), null);
+  assert.equal(Picker.sameStack(stack, [scrim, art, main]), true);
+  assert.equal(Picker.sameStack(stack, [scrim, art]), false);
+  assert.equal(Picker.sameStack(stack, [art, scrim, main]), false, 'order is part of the identity');
+});
+
+test('Alt steps the outline a layer deeper, and the click takes what is outlined', () => {
+  const { win, doc, sent, say, dom } = bootFrame(LAYERED);
+  const scrim = doc.querySelector('[data-sc=scrim]'), art = doc.querySelector('img');
+  const main = doc.querySelector('main');
+  doc.elementsFromPoint = () => [scrim, art, main, doc.body];
+  const move = () => { sent.length = 0;
+    doc.dispatchEvent(new win.MouseEvent('mousemove', { bubbles: true, clientX: 5, clientY: 5 })); };
+  const hover = () => sent.find(m => m.type === 'sidecar:hover');
+
+  move();
+  assert.deepEqual({ ...hover(), type: undefined }, { type: undefined, label: 'scrim', depth: 1, count: 3 },
+    'the top of the stack by default, with the depth the page shows');
+  assert.equal(scrim.classList.contains('sc-hover'), true);
+
+  // The page forwards the key, because a keydown reaches the frame only once the frame has focus.
+  say({ type: 'sidecar:step' });
+  assert.equal(hover().label, 'art');
+  assert.equal(hover().depth, 2);
+  assert.equal(art.classList.contains('sc-hover'), true);
+  assert.equal(scrim.classList.contains('sc-hover'), false, 'one outline at a time');
+  // The frame's own key does the same thing, so the two routes cannot drift.
+  sent.length = 0;
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Alt', bubbles: true }));
+  assert.equal(hover().label, 'main');
+  sent.length = 0;
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Alt', bubbles: true }));
+  assert.equal(hover().label, 'scrim', 'and it wraps');
+  sent.length = 0;
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Alt', bubbles: true, repeat: true }));
+  assert.equal(hover(), undefined, 'a held key does not spin through the stack');
+
+  // A click takes the OUTLINED element. Step to the buried image and pick it, which is the whole
+  // point: the scrim covers every pixel of it, so it is unreachable by hover.
+  say({ type: 'sidecar:step' });
+  sent.length = 0;
+  scrim.dispatchEvent(new win.MouseEvent('click', { bubbles: true, cancelable: true, clientX: 5, clientY: 5 }));
+  const pick = sent.find(m => m.type === 'sidecar:pick');
+  assert.equal(pick.label, 'art');
+  assert.equal(pick.candidates[0].sel, '[data-sc=art]', 'the anchor is the image, not the thing clicked');
+
+  // Moving to a point whose layers differ starts again at the top.
+  doc.elementsFromPoint = () => [main, doc.body];
+  move();
+  assert.equal(hover().label, 'main');
+  assert.equal(hover().count, 1);
+  doc.elementsFromPoint = () => [scrim, art, main, doc.body];
+  move();
+  assert.equal(hover().label, 'scrim', 'and back over the stack, the step is reset');
   dom.window.close();
 });

@@ -333,15 +333,28 @@ attribute. An element with neither a `data-sc` nor an `id` anchors by its positi
 instead, which is most of a real poster. So expect element items you never named — their anchor is
 just as durable as one you wrote.
 
+**They can also reach what is buried.** Hover only ever finds the top of the paint stack, and a poster
+usually has a full-bleed layer over everything (a scrim, a dot screen, a gradient wash). Tapping Alt
+steps the outline one layer deeper and wraps at the bottom, with the depth shown beside the label
+(`img · 2/5`). So a comment can land on the background photograph under three overlays, and the
+element reference you get back is that photograph's.
+
 **You edit the file; the frame reloads.** There is no save, no accept, no splice: `suggest`, `answer`
 and `reanchor` all refuse an asset, because accepting a diff would mean splicing raw bytes into HTML.
 Change the markup yourself and `sidecar reply` that it is done, exactly as you would for a mechanical
 edit in markdown. The watcher pushes the new render into their browser.
 
-**An element item orphans when its element goes** — `orphanReason: element-changed`, shown on the card
-as *orphaned — element changed*, and it revives on its own if the element comes back. What keeps it
-alive is two things at once: the attribute you named, and a signature of the element's text. Rename
-the attribute and the signature still finds it; rewrite the text and the attribute still does.
+**An element item orphans when its element goes, and only then.** It carries
+`orphanReason: element-changed`, shows on the card as *orphaned — element changed*, and revives on its
+own if the element comes back. The element is what the card is about; its text is how sidecar
+recognizes it. So **editing the text never orphans the card that asked for the edit.** Rename the attribute and the position and the
+signature still find it; rewrite the text and the attribute or the position still does; move the
+element and its signature still does. Delete it and the card orphans.
+
+`sidecar check <asset>` has three answers about an element anchor, not two. `ok` means the attribute
+or the signature is in the file. `MISS` means it is gone, and that exits 1. `?` means the anchor pins
+by a structural path, which Node cannot run without a DOM. The browser resolves that one for real on
+the next open and writes back what it finds, so treat it as information rather than as a thing to fix.
 
 **Images and fonts the asset references keep working.** Relative `src` and `url()` references are
 resolved against the document, so `<img src="./face.jpg">` and `@font-face { src: url(./x.woff2) }`

@@ -789,9 +789,25 @@ function buildAssetFrame() {
   // comment on #assetFrameTpl.
   frameEl = $('assetFrameTpl').content.firstElementChild.cloneNode(true);
   frameGeometry = {}; frameAnchors = {}; frameNatural = null; frameScale = 1;
+  // Is the pointer over the frame? The page cannot ask, and it gets no mousemove while the cursor is
+  // inside an iframe, only the enter and the leave. That pair is what makes the Alt forwarding below
+  // safe: the key is a picker key only while the human is pointing at the render.
+  frameEl.addEventListener('mouseenter', () => { pointerInFrame = true; });
+  frameEl.addEventListener('mouseleave', () => { pointerInFrame = false; });
   wrap.appendChild(frameEl);
   return wrap;
 }
+
+// Alt taps step the picker one layer down its stack, which is how a covered element is reached at all
+// (a full-bleed scrim owns every point it covers). A keydown goes to whichever document has focus, and
+// the frame has none until it is clicked, so the page forwards the first press itself. The picker
+// handles `step` identically to its own keydown, so the two routes cannot drift.
+let pointerInFrame = false;
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'Alt' || e.repeat || !pointerInFrame || !isAsset()) return;
+  e.preventDefault();      // Alt alone focuses the menu bar on Windows and Linux
+  sendFrame('step', {});
+});
 
 async function refreshFrame() {
   const el = frameEl, src = await pickerSource();
@@ -859,8 +875,12 @@ window.addEventListener('message', (e) => {
     case 'anchors': frameAnchors = m.anchors || {}; break;
     case 'backfill': backfillElement(m.id, m.element); break;
     // The cursor affordance: the header's status slot says what a click would land on. An asset never
-    // saves, so the slot is free and it is already where the eye goes for document state.
-    case 'hover': setStatus(m.label ? 'comment on ' + m.label : ''); break;
+    // saves, so the slot is free and it is already where the eye goes for document state. The depth is
+    // the only sign that anything sits under the layer being pointed at, so it shows whenever the stack
+    // is deeper than one, along with the key that walks it.
+    case 'hover': setStatus(m.label
+      ? 'comment on ' + m.label + (m.count > 1 ? '  ·  ' + m.depth + '/' + m.count + '  ·  ⌥ steps deeper' : '')
+      : ''); break;
     case 'open': openReview(m.id); break;
     case 'pick': onFramePick(m); break;
   }

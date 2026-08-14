@@ -39,10 +39,14 @@ Items on an asset anchor to an **element** rather than to a quote: `anchor.eleme
 sig }`, plus a synthesized `anchor.quote` (the label and a text snippet) so cards, the digest and
 `show` keep reading one field. `sel` is what an agent knows from a terminal; `path` and `sig` are
 backfilled by the browser picker, which is why `mergeItem` merges an element anchor field by field
-instead of replacing it. Node has no DOM, so liveness there is textual (`lib/element.js`): the
-attribute is still written in the file, or the signature still reads out of it after tags are
-stripped. A dead one orphans with `orphanReason: 'element-changed'` and revives the same way a text
-anchor does.
+instead of replacing it. A dead one orphans with `orphanReason: 'element-changed'` and revives the
+same way a text anchor does.
+
+**The element is the referent and its text is only evidence.** A card orphans when its element is
+gone, and never because the element's content changed. The signature identifies the element; it is
+not a claim about what the element must keep saying. Live testing settled this: a card reading
+"change this to Alex Smith" orphaned itself the moment the name was changed, so acting on a comment
+destroyed the comment.
 
 **`sel` is optional and `path` is not a lesser anchor.** Most real posters carry no `data-sc` and no
 `id` on anything, so an element picked in the browser often has only a structural path and a
@@ -52,11 +56,26 @@ selector. An anchor naming neither is refused.
 
 Two authorities decide whether an element anchor is live, and they see different things. The picker
 has a DOM and runs `sel`, then `path` verified against `sig`, then a document-wide search for `sig`
-alone; it reports the answer out as `anchors {id: resolved|missing}`, which is what the card's orphan
-badge reads on an asset. Node is textual and **abstains** on a path-only anchor with no signature (a
-picture has no text), because calling every picture comment dead is a worse failure than deferring to
-the side that can actually see. The signature is taken the way Node reads the file, tags becoming
-spaces, so `<span>a</span><span>b</span>` signs as `a b` on both sides.
+alone, and then the case that rule used to miss: a `path` that still resolves whose signature
+disagrees **and whose stored signature is found nowhere else** is the same element with edited text,
+so it stays live and the new signature is backfilled. The document-wide miss is the guard: a
+signature that turns up somewhere else means the element moved, and case 4 takes it there rather than
+letting whatever now sits at the old path impersonate it. The picker reports the answer out as
+`anchors {id: resolved|missing}`, which is what the card's orphan badge reads on an asset.
+
+Node is textual and **abstains on every path-carrying anchor**: it reports live and says so plainly in
+`check`'s third state. It cannot run a structural path without a DOM, and a signature mismatch no
+longer implies death, so there is nothing left for it to judge. The abstention started narrower (a
+path-only anchor with no signature, because a picture has no text) for the same reason it is now
+wide: deferring to the side that can actually see costs one reload, and a false orphan costs the
+human a rescue. The frame's re-resolution writes through `/api/review`, so `annotateOrphans` sees the
+truth on the next load. The signature is taken the way Node reads the file, tags becoming spaces, so
+`<span>a</span><span>b</span>` signs as `a b` on both sides.
+
+The picker reads the whole **layer stack** under the cursor (`elementsFromPoint`), not just the top of
+it, and a tap of Alt steps one layer deeper and wraps. A poster's top layer is usually a full-bleed
+scrim or dot screen that owns every point it covers, and without stepping the artwork beneath it is
+unreachable. A click acts on whatever is outlined, so the pick and the promise are the same element.
 
 The frame is assembled in the CLIENT (`public/assetframe.js`), which is what keeps this
 dependency-free: the page already has DOMPurify. `/api/state` returns the asset's raw HTML in the
