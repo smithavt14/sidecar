@@ -11,6 +11,9 @@ const chokidar = require('chokidar');
 const { sidecarPath, loadReview, saveReview, findAnchor, annotateOrphans, spliceRisk, replacementRisk, mergeItem } = require('./lib/review.js');
 // Where a review's images live and what counts as one — shared with the CLI's --image (lib/assets.js).
 const { IMAGE_TYPES, MAX_BYTES, saveAsset } = require('./lib/assets.js');
+// The element anchor's shared rules — the sel validation this file runs on a write, and the Node-side
+// liveness annotateOrphans resolves with (lib/element.js).
+const Element = require('./lib/element.js');
 
 // A terminal-style pwd for the doc: absolute path with $HOME collapsed to ~.
 function pwdFor(abs) {
@@ -67,8 +70,10 @@ function safePath(rel) {
 const cli = require('./lib/cli.js');
 // One extension list for the whole tool. The picker and the file watcher below both used a bare
 // `.endsWith('.md')`, which silently disagreed with the CLI's allowlist: a `.mdx` the CLI accepted
-// was missing from the picker and never fired a live-reload event.
-const isMarkdown = (p) => cli.MARKDOWN.includes(path.extname(p).toLowerCase());
+// was missing from the picker and never fired a live-reload event. `docKind` now covers both kinds
+// (markdown and .html assets), so the three gates — this picker walk, the watcher, and the verbs —
+// stay one decision.
+const isDoc = (p) => !!cli.docKind(p);
 // `--help`/`-h` normalize to the `help` verb. Bare `sidecar` still serves the cwd — `npm start` and
 // the launchd job depend on that, so the banner below carries the pointer instead.
 const arg0 = process.argv[2];
@@ -152,7 +157,7 @@ app.get('/api/files', (req, res) => {
       if (e.name.startsWith('.') || e.name === 'node_modules') continue;
       const abs = path.join(dir, e.name);
       if (e.isDirectory()) walk(abs);
-      else if (isMarkdown(e.name)) {
+      else if (isDoc(e.name)) {
         const rel = path.relative(BASE_DIR, abs);
         const review = loadReview(abs);
         const open = review.items.filter(i => ['open', 'pending', 'orphaned'].includes(i.status)).length;
@@ -172,6 +177,14 @@ app.get('/api/files', (req, res) => {
 
 app.get('/api/state', (req, res) => {
   const abs = safePath(req.query.path);
+  // Classify before reading. `?f=page.html` used to load through the markdown path unguarded, which is
+  // how an HTML file got rendered as text with editable blocks over it; anything in NEITHER allowlist
+  // (a .js, a .png) had the same door open. The kind rides along so the client knows which surface to
+  // build, and `markdown` keeps its name for both kinds because every client build reads that field —
+  // an asset's raw HTML arrives in it.
+  const kind = cli.docKind(abs);
+  if (!kind) return res.status(400).json({ error:
+    `sidecar reviews markdown and html assets, not ${path.extname(abs) || 'extensionless files'}` });
   const markdown = fs.readFileSync(abs, 'utf8');
   const review = loadReview(abs);
   // Only persist when orphan states actually changed — an unconditional write here
@@ -180,13 +193,20 @@ app.get('/api/state', (req, res) => {
   let diff = '';
   // execFileSync + args array: no shell is spawned, so a filename with $(...) or backticks can't inject.
   try { diff = execFileSync('git', ['diff', '--', path.basename(abs)], { cwd: path.dirname(abs), stdio: ['ignore', 'pipe', 'ignore'] }).toString(); } catch {}
-  res.json({ path: req.query.path, pwd: pwdFor(abs), markdown, review, diff, hash: sha(markdown),
+  res.json({ path: req.query.path, kind, pwd: pwdFor(abs), markdown, review, diff, hash: sha(markdown),
     presence: presenceFor(abs), code: CODE_STAMP, codeDir: CODE_DIR, version: VERSION,
     user: USER, agent: AGENT });
 });
 
+// Assets never reach here. They are read-only in the viewer: no contenteditable, no serialize
+// round-trip, and the agent's own file writes are what change one. The guard is on the route rather
+// than left to the UI, because "the client never sends it" is not a property anything enforces.
+const READ_ONLY = (abs) => cli.docKind(abs) !== 'markdown'
+  ? `${path.basename(abs)} is not an editable document — assets are read-only in the viewer` : null;
+
 app.put('/api/save', (req, res) => {
   const abs = safePath(req.body.path);
+  const ro = READ_ONLY(abs); if (ro) return res.status(400).json({ error: ro });
   const current = fs.existsSync(abs) ? fs.readFileSync(abs, 'utf8') : '';
   // Optimistic lock: if the client says what it based its edit on, refuse to clobber a newer file.
   if (req.body.baseHash && sha(current) !== req.body.baseHash) {
@@ -211,6 +231,12 @@ app.put('/api/review', (req, res) => {
   const incoming = req.body.review || { items: [] };
   // ids are echoed into the DOM by the client — reject anything but word/hyphen to close a stored-XSS vector.
   for (const it of incoming.items) if (!/^[\w-]+$/.test(it.id || '')) return res.status(400).json({ error: 'invalid item id' });
+  // An element anchor's `sel` is echoed the same way (into the frame as a selector, and onto the card),
+  // so it gets the same treatment: a value the CLI would refuse cannot arrive through the browser instead.
+  for (const it of incoming.items) {
+    const el = it.anchor && it.anchor.element;
+    if (el && !Element.validSel(el.sel)) return res.status(400).json({ error: `invalid element sel: ${el.sel}` });
+  }
   const byId = new Map(current.items.map(i => [i.id, i]));
   // Same id → non-destructive merge (union thread, keep the more-advanced status); new id → insert.
   for (const it of incoming.items) byId.set(it.id, byId.has(it.id) ? mergeItem(byId.get(it.id), it) : it);
@@ -278,6 +304,7 @@ function toggleWrap(raw, start, end, mark) {
 }
 app.post('/api/format', (req, res) => {
   const abs = safePath(req.body.path);
+  const ro = READ_ONLY(abs); if (ro) return res.status(400).json({ error: ro });
   const raw = fs.readFileSync(abs, 'utf8');
   const { quote, occurrence = 0, op, url } = req.body;
   const hit = findAnchor(raw, quote, occurrence || 0);
@@ -365,7 +392,7 @@ chokidar.watch(BASE_DIR, {
   ignored: (p) => p.includes('node_modules') || path.basename(p).startsWith('.git'),
   ignoreInitial: true, depth: 6,
 }).on('all', (event, p) => {
-  if (!isMarkdown(p) && !p.endsWith('.sidecar.json')) return;
+  if (!isDoc(p) && !p.endsWith('.sidecar.json')) return;
   const rel = path.relative(BASE_DIR, p.replace(/\.sidecar\.json$/, ''));
   for (const c of clients) c.write(`data: ${JSON.stringify({ event, rel })}\n\n`);
 });

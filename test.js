@@ -2640,3 +2640,381 @@ test('/api/state ships codeDir + version, so doctor can tell a stale server from
     fs.rmSync(d, { recursive: true, force: true });
   }
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+   ASSETS — an .html file reviewed as a rendered visual (1.7.0). A second
+   document kind, and with it a second anchor kind: an item pins to an ELEMENT
+   instead of to quoted text. The sandboxed frame that renders one arrives in
+   phase 3; what is covered here is the store, the CLI, and the Node-side
+   resolution rule that decides whether an element anchor is still live.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+const Element = require('./lib/element.js');
+
+const POSTER = `<!doctype html>
+<html>
+<head><style>h1 { font-size: 64px }</style></head>
+<body>
+  <main class="wrap">
+    <h1 data-sc="headline">Train your own image gen model</h1>
+    <p id="sub">Ten minutes, no GPU required.</p>
+    <a data-sc='cta' href="/start">Get started</a>
+    <img data-sc="shot" src="./pic.svg">
+    <footer>© 2026 spktr</footer>
+  </main>
+</body>
+</html>
+`;
+
+// An empty repo, not a committed one: `show` shells out to `git diff` and a temp dir that happens to
+// sit inside someone's checkout would otherwise report that repo's changes.
+function assetDir() {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-asset-'));
+  fs.writeFileSync(path.join(d, 'poster.html'), POSTER);
+  fs.writeFileSync(path.join(d, 'doc.md'), CLI_DOC);
+  execSync('git init -q', { cwd: d });
+  return d;
+}
+const scAt = (d, name) => JSON.parse(fs.readFileSync(path.join(d, name + '.sidecar.json'), 'utf8'));
+
+// ---------- the document kind, at the server's door ----------
+
+test('/api/state classifies the document and refuses anything in neither allowlist', async () => {
+  fs.writeFileSync(path.join(dir, 'poster.html'), POSTER);
+  fs.writeFileSync(path.join(dir, 'notes.txt'), 'not a document\n');
+  const asset = await fetchRetry(`${BASE}/api/state?path=poster.html`).then(j);
+  assert.equal(asset.kind, 'asset');
+  assert.equal(asset.markdown, POSTER, 'an asset arrives as its raw HTML');
+  const md = await state();
+  assert.equal(md.kind, 'markdown');
+  // The seam this closes: `?f=notes.txt` loaded unguarded and rendered through the markdown path.
+  const r = await fetchRetry(`${BASE}/api/state?path=notes.txt`);
+  assert.equal(r.status, 400);
+  assert.match((await r.json()).error, /markdown and html assets/);
+});
+
+test('save and format refuse an asset — it is read-only in the viewer', async () => {
+  const before = fs.readFileSync(path.join(dir, 'poster.html'), 'utf8');
+  const saved = await put('/api/save', { path: 'poster.html', content: '<h1>rewritten</h1>' });
+  assert.equal(saved.status, 400);
+  assert.match((await saved.json()).error, /read-only/);
+  const formatted = await post('/api/format', { path: 'poster.html', quote: 'Get started', op: 'bold' });
+  assert.equal(formatted.status, 400);
+  assert.equal(fs.readFileSync(path.join(dir, 'poster.html'), 'utf8'), before, 'the file is untouched');
+});
+
+test('the file picker walk lists assets beside markdown', async () => {
+  const { files } = await fetchRetry(`${BASE}/api/files`).then(j);
+  const rels = files.map(f => f.rel);
+  assert.ok(rels.includes('poster.html'), 'the asset is offered for review');
+  assert.ok(rels.includes('doc.md'), 'markdown still is');
+  assert.ok(!rels.includes('notes.txt'), 'and a file in neither allowlist is not');
+});
+
+// A live /events subscription, resolved once the stream is open so a write made after it cannot slip
+// through before the client is listening.
+function sse(match, timeoutMs = 6000) {
+  return new Promise((open) => {
+    const req = http.request({ host: '127.0.0.1', port: PORT, path: '/events', method: 'GET' }, (res) => {
+      let buf = '';
+      const got = new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { req.destroy(); reject(new Error('no matching SSE event')); }, timeoutMs);
+        res.on('data', (c) => {
+          buf += c;
+          for (const line of buf.split('\n')) {
+            if (!line.startsWith('data: ')) continue;
+            let d; try { d = JSON.parse(line.slice(6)); } catch { continue; }
+            if (match(d)) { clearTimeout(timer); req.destroy(); resolve(d); }
+          }
+        });
+      });
+      open({ got });
+    });
+    req.on('error', () => {});
+    req.end();
+  });
+}
+
+test('the watcher fires on an asset, so an agent edit reloads the frame', async () => {
+  const sub = await sse((e) => e.rel === 'watched.html');
+  fs.writeFileSync(path.join(dir, 'watched.html'), POSTER);
+  const ev = await sub.got;
+  assert.equal(ev.rel, 'watched.html');
+});
+
+test('review PUT refuses an element sel that is not a plain name (the id guard, for the other anchor)', async () => {
+  const r = await put('/api/review', { path: 'poster.html', review: { items: [
+    { id: 'cbad', kind: 'comment', by: 'you', status: 'open',
+      anchor: { element: { sel: '[data-sc=x" onload=alert(1)]' }, quote: 'x' }, thread: [] }] } });
+  assert.equal(r.status, 400);
+  assert.match((await r.json()).error, /invalid element sel/);
+});
+
+// ---------- the Node-side resolution rule (lib/element.js) ----------
+
+test('an element reference normalizes from all three forms an agent might type', () => {
+  for (const ref of ['headline', '[data-sc=headline]', '[data-sc="headline"]', "[data-sc='headline']"])
+    assert.equal(Element.parseRef(ref).sel, '[data-sc=headline]', `${ref} names the data-sc element`);
+  assert.equal(Element.parseRef('#sub').sel, '#sub');
+  // An id and a data-sc value that read alike are two different attributes, so the sel keeps them apart.
+  assert.notEqual(Element.parseRef('#headline').sel, Element.parseRef('headline').sel);
+  for (const bad of ['a b', '.cls', 'x"onload=1', '', '[class=x]'])
+    assert.ok(Element.parseRef(bad).error, `${JSON.stringify(bad)} is refused`);
+});
+
+test('element liveness is textual in Node: the attribute, or the signature after tag-stripping', () => {
+  assert.equal(Element.isLive(POSTER, { sel: '[data-sc=headline]' }), true, 'a double-quoted attribute');
+  assert.equal(Element.isLive(POSTER, { sel: '[data-sc=cta]' }), true, 'a single-quoted one');
+  assert.equal(Element.isLive(POSTER, { sel: '#sub' }), true, 'an id');
+  assert.equal(Element.isLive('<h1 id=hero>x</h1>', { sel: '#hero' }), true, 'an unquoted one');
+  assert.equal(Element.isLive('<h1 id=heroic>x</h1>', { sel: '#hero' }), false, 'and not a longer name that starts the same');
+  assert.equal(Element.isLive('<p data-id="sub">x</p>', { sel: '#sub' }), false, 'nor a different attribute holding the value');
+  assert.equal(Element.isLive('<p id="sub">x</p>', { sel: '[data-sc=sub]' }), false, 'an id is not a data-sc value');
+
+  // The signature half: the attribute is gone, the content is not. Tags become spaces and the shared
+  // matcher does the rest, so a signature spanning the source's line breaks still resolves.
+  const relabelled = POSTER.replace('data-sc="headline"', 'class="big"');
+  assert.equal(Element.isLive(relabelled, { sel: '[data-sc=headline]' }), false, 'attribute gone, no signature');
+  assert.equal(Element.isLive(relabelled, { sel: '[data-sc=headline]', sig: 'Train your own image gen model' }), true);
+  assert.equal(Element.isLive(relabelled, { sel: '[data-sc=headline]', sig: 'Train your own text model' }), false);
+  const wrapped = '<div>\n  <h1 class="big">Train your own\n  image gen model</h1>\n</div>';
+  assert.equal(Element.isLive(wrapped, { sel: '[data-sc=headline]', sig: 'Train your own image gen model' }), true,
+    'the signature goes through public/anchor.js, so whitespace normalizes exactly as a quote does');
+});
+
+test('mergeItem backfills path and sig onto an element anchor without clobbering the rest', () => {
+  const { mergeItem } = require('./lib/review.js');
+  const stored = { id: 'c1', kind: 'comment', by: 'claude', status: 'open',
+    anchor: { element: { sel: '[data-sc=headline]' }, quote: 'headline · Train your own image gen model' },
+    thread: [{ by: 'claude', at: '2026-08-13T10:00:00Z', text: 'too long' }] };
+  // What the picker sends once it has resolved the same element in a real DOM: the anchor alone.
+  const merged = mergeItem(stored, { id: 'c1', anchor: { element: { path: 'main>h1', sig: 'Train your own image gen model' } } });
+  assert.deepEqual(merged.anchor.element,
+    { sel: '[data-sc=headline]', path: 'main>h1', sig: 'Train your own image gen model' });
+  assert.equal(merged.anchor.quote, stored.anchor.quote, 'the synthesized quote every surface reads survives');
+  assert.equal(merged.thread.length, 1);
+  assert.equal(merged.status, 'open');
+});
+
+test('a text anchor still REPLACES on merge — reanchor must not inherit the old occurrence', () => {
+  const { mergeItem } = require('./lib/review.js');
+  const stored = { id: 'c1', kind: 'comment', status: 'open', anchor: { quote: 'old', occurrence: 3 }, thread: [] };
+  const merged = mergeItem(stored, { id: 'c1', anchor: { quote: 'new' } });
+  assert.deepEqual(merged.anchor, { quote: 'new' }, 'the element merge is scoped to element anchors');
+});
+
+// ---------- `sidecar elements` ----------
+
+test('elements lists what an asset offers to anchor to: label, tag, and its text', () => {
+  const d = assetDir();
+  const out = cli(d, 'elements', 'poster.html');
+  assert.match(out, /4 anchorable elements/);
+  assert.match(out, /\[data-sc=headline\]\s+h1\s+Train your own image gen model/);
+  assert.match(out, /#sub\s+p\s+Ten minutes, no GPU required\./);
+  assert.match(out, /\[data-sc=cta\]\s+a\s+Get started/);
+  assert.match(out, /\[data-sc=shot\]\s+img/, 'a void element is anchorable and simply has no text');
+  assert.doesNotMatch(out, /footer/, 'an element carrying neither attribute is not anchorable');
+  assert.match(out, /sidecar comment poster\.html --element headline/, 'and it names the command that uses one');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('elements is regex extraction, and these are its honest limits', () => {
+  const d = assetDir();
+  fs.writeFileSync(path.join(d, 'messy.html'), [
+    '<!-- <div data-sc="commented">never rendered</div> -->',
+    '<p data-sc="twin">first</p>',
+    '<p data-sc="twin">second</p>',
+    '<div data-sc="unclosed">open',
+    '<p>the next paragraph</p>',
+  ].join('\n'));
+  const out = cli(d, 'elements', 'messy.html');
+  // Nothing here knows what a comment is, so an attribute inside one is listed like any other.
+  assert.match(out, /commented/);
+  // Two elements sharing a label are both listed. The collision is real; hiding one would make
+  // `elements` disagree with the file, and `check --element` says which way the frame will resolve it.
+  assert.equal((out.match(/data-sc=twin/g) || []).length, 2);
+  assert.match(cli(d, 'check', 'messy.html', '--element', 'twin'), /2 elements match .* not unique/);
+  // A tag that never closes has no end to read to, so its snippet runs on into what follows.
+  assert.match(out, /\[data-sc=unclosed\]\s+div\s+open the next paragraph/);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('elements refuses a markdown document, and names the anchor kind that document does take', () => {
+  const d = assetDir();
+  const e = cliFails(d, 'elements', 'doc.md');
+  assert.equal(e.status, 2);
+  assert.match(e.stderr, /is markdown/);
+  assert.match(e.stderr, /--quote/);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+// ---------- comment / flag on an asset ----------
+
+test('comment --element takes all three reference forms and stores one sel', () => {
+  const d = assetDir();
+  cli(d, 'comment', 'poster.html', '--element', 'headline', '--text', 'bare data-sc value');
+  cli(d, 'comment', 'poster.html', '--element', '[data-sc=cta]', '--text', 'selector form');
+  cli(d, 'comment', 'poster.html', '--element', '#sub', '--text', 'id form');
+  const sels = scAt(d, 'poster.html').items.map(i => i.anchor.element.sel);
+  assert.deepEqual(sels, ['[data-sc=headline]', '[data-sc=cta]', '#sub']);
+  const [first] = scAt(d, 'poster.html').items;
+  assert.equal(first.anchor.quote, 'headline · Train your own image gen model',
+    'the quote is synthesized from the label and the text, and is what every surface reads');
+  assert.equal(first.anchor.element.path, undefined, 'path and sig stay absent until the picker resolves them');
+  assert.equal(first.anchor.element.sig, undefined);
+  assert.equal(first.status, 'open');
+  assert.equal(first.kind, 'comment');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('flag works on an element too, and the anchor is validated before anything is written', () => {
+  const d = assetDir();
+  cli(d, 'flag', 'poster.html', '--element', 'cta', '--text', 'the link goes nowhere');
+  assert.equal(scAt(d, 'poster.html').items[0].flag, true);
+  const e = cliFails(d, 'comment', 'poster.html', '--element', 'ghost', '--text', 'x');
+  assert.equal(e.status, 1);
+  assert.match(e.stderr, /no element \[data-sc=ghost\] in the file/);
+  assert.match(e.stderr, /sidecar elements/, 'and it names the command that would have shown the real ones');
+  assert.equal(scAt(d, 'poster.html').items.length, 1, 'nothing written');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('a sel that is not a plain name is refused at write time, as an item id is', () => {
+  const d = assetDir();
+  const e = cliFails(d, 'comment', 'poster.html', '--element', '[data-sc=a b]', '--text', 'x');
+  assert.equal(e.status, 2);
+  assert.match(e.stderr, /plain name/);
+  assert.ok(!fs.existsSync(path.join(d, 'poster.html.sidecar.json')), 'no sidecar written');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('the two cross-kind refusals: --quote on an asset, --element on markdown', () => {
+  const d = assetDir();
+  const onAsset = cliFails(d, 'comment', 'poster.html', '--quote', 'Get started', '--text', 'x');
+  assert.equal(onAsset.status, 2);
+  assert.match(onAsset.stderr, /is an asset/);
+  assert.match(onAsset.stderr, /--element/);
+  const onMarkdown = cliFails(d, 'comment', 'doc.md', '--element', 'headline', '--text', 'x');
+  assert.equal(onMarkdown.status, 2);
+  assert.match(onMarkdown.stderr, /is markdown/);
+  assert.match(onMarkdown.stderr, /--quote/);
+  assert.ok(!fs.existsSync(path.join(d, 'poster.html.sidecar.json')));
+  assert.ok(!fs.existsSync(path.join(d, 'doc.md.sidecar.json')));
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('the verbs that rewrite the document refuse an asset outright', () => {
+  const d = assetDir();
+  for (const [verb, ...rest] of [['suggest', '--quote', 'Get started', '--replacement', 'x'],
+                                 ['answer', 'c-nothing', '--replacement', 'x'],
+                                 ['reanchor', 'c-nothing', '--quote', 'x']]) {
+    const e = cliFails(d, verb, 'poster.html', ...rest);
+    assert.equal(e.status, 2, `${verb} should refuse`);
+    assert.match(e.stderr, /is an asset/);
+    assert.match(e.stderr, /read-only/);
+  }
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('add takes an element key, and refuses a suggestion anchored to one', () => {
+  const d = assetDir();
+  cliStdin(d, JSON.stringify([
+    { element: 'headline', text: 'too long for one line' },
+    { element: '#sub', text: 'is the GPU claim true?', flag: true },
+  ]), 'add', 'poster.html');
+  const items = scAt(d, 'poster.html').items;
+  assert.deepEqual(items.map(i => i.anchor.element.sel), ['[data-sc=headline]', '#sub']);
+  assert.equal(items[1].flag, true);
+  // An accept splices raw bytes into the document, and an asset is read-only, so the pair cannot exist.
+  const e = cliFailsStdin(d, JSON.stringify([{ element: 'headline', replacement: 'shorter' }]), 'add', 'poster.html');
+  assert.match(e.stderr, /suggestion cannot anchor to an element/);
+  assert.equal(scAt(d, 'poster.html').items.length, 2, 'nothing added');
+  // And the cross-kind refusals reach `add` too, by the same one rule.
+  assert.match(cliFailsStdin(d, JSON.stringify([{ quote: 'Get started', text: 'x' }]), 'add', 'poster.html').stderr, /is an asset/);
+  assert.match(cliFailsStdin(d, JSON.stringify([{ element: 'headline', text: 'x' }]), 'add', 'doc.md').stderr, /is markdown/);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+// ---------- check, show, orphan, digest ----------
+
+test('check --element pre-flights one element, and bare check lints the anchors already stored', () => {
+  const d = assetDir();
+  const ok = cli(d, 'check', 'poster.html', '--element', 'headline');
+  assert.match(ok, /unambiguous, safe to anchor/);
+  assert.match(ok, /<h1>\s+Train your own image gen model/);
+  const miss = cliFails(d, 'check', 'poster.html', '--element', 'ghost');
+  assert.equal(miss.status, 1);
+  assert.match(miss.stderr, /no element \[data-sc=ghost\]/);
+  // --quote and --element check different anchor kinds, so each is refused on the other's document.
+  assert.match(cliFails(d, 'check', 'poster.html', '--quote', 'Get started').stderr, /is an asset/);
+  assert.match(cliFails(d, 'check', 'doc.md', '--element', 'headline').stderr, /is markdown/);
+
+  cli(d, 'comment', 'poster.html', '--element', 'headline', '--text', 'x');
+  assert.match(cli(d, 'check', 'poster.html'), /ok {3}c-headline.*\[data-sc=headline\]/);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('show prints an element item like any other, and says why one orphaned', () => {
+  const d = assetDir();
+  cli(d, 'comment', 'poster.html', '--element', 'cta', '--text', 'the link goes nowhere');
+  const before = cli(d, 'show', 'poster.html');
+  assert.match(before, /1 item/);
+  assert.match(before, /comment {2}OPEN/);
+  assert.match(before, /@ "cta · Get started"/);
+  assert.match(before, /claude: the link goes nowhere/);
+
+  fs.writeFileSync(path.join(d, 'poster.html'), POSTER.replace("data-sc='cta'", 'class="btn"'));
+  const after = cli(d, 'show', 'poster.html');
+  assert.match(after, /ORPHANED/);
+  assert.match(after, /\[the element is gone\]/);
+  assert.equal(scAt(d, 'poster.html').items[0].orphanReason, 'element-changed');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('an element item orphans when its element goes, and revives when it comes back', () => {
+  const d = assetDir();
+  cli(d, 'comment', 'poster.html', '--element', 'headline', '--text', 'too long');
+  const id = scAt(d, 'poster.html').items[0].id;
+  const gone = POSTER.replace('<h1 data-sc="headline">Train your own image gen model</h1>', '<h1>Something else</h1>');
+  fs.writeFileSync(path.join(d, 'poster.html'), gone);
+  cli(d, 'show', 'poster.html');
+  assert.equal(scAt(d, 'poster.html').items[0].status, 'orphaned');
+  fs.writeFileSync(path.join(d, 'poster.html'), POSTER);
+  cli(d, 'show', 'poster.html');
+  const back = scAt(d, 'poster.html').items[0];
+  assert.equal(back.id, id);
+  assert.equal(back.status, 'open', 'revival works exactly as it does for a text anchor');
+  assert.equal(back.orphanReason, undefined);
+  assert.equal(back.orphanedAt, undefined);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('an element item rides the digest and the cursor untouched', () => {
+  const d = assetDir();
+  cli(d, 'comment', 'poster.html', '--element', 'headline', '--text', 'too long');
+  cli(d, 'digest', 'poster.html');
+  assert.match(cli(d, 'digest', 'poster.html'), /nothing new/, 'the cursor advanced over an element item');
+
+  // The human answers on the card, exactly as they would on a text anchor.
+  const id = scAt(d, 'poster.html').items[0].id;
+  const review = scAt(d, 'poster.html');
+  review.items[0].thread.push({ by: 'you', at: '2026-08-13T12:00:00Z', text: 'shorten it to four words' });
+  fs.writeFileSync(path.join(d, 'poster.html.sidecar.json'), JSON.stringify(review, null, 2));
+  const reply = cli(d, 'digest', 'poster.html');
+  assert.match(reply, /REPLY @ “headline · Train your own image gen model”: shorten it/);
+  assert.match(cli(d, 'reply', 'poster.html', id, 'four words it is'), /updated /);
+
+  // And an orphan reaches the digest with the reason the element rule gives it.
+  fs.writeFileSync(path.join(d, 'poster.html'), POSTER.replace('data-sc="headline"', 'class="big"'));
+  assert.match(cli(d, 'digest', 'poster.html'), /ORPHANED @ “headline · .*” \[the element is gone\]/);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('an asset keeps the same sibling files a markdown document does', () => {
+  const d = assetDir();
+  cli(d, 'comment', 'poster.html', '--element', 'headline', '--text', 'x');
+  cli(d, 'digest', 'poster.html');
+  for (const suffix of ['.sidecar.json', '.sidecar.seen.json', '.sidecar.seen.base.claude'])
+    assert.ok(fs.existsSync(path.join(d, 'poster.html' + suffix)), `poster.html${suffix} is written`);
+  fs.rmSync(d, { recursive: true, force: true });
+});

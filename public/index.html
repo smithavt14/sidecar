@@ -693,6 +693,18 @@ function renderMd(tokens) { return DOMPurify.sanitize(marked.parser(tokens)); }
 function renderDoc() {
   const doc = $('doc');
   doc.innerHTML = '';
+  // TEMPORARY (v1.7.0 phase 2). An asset is HTML reviewed as a rendered visual, and the sandboxed
+  // frame that renders it lands in phase 3. Until then say so plainly rather than running the file
+  // through the markdown path, which would draw its source as text under an editable surface.
+  if (state.kind === 'asset') {
+    doc.contentEditable = 'false';
+    blocks = [];
+    const el = document.createElement('div');
+    el.className = 'block';
+    el.textContent = 'asset — rendering lands in phase 3';
+    doc.appendChild(el);
+    return;
+  }
   const tokens = marked.lexer(state.markdown);
   blocks = []; let off = 0;
   for (const t of tokens) {

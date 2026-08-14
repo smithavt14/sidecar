@@ -5,19 +5,42 @@ For *driving* sidecar as an agent (reviewing a document with a human), see
 
 ## Shape
 
-No build step. Nine files carry the whole tool:
+No build step. Ten files carry the whole tool:
 
 | File | What it is |
 |---|---|
 | `server.js` | HTTP server + fs-watch → SSE. Boots express; dispatches `sidecar <verb>` to the CLI first. |
-| `lib/cli.js` | The agent's entire command surface. Every write verb funnels into one `applyItems()`. |
+| `lib/cli.js` | The agent's entire command surface. Every write verb funnels into one `applyItems()`. Holds the two extension allowlists, `MARKDOWN` and `ASSETS`, and `docKind()` over them. |
 | `lib/review.js` | Load/save/merge the `.sidecar.json`, and the one place the pre-1.7 `.review.*` names still exist. Shared by the server and the CLI so both merge identically. |
+| `lib/element.js` | The element anchor: reference normalization, sel validation, and the Node-side liveness rule. |
 | `lib/assets.js` | Where an attached image lands and what counts as one. Shared by the upload route and `--image`. |
 | `lib/wait.js` | `sidecar wait` — the fs-watching reactive-loop primitive. Server-independent by design. |
 | `public/index.html` | The entire frontend: rendering, contenteditable editor, review rail. |
 | `public/anchor.js` | The ONE content-anchor matcher, loaded by both the browser and Node. |
 | `public/serialize.js` | The tight-diff serialize/reindex round-trip, shared with the Node tests. |
 | `public/flow.js` | ```flow fences → SVG. Pure string in/out; no DOM, no dependency. |
+
+## Two document kinds, two anchor kinds
+
+A document is markdown or an **asset** (an `.html` file reviewed as a rendered visual). The two
+allowlists in `lib/cli.js` are the single source for that, and `docKind()` over them gates the three
+places a kind is decided: the file-picker walk, the fs watcher, and every CLI verb. `/api/state`
+returns the kind and refuses anything in neither list, which is what stopped `?f=page.html` loading
+through the markdown path.
+
+An asset is read-only in the viewer. `/api/save` and `/api/format` refuse one, `suggest`, `answer`
+and `reanchor` refuse one from the CLI, and an accept would splice raw bytes into HTML, so a
+suggestion can never carry an element anchor. The agent edits the file itself and the watcher
+reloads the frame.
+
+Items on an asset anchor to an **element** rather than to a quote: `anchor.element = { sel, path,
+sig }`, plus a synthesized `anchor.quote` (the label and a text snippet) so cards, the digest and
+`show` keep reading one field. `sel` is what an agent knows from a terminal; `path` and `sig` are
+backfilled by the browser picker, which is why `mergeItem` merges an element anchor field by field
+instead of replacing it. Node has no DOM, so liveness there is textual (`lib/element.js`): the
+attribute is still written in the file, or the signature still reads out of it after tags are
+stripped. A dead one orphans with `orphanReason: 'element-changed'` and revives the same way a text
+anchor does.
 
 ## What sidecar actually promises
 
@@ -78,8 +101,9 @@ hover title in the UI.
   root, Host-header allowlisting, DOMPurify on rendered markdown, `git diff` run without a shell
   (the two surviving call sites: the server's /api/state and `show`'s --stat; the digest diffs
   in-process against its own baseline), atomic blocks emitting their source bytes rather than
-  going through turndown, and the legacy rename moving the full sibling set while never merging two
-  reviews when both names are present.
+  going through turndown, the legacy rename moving the full sibling set while never merging two
+  reviews when both names are present, `/api/state` refusing a file in neither allowlist, save and
+  format refusing an asset, and an element `sel` being validated wherever an item id is.
 
 ## Attached images
 
