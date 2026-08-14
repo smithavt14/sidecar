@@ -381,12 +381,20 @@
       return null;
     }
 
+    // The page cannot see the pointer cross into this frame: under site isolation the frame is
+    // another process and the embedding element's mouseenter never fires (real Chrome isolates
+    // sandboxed frames; headless engines mostly do not, which is how this shipped). This document
+    // sees every move, so it owns the fact and reports the crossings — the page's Alt forwarding
+    // gates on them.
+    let inside = false;
+    function sayPointer(next) { if (next !== inside) { inside = next; send('pointer', { inside: next }); } }
+
     // mousemove as well as mouseover: an overlay that covers the canvas means the top element never
     // changes, so mouseover stops firing while the layers underneath the cursor change completely.
-    doc.addEventListener('mousemove', onPoint, true);
-    doc.addEventListener('mouseover', onPoint, true);
-    doc.addEventListener('mouseout', (e) => { if (!e.relatedTarget) setHover(null); }, true);
-    win.addEventListener('blur', () => setHover(null));
+    doc.addEventListener('mousemove', (e) => { sayPointer(true); onPoint(e); }, true);
+    doc.addEventListener('mouseover', (e) => { sayPointer(true); onPoint(e); }, true);
+    doc.addEventListener('mouseout', (e) => { if (!e.relatedTarget) { sayPointer(false); setHover(null); } }, true);
+    win.addEventListener('blur', () => { sayPointer(false); setHover(null); });
     // Alt reaches here only while the FRAME has focus, which it does not until it is clicked. The page
     // forwards the same key as a `step` message whenever the pointer is over the frame (public/index.html),
     // so the first press works too. e.repeat is dropped: holding Alt would spin through the stack.

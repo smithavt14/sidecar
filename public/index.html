@@ -789,9 +789,11 @@ function buildAssetFrame() {
   // comment on #assetFrameTpl.
   frameEl = $('assetFrameTpl').content.firstElementChild.cloneNode(true);
   frameGeometry = {}; frameAnchors = {}; frameNatural = null; frameScale = 1;
-  // Is the pointer over the frame? The page cannot ask, and it gets no mousemove while the cursor is
-  // inside an iframe, only the enter and the leave. That pair is what makes the Alt forwarding below
-  // safe: the key is a picker key only while the human is pointing at the render.
+  // Is the pointer over the frame? The AUTHORITY is the picker's `pointer` message: under site
+  // isolation the frame is another process and these enter/leave listeners never fire (real Chrome),
+  // while the picker sees every move from inside. The pair stays as a fallback for engines that do
+  // deliver it — both describe the same truth, so they cannot disagree for long.
+  pointerInFrame = false;
   frameEl.addEventListener('mouseenter', () => { pointerInFrame = true; });
   frameEl.addEventListener('mouseleave', () => { pointerInFrame = false; });
   wrap.appendChild(frameEl);
@@ -872,6 +874,9 @@ window.addEventListener('message', (e) => {
       scheduleDock();
       break;
     case 'geometry': frameGeometry = m.rects || {}; scheduleDock(); break;
+    // The picker's own report of "the pointer is over me" — the only report that arrives in every
+    // engine (see buildAssetFrame). The Alt-to-step forwarding below gates on it.
+    case 'pointer': pointerInFrame = !!m.inside; break;
     case 'anchors': frameAnchors = m.anchors || {}; break;
     case 'backfill': backfillElement(m.id, m.element); break;
     // The cursor affordance: the header's status slot says what a click would land on. An asset never
