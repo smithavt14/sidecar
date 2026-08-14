@@ -3,6 +3,47 @@
 All notable changes to sidecar. Versions follow [semver](https://semver.org); dates are the day the
 version was tagged.
 
+## 1.7.0 (2026-08-14)
+
+**Sidecar reviews posters now.** Open an `.html` file and it renders as it was designed, at scale,
+inside a sandboxed frame: styles intact, references resolved, and none of the asset's own scripts
+ever running. Hover outlines the element under the cursor, a click opens the composer pinned to
+that element, and the comment anchors to the element itself: a `data-sc` attribute or `id` when the
+element has one, a structural path with a text signature when it does not. The same anchor works
+from the terminal (`comment --element`, a new `elements` listing, `check --element`), so a
+picker-made card and a CLI-made card on the same element read identically. Markdown documents are
+untouched; the two kinds share the sidebar, the digest, and the sibling file.
+
+**The element is the referent, its text is just evidence.** The first live review session found the
+rule this feature needed: asking for "change this to Alex Smith" and getting it must never orphan
+the card that asked. An edit that leaves the element in place keeps the card live and quietly
+refreshes the stored signature. Orphaning now means the element is gone. Where the server cannot
+verify a structural path without a DOM it abstains and says so (`check` grew a third answer), and
+the frame settles the truth on its next open.
+
+**Option steps the layer stack.** A poster is layers, and hover only ever reached the top one, so
+an image under a scrim was uncommentable except through gaps. Tapping Option while hovering steps
+the target one layer deeper (the label shows the depth), and a click takes whatever is outlined.
+
+**The sibling files are named after the tool.** `<doc>.review.json` and its seen, baseline, and
+assets siblings are now `<doc>.sidecar.*`. The whole set renames itself the first time a document
+is loaded, one line on stderr says so, and a directory holding both names is warned about loudly
+and never merged. `doctor` reports leftover `.review.*` files and stale `*.review.seen*` gitignore
+patterns.
+
+**Also:**
+
+- The `/assets` route serves font files (`woff2`, `woff`, `ttf`, `otf`) so posters keep their
+  typefaces inside the frame.
+- Suggestions are refused on assets, by every verb that could create one: accepting a text splice
+  into markup would corrupt the file, so the refusal is the feature.
+- A frame sized while its page had no layout (a hidden pane, a background tab) used to freeze at
+  scale zero until a window resize; sizing now waits for a real measurement.
+
+**Upgrading:** re-arm any `sidecar wait` armed before the upgrade, same as every release. The
+rename touches the working tree of any repo that tracks a `.review.json`: the first load renames it
+on disk, and that rename wants a commit.
+
 ## 1.6.0 (2026-08-13)
 
 **A reply to a fresh card no longer vanishes.** Replying to a card the agent created after its last
