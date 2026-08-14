@@ -59,7 +59,7 @@ sidecar doctor                # is a server running, on what code, and what URLs
 sidecar doctor path/to/doc.md # …including the deep links for that specific file
 ```
 
-`doctor` also warns when the host repo has not gitignored your digest state (`*.review.seen*`). Act
+`doctor` also warns when the host repo has not gitignored your digest state (`*.sidecar.seen*`). Act
 on that warning when you see it; sidecar never edits a host `.gitignore` itself.
 
 If nothing is running, start one yourself — it serves a file or a whole directory:
@@ -103,7 +103,7 @@ sidecar suggest doc.md \
 ### Attaching an image
 
 `comment` and `reply` take `--image <path>`, repeatable. The file is copied into
-`<doc>.review.assets/` and appended to your message as a markdown link — so it keeps rendering after
+`<doc>.sidecar.assets/` and appended to your message as a markdown link — so it keeps rendering after
 whatever scratch directory you generated it in is gone.
 
 ```bash
@@ -113,7 +113,7 @@ sidecar comment doc.md --quote "the hero section" --text "This is what it looks 
 
 **They can attach images too** — pasting or dropping a screenshot into a comment box puts the same
 markdown link in the message. So a comment whose body contains
-`![](doc.md.review.assets/ab12cd34ef56.png)` is a screenshot they wanted you to look at: **open that
+`![](doc.md.sidecar.assets/ab12cd34ef56.png)` is a screenshot they wanted you to look at: **open that
 path with your own file tools and actually read it before you answer.** The path is relative to the
 document. Replying to a screenshot you never opened is the fastest way to answer the wrong question.
 
@@ -178,15 +178,15 @@ sidecar check doc.md               # lint every anchor in the sidecar
 sidecar check doc.md --quote "…"   # pre-flight one quote before you write it
 ```
 
-`wait` and `digest` share a persistent last-seen cursor (a sibling `foo.md.review.seen.json`, keyed by
+`wait` and `digest` share a persistent last-seen cursor (a sibling `foo.md.sidecar.seen.json`, keyed by
 your `SIDECAR_AGENT`), so each reports only what changed since the last time you looked and advances the
-marker. That covers the document too: a sibling `foo.md.review.seen.base.<agent>` holds the doc text as
+marker. That covers the document too: a sibling `foo.md.sidecar.seen.base.<agent>` holds the doc text as
 of your last look, and the digest's doc-changes section is a diff against it — since your last look, not
 since the last commit, and independent of git entirely (untracked files and non-git directories diff the
 same). `wait` blocks until there IS a change and returns that digest; `digest` reports the delta right
 now. Both print ids, so you can `reply`/`answer` straight off a digest without a `show`. `--peek` reads
 without advancing. Cursor and baseline are agent workspace state — never commit them (they're
-git-ignored, pattern `*.review.seen*`); delete them to replay everything.
+git-ignored, pattern `*.sidecar.seen*`); delete them to replay everything.
 
 ---
 
@@ -352,7 +352,7 @@ call. It also means a wake you sit on looks exactly like what it is.
 6. Repeat until the digest says `DONE: true`, then make **one commit**.
 
 Committing mid-review is safe — the digest diffs against its own baseline, not against HEAD, so a
-checkpoint commit costs nothing. Still prefer to land the finished doc and its `.review.json` together
+checkpoint commit costs nothing. Still prefer to land the finished doc and its `.sidecar.json` together
 in that final commit: half-decided reviews make weak history.
 
 **The digest is complete since your last look — trust it, don't skip it.** It is baselined on a
@@ -384,20 +384,25 @@ There is deliberately no command for it.
 
 ## What gets stored
 
-Each reviewed `foo.md` gets a sibling `foo.md.review.json` holding the items. You should not need to
+Each reviewed `foo.md` gets a sibling `foo.md.sidecar.json` holding the items. You should not need to
 read or write it directly — `sidecar show` is the readable view and the commands are the writable one —
 but it is plain JSON, it belongs in git alongside the document, and the schema is stable.
 
 Commit it with the document when the review ends — and until you do, remember a `git checkout -f`
 or `git stash` discards the whole review — every card and comment, not just an anchor (checkpoint
 commits mid-review are safe and protect against exactly that). There are also two agent-state siblings,
-never committed (gitignored as `*.review.seen*`): `foo.md.review.seen.json`, the cursor of what you have
-already read, and `foo.md.review.seen.base.<agent>`, the doc text as of your last look, which the
+never committed (gitignored as `*.sidecar.seen*`): `foo.md.sidecar.seen.json`, the cursor of what you have
+already read, and `foo.md.sidecar.seen.base.<agent>`, the doc text as of your last look, which the
 digest's doc-changes diff is computed against.
 
-Images attached to comments are files in `<doc>.review.assets/`, named by content hash, referenced
+Images attached to comments are files in `<doc>.sidecar.assets/`, named by content hash, referenced
 from the message as ordinary markdown. Nothing is stored as bytes inside the JSON, so it stays a small
 text file you can diff — and the pictures commit and delete alongside the review that holds them.
+
+All four were named `<doc>.review.*` before 1.7.0. Opening the document renames the set, printing one
+line on stderr when it does, so a review written by an older sidecar keeps working. If both names are
+on disk, the `.sidecar.json` is the live one and the `.review.json` is ignored rather than merged;
+`sidecar doctor` lists whatever is still on the old names.
 
 Statuses: suggestions run `pending → accepted | rejected`; comments run `open → resolved`; either can
 become `orphaned`. Items are stamped with `by` (your agent name — set `SIDECAR_AGENT` if `claude` is

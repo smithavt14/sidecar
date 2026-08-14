@@ -11,7 +11,7 @@ No build step. Nine files carry the whole tool:
 |---|---|
 | `server.js` | HTTP server + fs-watch → SSE. Boots express; dispatches `sidecar <verb>` to the CLI first. |
 | `lib/cli.js` | The agent's entire command surface. Every write verb funnels into one `applyItems()`. |
-| `lib/review.js` | Load/save/merge the `.review.json`. Shared by the server and the CLI so both merge identically. |
+| `lib/review.js` | Load/save/merge the `.sidecar.json`, and the one place the pre-1.7 `.review.*` names still exist. Shared by the server and the CLI so both merge identically. |
 | `lib/assets.js` | Where an attached image lands and what counts as one. Shared by the upload route and `--image`. |
 | `lib/wait.js` | `sidecar wait` — the fs-watching reactive-loop primitive. Server-independent by design. |
 | `public/index.html` | The entire frontend: rendering, contenteditable editor, review rail. |
@@ -77,17 +77,18 @@ hover title in the UI.
   dropping the other side's work, decided statuses never regressing, path confinement to the served
   root, Host-header allowlisting, DOMPurify on rendered markdown, `git diff` run without a shell
   (the two surviving call sites: the server's /api/state and `show`'s --stat; the digest diffs
-  in-process against its own baseline), and atomic blocks emitting their source bytes rather than
-  going through turndown.
+  in-process against its own baseline), atomic blocks emitting their source bytes rather than
+  going through turndown, and the legacy rename moving the full sibling set while never merging two
+  reviews when both names are present.
 
 ## Attached images
 
-An attachment is not a schema field. A pasted screenshot becomes a file in `<doc>.review.assets/` and a
+An attachment is not a schema field. A pasted screenshot becomes a file in `<doc>.sidecar.assets/` and a
 plain markdown link in the comment body, which the existing `/assets` route already resolves because it
 is the same doc-relative form a document's own images use. That is why the feature added an upload
 endpoint and no rendering, no storage format, and no new item kind.
 
-Bytes stay out of the `.review.json` deliberately. It is rewritten and merged on every reply and pushed
+Bytes stay out of the `.sidecar.json` deliberately. It is rewritten and merged on every reply and pushed
 to the browser over SSE, so a base64 screenshot in there would tax every unrelated write; `sidecar show`
 would print a wall of it at the agent; and "your files on your disk" stops being literally true the
 moment a picture only exists inside a JSON string.

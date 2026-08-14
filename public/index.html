@@ -1197,7 +1197,7 @@ function openLinkInput() {
 
 // ---------- images in comments ----------
 // A pasted screenshot becomes a FILE next to the review and a markdown link in the comment body —
-// not a base64 blob in the sidecar. Three reasons it has to be a file: the .review.json is rewritten
+// not a base64 blob in the sidecar. Three reasons it has to be a file: the .sidecar.json is rewritten
 // and merged on every reply, and megabytes of base64 in there make every write and every SSE push
 // expensive; `sidecar show` would print an unreadable wall to the agent; and the whole promise is
 // "these are your files on your disk", which a blob inside a JSON quietly stops being true of.

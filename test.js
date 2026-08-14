@@ -7,7 +7,7 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
-const { spawn, execSync, execFileSync } = require('child_process');
+const { spawn, spawnSync, execSync, execFileSync } = require('child_process');
 const { JSDOM } = require('jsdom');
 
 // mirror the server's content hash (sha1 hex, first 12) so tests can assert the returned hash
@@ -166,7 +166,7 @@ test('review PUT merges by id — agent items written between load and save surv
   const agentItem = { id: 'agent1', kind: 'comment', by: 'claude',
     anchor: { quote: 'Closing paragraph.', occurrence: 0 }, status: 'open',
     thread: [{ by: 'claude', at: 'x', text: 'agent note' }] };
-  fs.writeFileSync(path.join(dir, 'doc.md.review.json'),
+  fs.writeFileSync(path.join(dir, 'doc.md.sidecar.json'),
     JSON.stringify({ schema: 1, items: [agentItem] }));
   const clientItem = { id: 'alex1', kind: 'comment', by: 'alex',
     anchor: { quote: 'item one', occurrence: 0 }, status: 'open',
@@ -178,7 +178,7 @@ test('review PUT merges by id — agent items written between load and save surv
 });
 
 test('review PUT same-id merge unions threads — a stale client PUT cannot drop the agent reply (H1)', async () => {
-  const p = path.join(dir, 'doc.md.review.json');
+  const p = path.join(dir, 'doc.md.sidecar.json');
   // 1) client seeds c1 with one human message.
   const human1 = { by: 'alex', at: '2026-07-18T10:00:00Z', text: 'first human note' };
   await put('/api/review', { path: 'doc.md', review: { schema: 1, items: [
@@ -205,7 +205,7 @@ test('review PUT same-id merge unions threads — a stale client PUT cannot drop
 });
 
 test('review PUT same-id merge does not regress a decided status back to open', async () => {
-  const p = path.join(dir, 'doc.md.review.json');
+  const p = path.join(dir, 'doc.md.sidecar.json');
   // on disk: c2 already resolved.
   await put('/api/review', { path: 'doc.md', review: { schema: 1, items: [
     { id: 'c2', kind: 'comment', by: 'alex', anchor: { quote: 'item two', occurrence: 0 },
@@ -220,7 +220,7 @@ test('review PUT same-id merge does not regress a decided status back to open', 
 });
 
 test('review PUT same-id no-op merge: unchanged item keeps identical thread + status, no dupes', async () => {
-  const p = path.join(dir, 'doc.md.review.json');
+  const p = path.join(dir, 'doc.md.sidecar.json');
   const item = { id: 'c3', kind: 'comment', by: 'alex', anchor: { quote: 'Title', occurrence: 0 },
     status: 'open', thread: [
       { by: 'alex', at: '2026-07-18T08:00:00Z', text: 'a' },
@@ -234,23 +234,23 @@ test('review PUT same-id no-op merge: unchanged item keeps identical thread + st
 });
 
 test('accept applies replacement at exact anchor and settles the card', async () => {
-  const review = JSON.parse(fs.readFileSync(path.join(dir, 'doc.md.review.json'), 'utf8'));
+  const review = JSON.parse(fs.readFileSync(path.join(dir, 'doc.md.sidecar.json'), 'utf8'));
   review.items.push({ id: 'sug1', kind: 'suggestion', by: 'claude', status: 'pending',
     anchor: { quote: 'Closing paragraph.', occurrence: 0 }, replacement: 'Closing paragraph, improved.' });
-  fs.writeFileSync(path.join(dir, 'doc.md.review.json'), JSON.stringify(review));
+  fs.writeFileSync(path.join(dir, 'doc.md.sidecar.json'), JSON.stringify(review));
   const r = await post('/api/accept', { path: 'doc.md', id: 'sug1' });
   assert.equal(r.status, 200);
   const md = fs.readFileSync(path.join(dir, 'doc.md'), 'utf8');
   assert.match(md, /Closing paragraph, improved\./);
-  const after = JSON.parse(fs.readFileSync(path.join(dir, 'doc.md.review.json'), 'utf8'));
+  const after = JSON.parse(fs.readFileSync(path.join(dir, 'doc.md.sidecar.json'), 'utf8'));
   assert.equal(after.items.find(i => i.id === 'sug1').status, 'accepted');
 });
 
 test('accept with occurrence targets the right duplicate', async () => {
-  const review = JSON.parse(fs.readFileSync(path.join(dir, 'doc.md.review.json'), 'utf8'));
+  const review = JSON.parse(fs.readFileSync(path.join(dir, 'doc.md.sidecar.json'), 'utf8'));
   review.items.push({ id: 'sug2', kind: 'suggestion', by: 'claude', status: 'pending',
     anchor: { quote: 'Repeated line here.', occurrence: 1 }, replacement: 'Second copy, replaced.' });
-  fs.writeFileSync(path.join(dir, 'doc.md.review.json'), JSON.stringify(review));
+  fs.writeFileSync(path.join(dir, 'doc.md.sidecar.json'), JSON.stringify(review));
   const r = await post('/api/accept', { path: 'doc.md', id: 'sug2' });
   assert.equal(r.status, 200);
   const md = fs.readFileSync(path.join(dir, 'doc.md'), 'utf8');
@@ -266,10 +266,10 @@ test('accept with occurrence targets the right duplicate', async () => {
 // which the corrupted string also satisfies, so it passed for the whole time the bug existed.
 test('tolerant anchor matches visible text, but accept refuses to splice a half-marked span', async () => {
   const before = fs.readFileSync(path.join(dir, 'doc.md'), 'utf8');
-  const review = JSON.parse(fs.readFileSync(path.join(dir, 'doc.md.review.json'), 'utf8'));
+  const review = JSON.parse(fs.readFileSync(path.join(dir, 'doc.md.sidecar.json'), 'utf8'));
   review.items.push({ id: 'sug3', kind: 'suggestion', by: 'claude', status: 'pending',
     anchor: { quote: 'bold text', occurrence: 0 }, replacement: '**bold** prose' });
-  fs.writeFileSync(path.join(dir, 'doc.md.review.json'), JSON.stringify(review));
+  fs.writeFileSync(path.join(dir, 'doc.md.sidecar.json'), JSON.stringify(review));
 
   // It still resolves — the matcher is unchanged.
   const Anchor = require('./public/anchor.js');
@@ -283,7 +283,7 @@ test('tolerant anchor matches visible text, but accept refuses to splice a half-
   // Quoting the raw markdown gives a splice-safe span, and that applies cleanly.
   review.items.push({ id: 'sug3b', kind: 'suggestion', by: 'claude', status: 'pending',
     anchor: { quote: '**bold** text', occurrence: 0 }, replacement: '**bold** prose' });
-  fs.writeFileSync(path.join(dir, 'doc.md.review.json'), JSON.stringify(review));
+  fs.writeFileSync(path.join(dir, 'doc.md.sidecar.json'), JSON.stringify(review));
   const r2 = await post('/api/accept', { path: 'doc.md', id: 'sug3b' });
   assert.equal(r2.status, 200);
   const after = fs.readFileSync(path.join(dir, 'doc.md'), 'utf8');
@@ -293,20 +293,20 @@ test('tolerant anchor matches visible text, but accept refuses to splice a half-
 
 test('accept on a vanished anchor 409s and orphans the card, file untouched', async () => {
   const before = fs.readFileSync(path.join(dir, 'doc.md'), 'utf8');
-  const review = JSON.parse(fs.readFileSync(path.join(dir, 'doc.md.review.json'), 'utf8'));
+  const review = JSON.parse(fs.readFileSync(path.join(dir, 'doc.md.sidecar.json'), 'utf8'));
   review.items.push({ id: 'sug4', kind: 'suggestion', by: 'claude', status: 'pending',
     anchor: { quote: 'THIS TEXT DOES NOT EXIST ANYWHERE', occurrence: 0 }, replacement: 'x' });
-  fs.writeFileSync(path.join(dir, 'doc.md.review.json'), JSON.stringify(review));
+  fs.writeFileSync(path.join(dir, 'doc.md.sidecar.json'), JSON.stringify(review));
   const r = await post('/api/accept', { path: 'doc.md', id: 'sug4' });
   assert.equal(r.status, 409);
   assert.equal(fs.readFileSync(path.join(dir, 'doc.md'), 'utf8'), before);
-  const after = JSON.parse(fs.readFileSync(path.join(dir, 'doc.md.review.json'), 'utf8'));
+  const after = JSON.parse(fs.readFileSync(path.join(dir, 'doc.md.sidecar.json'), 'utf8'));
   assert.equal(after.items.find(i => i.id === 'sug4').status, 'orphaned');
 });
 
 test('orphan detection is idempotent — repeated reads do not rewrite the sidecar (no reload storms)', async () => {
   await state(); // may legitimately write once (annotate pass)
-  const p = path.join(dir, 'doc.md.review.json');
+  const p = path.join(dir, 'doc.md.sidecar.json');
   const m1 = fs.statSync(p).mtimeMs;
   await state(); await state(); await state();
   const m2 = fs.statSync(p).mtimeMs;
@@ -315,10 +315,10 @@ test('orphan detection is idempotent — repeated reads do not rewrite the sidec
 
 test('reject settles without touching the file', async () => {
   const before = fs.readFileSync(path.join(dir, 'doc.md'), 'utf8');
-  const review = JSON.parse(fs.readFileSync(path.join(dir, 'doc.md.review.json'), 'utf8'));
+  const review = JSON.parse(fs.readFileSync(path.join(dir, 'doc.md.sidecar.json'), 'utf8'));
   review.items.push({ id: 'sug5', kind: 'suggestion', by: 'claude', status: 'pending',
     anchor: { quote: 'item two', occurrence: 0 }, replacement: 'item 2' });
-  fs.writeFileSync(path.join(dir, 'doc.md.review.json'), JSON.stringify(review));
+  fs.writeFileSync(path.join(dir, 'doc.md.sidecar.json'), JSON.stringify(review));
   const r = await post('/api/reject', { path: 'doc.md', id: 'sug5' });
   assert.equal(r.status, 200);
   assert.equal(fs.readFileSync(path.join(dir, 'doc.md'), 'utf8'), before);
@@ -387,7 +387,7 @@ test('host allowlist: disallowed Host is 403, allowed host works', async () => {
 });
 
 test('accept is guarded against double-apply: second accept 409s, no double mutation', async () => {
-  const p = path.join(dir, 'doc.md.review.json');
+  const p = path.join(dir, 'doc.md.sidecar.json');
   const s = await state();
   // seed a unique target line whose anchor survives its own replacement (so a *missing* guard would re-splice)
   await put('/api/save', { path: 'doc.md', content: s.markdown + '\nA DBLX here.\n', baseHash: s.hash });
@@ -405,7 +405,7 @@ test('accept is guarded against double-apply: second accept 409s, no double muta
 });
 
 test('corrupt sidecar is surfaced, not silently clobbered by a review write', async () => {
-  const p = path.join(dir, 'doc.md.review.json');
+  const p = path.join(dir, 'doc.md.sidecar.json');
   const good = fs.readFileSync(p, 'utf8');           // snapshot valid sidecar
   fs.writeFileSync(p, '{ not valid json ');           // corrupt it
   const r = await put('/api/review', { path: 'doc.md',
@@ -670,7 +670,7 @@ test('reindex refreshes baselines after a tight save so the next diff measures a
 // ---------- P1: turn/session, threaded suggestions, the wait loop ----------
 
 test('review PUT preserves top-level session — last-writer-wins by `at` (no regress of a decision)', async () => {
-  const p = path.join(dir, 'doc.md.review.json');
+  const p = path.join(dir, 'doc.md.sidecar.json');
   const cur = JSON.parse(fs.readFileSync(p, 'utf8'));
   cur.session = { state: 'idle', at: '2026-07-19T03:00:00Z', done: true };   // a fresh decision on disk
   fs.writeFileSync(p, JSON.stringify(cur));
@@ -693,14 +693,14 @@ test('accept of a replyTo suggestion applies the edit AND resolves its parent co
   // Hermetic: its own file so it can't collide with the shared doc's accumulated edits.
   const f = path.join(dir, 'replydoc.md');
   fs.writeFileSync(f, '# R\n\nRESOLVEME target line.\n');
-  fs.writeFileSync(f + '.review.json', JSON.stringify({ schema: 1, items: [
+  fs.writeFileSync(f + '.sidecar.json', JSON.stringify({ schema: 1, items: [
     { id: 'par1', kind: 'comment', by: 'alex', status: 'open', anchor: { quote: 'RESOLVEME target line.', occurrence: 0 },
       thread: [{ by: 'alex', at: '2026-07-19T05:00:00Z', text: 'rewrite this' }] },
     { id: 'sug1', kind: 'suggestion', by: 'claude', status: 'pending', replyTo: 'par1',
       anchor: { quote: 'RESOLVEME target line.', occurrence: 0 }, replacement: 'RESOLVED replacement line.' }] }));
   const r = await post('/api/accept', { path: 'replydoc.md', id: 'sug1' });
   assert.equal(r.status, 200);
-  const after = JSON.parse(fs.readFileSync(f + '.review.json', 'utf8'));
+  const after = JSON.parse(fs.readFileSync(f + '.sidecar.json', 'utf8'));
   assert.equal(after.items.find(i => i.id === 'sug1').status, 'accepted');
   assert.equal(after.items.find(i => i.id === 'par1').status, 'resolved', 'parent comment resolves on accept');
   assert.match(fs.readFileSync(f, 'utf8'), /RESOLVED replacement line\./);
@@ -709,13 +709,13 @@ test('accept of a replyTo suggestion applies the edit AND resolves its parent co
 test('sidecar wait wakes on a new alex comment and exits 0 with a digest', async () => {
   const wf = path.join(dir, 'waitdoc.md');
   fs.writeFileSync(wf, '# W\n\nSome content here.\n');
-  fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [] }));
+  fs.writeFileSync(wf + '.sidecar.json', JSON.stringify({ schema: 1, items: [] }));
   // SIDECAR_PORT points at a dead port so the best-effort presence ping just errors out harmlessly.
   const w = spawn('node', [path.join(__dirname, 'server.js'), 'wait', wf, '--timeout', '10'],
     { env: { ...process.env, SIDECAR_PORT: '4990' }, stdio: 'pipe' });
   let out = ''; w.stdout.on('data', (d) => out += d.toString());
   await new Promise((res) => setTimeout(res, 900));   // let the fs-watcher attach
-  fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [
+  fs.writeFileSync(wf + '.sidecar.json', JSON.stringify({ schema: 1, items: [
     { id: 'wc1', kind: 'comment', by: 'alex', anchor: { quote: 'Some content here.', occurrence: 0 }, status: 'open',
       thread: [{ by: 'alex', at: '2026-07-19T06:00:00Z', text: 'MAKE-IT-CONCRETE' }] }] }));
   const code = await new Promise((res) => w.on('exit', res));
@@ -728,7 +728,7 @@ test('sidecar wait wakes on a new alex comment and exits 0 with a digest', async
 test('sidecar wait --timeout exits non-zero when nothing happens', async () => {
   const wf = path.join(dir, 'waitdoc2.md');
   fs.writeFileSync(wf, '# W2\n');
-  fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [] }));
+  fs.writeFileSync(wf + '.sidecar.json', JSON.stringify({ schema: 1, items: [] }));
   const w = spawn('node', [path.join(__dirname, 'server.js'), 'wait', wf, '--timeout', '1'],
     { env: { ...process.env, SIDECAR_PORT: '4990' }, stdio: 'pipe' });
   let out = ''; w.stdout.on('data', (d) => out += d.toString());
@@ -759,12 +759,12 @@ test('flag item round-trips through review PUT with flag:true intact', async () 
 test('sidecar wait digests a flag as a NEW flag line, distinct from a plain comment', async () => {
   const wf = path.join(dir, 'flagwait.md');
   fs.writeFileSync(wf, '# RW\n\nShip the newsletter draft.\n\nSome other prose.\n');
-  fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [] }));
+  fs.writeFileSync(wf + '.sidecar.json', JSON.stringify({ schema: 1, items: [] }));
   const w = spawn('node', [path.join(__dirname, 'server.js'), 'wait', wf, '--timeout', '10'],
     { env: { ...process.env, SIDECAR_PORT: '4990' }, stdio: 'pipe' });
   let out = ''; w.stdout.on('data', (d) => out += d.toString());
   await new Promise((res) => setTimeout(res, 900));   // let the fs-watcher attach
-  fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [
+  fs.writeFileSync(wf + '.sidecar.json', JSON.stringify({ schema: 1, items: [
     { id: 'rw1', kind: 'comment', by: 'alex', flag: true, status: 'open',
       anchor: { quote: 'Ship the newsletter draft.', occurrence: 0 },
       thread: [{ by: 'alex', at: '2026-07-19T07:10:00Z', text: '🚩 Flagged for review.' }] },
@@ -785,7 +785,7 @@ test('agent reply threads into a flag item like any comment', async () => {
   await put('/api/review', { path: 'flagthread.md', review: { schema: 1, items: [
     { id: 'rt1', kind: 'comment', by: 'alex', flag: true, status: 'open', anchor, thread: [alexMsg] }] } });
   // the agent answers in-thread (its own read-modify-write of the sidecar, as AGENTS.md prescribes)
-  const p = path.join(dir, 'flagthread.md.review.json');
+  const p = path.join(dir, 'flagthread.md.sidecar.json');
   const onDisk = JSON.parse(fs.readFileSync(p, 'utf8'));
   onDisk.items.find(i => i.id === 'rt1').thread.push(
     { by: 'claude', at: '2026-07-19T08:05:00Z', text: 'Done — rebuilt and pushed.' });
@@ -801,14 +801,14 @@ test('agent reply threads into a flag item like any comment', async () => {
 test('flag item resolves like a comment (reject settles it, file untouched)', async () => {
   const f = path.join(dir, 'flagresolve.md');
   fs.writeFileSync(f, '# RR\n\nArchive the old posts.\n');
-  fs.writeFileSync(f + '.review.json', JSON.stringify({ schema: 1, items: [
+  fs.writeFileSync(f + '.sidecar.json', JSON.stringify({ schema: 1, items: [
     { id: 'rr1', kind: 'comment', by: 'alex', flag: true, status: 'open',
       anchor: { quote: 'Archive the old posts.', occurrence: 0 },
       thread: [{ by: 'alex', at: '2026-07-19T09:00:00Z', text: '🚩 Flagged for review.' }] }] }));
   const before = fs.readFileSync(f, 'utf8');
   const r = await post('/api/reject', { path: 'flagresolve.md', id: 'rr1' });
   assert.equal(r.status, 200);
-  const rr1 = JSON.parse(fs.readFileSync(f + '.review.json', 'utf8')).items.find(i => i.id === 'rr1');
+  const rr1 = JSON.parse(fs.readFileSync(f + '.sidecar.json', 'utf8')).items.find(i => i.id === 'rr1');
   assert.equal(rr1.status, 'resolved', 'a flag comment resolves, it does not "reject"');
   assert.ok(rr1.decidedAt);
   assert.equal(fs.readFileSync(f, 'utf8'), before, 'settling a flag never touches the doc');
@@ -817,7 +817,7 @@ test('flag item resolves like a comment (reject settles it, file untouched)', as
 test('flag item orphans when its anchored text changes', async () => {
   const f = path.join(dir, 'flagorphan.md');
   fs.writeFileSync(f, '# RO\n\nPublish the RUNANCHOR line.\n');
-  fs.writeFileSync(f + '.review.json', JSON.stringify({ schema: 1, items: [
+  fs.writeFileSync(f + '.sidecar.json', JSON.stringify({ schema: 1, items: [
     { id: 'ro1', kind: 'comment', by: 'alex', flag: true, status: 'open',
       anchor: { quote: 'Publish the RUNANCHOR line.', occurrence: 0 },
       thread: [{ by: 'alex', at: '2026-07-19T10:00:00Z', text: '🚩 Flagged for review.' }] }] }));
@@ -931,7 +931,7 @@ test('a CLI write verb re-pings presence: the clock moves, the marks it did not 
       'the threads still in hand keep their marks — the write verb never declares items');
   } finally {
     await post('/api/presence', { path: 'clipres.md', state: 'idle', agent: 'cliwriter' });
-    fs.rmSync(f + '.review.json', { force: true });
+    fs.rmSync(f + '.sidecar.json', { force: true });
     fs.rmSync(f, { force: true });
   }
 });
@@ -939,12 +939,12 @@ test('a CLI write verb re-pings presence: the clock moves, the marks it did not 
 test('wait exit ping carries the woken item ids — news and replies mark, a decided item does not', async () => {
   const wf = path.join(dir, 'waitpres.md');
   fs.writeFileSync(wf, '# WP\n\nPresence target line.\n');
-  fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [] }));
+  fs.writeFileSync(wf + '.sidecar.json', JSON.stringify({ schema: 1, items: [] }));
   // SIDECAR_PORT points at the REAL test server, so the exit ping lands where /api/state can read it.
   const w = spawn('node', [path.join(__dirname, 'server.js'), 'wait', wf, '--timeout', '10'],
     { env: { ...process.env, SIDECAR_PORT: String(PORT), SIDECAR_AGENT: 'pwaiter' }, stdio: 'pipe' });
   await new Promise((res) => setTimeout(res, 900));   // let the fs-watcher attach
-  fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [
+  fs.writeFileSync(wf + '.sidecar.json', JSON.stringify({ schema: 1, items: [
     { id: 'pc1', kind: 'comment', by: 'alex', status: 'open',
       anchor: { quote: 'Presence target line.', occurrence: 0 },
       thread: [{ by: 'alex', at: '2026-08-12T12:00:00Z', text: 'mark me' }] },
@@ -965,13 +965,13 @@ test('wait exit ping carries the woken item ids — news and replies mark, a dec
 test('wait exit ping marks a rejection that carries a reason', async () => {
   const wf = path.join(dir, 'waitreject.md');
   fs.writeFileSync(wf, '# WR\n\nReject target line.\n');
-  fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [
+  fs.writeFileSync(wf + '.sidecar.json', JSON.stringify({ schema: 1, items: [
     { id: 'rs1', kind: 'suggestion', by: 'rwaiter', status: 'pending',
       anchor: { quote: 'Reject target line.', occurrence: 0 }, replacement: 'Rewritten target line.' }] }));
   const w = spawn('node', [path.join(__dirname, 'server.js'), 'wait', wf, '--timeout', '10'],
     { env: { ...process.env, SIDECAR_PORT: String(PORT), SIDECAR_AGENT: 'rwaiter' }, stdio: 'pipe' });
   await new Promise((res) => setTimeout(res, 900));   // let the fs-watcher attach
-  fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [
+  fs.writeFileSync(wf + '.sidecar.json', JSON.stringify({ schema: 1, items: [
     { id: 'rs1', kind: 'suggestion', by: 'rwaiter', status: 'rejected', decidedAt: '2026-08-13T00:00:00Z',
       anchor: { quote: 'Reject target line.', occurrence: 0 }, replacement: 'Rewritten target line.',
       thread: [{ by: 'alex', at: '2026-08-13T00:00:01Z', text: 'wrong tense, try the imperative' }] }] }));
@@ -988,13 +988,13 @@ test('wait exit ping marks a rejection that carries a reason', async () => {
 test('wait exit ping leaves a bare rejection dark', async () => {
   const wf = path.join(dir, 'waitbare.md');
   fs.writeFileSync(wf, '# WB\n\nBare target line.\n');
-  fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [
+  fs.writeFileSync(wf + '.sidecar.json', JSON.stringify({ schema: 1, items: [
     { id: 'bs1', kind: 'suggestion', by: 'bwaiter', status: 'pending',
       anchor: { quote: 'Bare target line.', occurrence: 0 }, replacement: 'Rewritten bare line.' }] }));
   const w = spawn('node', [path.join(__dirname, 'server.js'), 'wait', wf, '--timeout', '10'],
     { env: { ...process.env, SIDECAR_PORT: String(PORT), SIDECAR_AGENT: 'bwaiter' }, stdio: 'pipe' });
   await new Promise((res) => setTimeout(res, 900));
-  fs.writeFileSync(wf + '.review.json', JSON.stringify({ schema: 1, items: [
+  fs.writeFileSync(wf + '.sidecar.json', JSON.stringify({ schema: 1, items: [
     { id: 'bs1', kind: 'suggestion', by: 'bwaiter', status: 'rejected', decidedAt: '2026-08-13T00:00:00Z',
       anchor: { quote: 'Bare target line.', occurrence: 0 }, replacement: 'Rewritten bare line.' }] }));
   const code = await new Promise((res) => w.on('exit', res));
@@ -1072,7 +1072,7 @@ function cliFailsStdin(d, input, ...args) {
   try { execFileSync('node', [BIN, ...args], { cwd: d, encoding: 'utf8', input, stdio: ['pipe', 'pipe', 'pipe'] }); return null; }
   catch (e) { return e; }
 }
-const sc = (d) => JSON.parse(fs.readFileSync(path.join(d, 'doc.md.review.json'), 'utf8'));
+const sc = (d) => JSON.parse(fs.readFileSync(path.join(d, 'doc.md.sidecar.json'), 'utf8'));
 
 test('CLI comment: flat input expands to a full item — id, by, at, status, nested anchor', () => {
   const d = cliDir();
@@ -1109,7 +1109,7 @@ test('CLI refuses a quote that matches nothing, and writes NOTHING', () => {
   assert.ok(e, 'command should fail');
   assert.equal(e.status, 1);
   assert.match(e.stderr, /matched nothing/);
-  assert.ok(!fs.existsSync(path.join(d, 'doc.md.review.json')), 'no sidecar written');
+  assert.ok(!fs.existsSync(path.join(d, 'doc.md.sidecar.json')), 'no sidecar written');
   fs.rmSync(d, { recursive: true, force: true });
 });
 
@@ -1145,7 +1145,7 @@ test('CLI add: batch seeding, kind inferred from the presence of a replacement',
 test('CLI write merges — a human item and their thread reply survive an agent write', () => {
   const d = cliDir();
   // Human's comment lands first (as the browser would write it).
-  fs.writeFileSync(path.join(d, 'doc.md.review.json'), JSON.stringify({ schema: 1, items: [
+  fs.writeFileSync(path.join(d, 'doc.md.sidecar.json'), JSON.stringify({ schema: 1, items: [
     { id: 'c-human', kind: 'comment', by: 'alex', anchor: { quote: 'Success metrics' }, status: 'open',
       thread: [{ by: 'alex', at: '2026-01-01T00:00:00Z', text: 'what about these?' }] },
   ] }, null, 2));
@@ -1184,7 +1184,7 @@ test('CLI answer inherits the parent anchor and sets replyTo', () => {
 
 test('CLI drop refuses an item owned by someone else, removes its own', () => {
   const d = cliDir();
-  fs.writeFileSync(path.join(d, 'doc.md.review.json'), JSON.stringify({ schema: 1, items: [
+  fs.writeFileSync(path.join(d, 'doc.md.sidecar.json'), JSON.stringify({ schema: 1, items: [
     { id: 'c-human', kind: 'comment', by: 'alex', anchor: { quote: 'Success metrics' }, status: 'open', thread: [] },
   ] }, null, 2));
   const e = cliFails(d, 'drop', 'doc.md', 'c-human');
@@ -1217,7 +1217,7 @@ test('CLI reanchor repoints an orphan back onto live text', () => {
 test('CLI show --needs-reply selects only threads whose last word is the human’s', () => {
   const d = cliDir();
   cli(d, 'comment', 'doc.md', '--quote', 'Success metrics', '--text', 'mine, awaiting them');
-  fs.writeFileSync(path.join(d, 'doc.md.review.json'), JSON.stringify({ schema: 1, items: [
+  fs.writeFileSync(path.join(d, 'doc.md.sidecar.json'), JSON.stringify({ schema: 1, items: [
     ...sc(d).items,
     { id: 'c-theirs', kind: 'comment', by: 'alex', anchor: { quote: 'week one' }, status: 'open',
       thread: [{ by: 'alex', at: '2026-01-01T00:00:00Z', text: 'answer me' }] },
@@ -1316,7 +1316,7 @@ test('a CLI write and a browser PUT each survive the other (sequential, not raci
     { id: 'c-browser', kind: 'comment', by: 'alex', anchor: { quote: 'Beta line.' }, status: 'open',
       thread: [{ by: 'alex', at: '2026-01-01T00:00:00Z', text: 'from the browser' }] },
   ] } });
-  const after = JSON.parse(fs.readFileSync(path.join(dir, 'concurrent.md.review.json'), 'utf8'));
+  const after = JSON.parse(fs.readFileSync(path.join(dir, 'concurrent.md.sidecar.json'), 'utf8'));
   const texts = after.items.flatMap(i => (i.thread || []).map(m => m.text));
   assert.ok(texts.includes('from the CLI'), 'CLI item survived the browser PUT');
   assert.ok(texts.includes('from the browser'), 'browser item survived');
@@ -1389,7 +1389,7 @@ test('CLI suggest refuses a cross-block span; comment on the same quote is allow
   const e = cliFails(d, 'suggest', 'doc.md', '--quote', 'Read the sidecar. Merge by id.', '--replacement', 'One step.');
   assert.ok(e, 'suggestion should be refused');
   assert.match(e.stderr, /crosses a block boundary/);
-  assert.ok(!fs.existsSync(path.join(d, 'doc.md.review.json')), 'nothing written');
+  assert.ok(!fs.existsSync(path.join(d, 'doc.md.sidecar.json')), 'nothing written');
   // The same quote is fine as a comment — comments anchor, they never splice.
   cli(d, 'comment', 'doc.md', '--quote', 'Read the sidecar. Merge by id.', '--text', 'anchoring is fine');
   assert.equal(sc(d).items.length, 1);
@@ -1404,7 +1404,7 @@ test('accept refuses to splice a cross-block span, and the file is untouched', a
   execFileSync('node', [BIN, 'add', 'splice.md', '--force'], { cwd: dir, encoding: 'utf8',
     input: JSON.stringify([{ quote: 'Read the sidecar. Merge by id.', replacement: 'REPLACED.' }]),
     stdio: ['pipe', 'pipe', 'pipe'] });
-  const scId = JSON.parse(fs.readFileSync(path.join(dir, 'splice.md.review.json'), 'utf8')).items[0].id;
+  const scId = JSON.parse(fs.readFileSync(path.join(dir, 'splice.md.sidecar.json'), 'utf8')).items[0].id;
   const r = await post('/api/accept', { path: 'splice.md', id: scId });
   assert.equal(r.status, 409);
   assert.match((await r.json()).error, /refusing to apply/);
@@ -1415,7 +1415,7 @@ test('accept still applies a normal single-block suggestion', async () => {
   fs.writeFileSync(path.join(dir, 'ok.md'), '# T\n\nWe ship all six features.\n');
   execFileSync('node', [BIN, 'suggest', 'ok.md', '--quote', 'We ship all six features.',
     '--replacement', 'We ship three features.'], { cwd: dir, encoding: 'utf8' });
-  const id = JSON.parse(fs.readFileSync(path.join(dir, 'ok.md.review.json'), 'utf8')).items[0].id;
+  const id = JSON.parse(fs.readFileSync(path.join(dir, 'ok.md.sidecar.json'), 'utf8')).items[0].id;
   const r = await post('/api/accept', { path: 'ok.md', id });
   assert.equal(r.status, 200);
   assert.match(fs.readFileSync(path.join(dir, 'ok.md'), 'utf8'), /We ship three features\./);
@@ -1455,7 +1455,7 @@ test('add refuses `by` outright — it cannot author items as the human', () => 
   assert.ok(e, 'add with a `by` key is refused');
   assert.match(e.stderr, /"by"/);
   assert.match(e.stderr, /whoever ran the command/);
-  assert.ok(!fs.existsSync(path.join(d, 'doc.md.review.json')), 'nothing written');
+  assert.ok(!fs.existsSync(path.join(d, 'doc.md.sidecar.json')), 'nothing written');
   fs.rmSync(d, { recursive: true, force: true });
 });
 
@@ -1545,7 +1545,7 @@ test('accept splices a new bullet into a list at the same level', async () => {
   execFileSync('node', [BIN, 'add', 'bullet.md'], { cwd: dir, encoding: 'utf8',
     input: JSON.stringify([{ quote: '- beta item', replacement: '- inserted item\n- beta item' }]),
     stdio: ['pipe', 'pipe', 'pipe'] });
-  const id = JSON.parse(fs.readFileSync(path.join(dir, 'bullet.md.review.json'), 'utf8')).items[0].id;
+  const id = JSON.parse(fs.readFileSync(path.join(dir, 'bullet.md.sidecar.json'), 'utf8')).items[0].id;
   const r = await post('/api/accept', { path: 'bullet.md', id });
   assert.equal(r.status, 200);
   assert.equal(fs.readFileSync(path.join(dir, 'bullet.md'), 'utf8'),
@@ -1558,7 +1558,7 @@ test('accept refuses a replacement that would inject a heading into a list item'
   execFileSync('node', [BIN, 'add', 'inject.md', '--force'], { cwd: dir, encoding: 'utf8',
     input: JSON.stringify([{ quote: 'item one', replacement: 'one\n\n## Injected\n\nmore' }]),
     stdio: ['pipe', 'pipe', 'pipe'] });
-  const injId = JSON.parse(fs.readFileSync(path.join(dir, 'inject.md.review.json'), 'utf8')).items[0].id;
+  const injId = JSON.parse(fs.readFileSync(path.join(dir, 'inject.md.sidecar.json'), 'utf8')).items[0].id;
   const r = await post('/api/accept', { path: 'inject.md', id: injId });
   assert.equal(r.status, 409);
   assert.equal(fs.readFileSync(path.join(dir, 'inject.md'), 'utf8'), md, 'file untouched');
@@ -1603,7 +1603,7 @@ test('CLI refuses non-markdown files', () => {
   // .markdown and friends are still accepted.
   fs.writeFileSync(path.join(d, 'other.markdown'), '# Doc\n\nText here.\n');
   cli(d, 'comment', 'other.markdown', '--quote', 'Text here.', '--text', 'ok');
-  assert.ok(fs.existsSync(path.join(d, 'other.markdown.review.json')));
+  assert.ok(fs.existsSync(path.join(d, 'other.markdown.sidecar.json')));
   fs.rmSync(d, { recursive: true, force: true });
 });
 
@@ -1685,7 +1685,7 @@ test('matcher pin: a comment can still anchor to text inside a fenced code block
   // anchors, never splices) resolves and writes. This is what the "restrict, don't rewrite the matcher"
   // call preserves — highlighting a fence is fine; only splicing across one is refused.
   cli(d, 'comment', 'fence.md', '--quote', 'const x = 1;', '--text', 'anchoring into a fence is allowed');
-  const it = JSON.parse(fs.readFileSync(path.join(d, 'fence.md.review.json'), 'utf8')).items[0];
+  const it = JSON.parse(fs.readFileSync(path.join(d, 'fence.md.sidecar.json'), 'utf8')).items[0];
   assert.equal(it.kind, 'comment');
   assert.equal(it.anchor.quote, 'const x = 1;');
   fs.rmSync(d, { recursive: true, force: true });
@@ -1711,7 +1711,7 @@ test('add refuses a fabricated decision (status + thread) and writes nothing', (
   assert.match(e.stderr, /status/);
   assert.match(e.stderr, /thread/);
   assert.match(e.stderr, /belong to the human/);
-  assert.ok(!fs.existsSync(path.join(d, 'doc.md.review.json')), 'sidecar untouched — nothing written');
+  assert.ok(!fs.existsSync(path.join(d, 'doc.md.sidecar.json')), 'sidecar untouched — nothing written');
   fs.rmSync(d, { recursive: true, force: true });
 });
 
@@ -1725,7 +1725,7 @@ test('add refuses the decision-record heredoc verbatim (id + status:"accepted")'
   assert.match(e.stderr, /"id"/);
   assert.match(e.stderr, /"status"/);
   assert.match(e.stderr, /suggest --id/, 'points the agent at the real revise path');
-  assert.ok(!fs.existsSync(path.join(d, 'doc.md.review.json')), 'sidecar untouched');
+  assert.ok(!fs.existsSync(path.join(d, 'doc.md.sidecar.json')), 'sidecar untouched');
   fs.rmSync(d, { recursive: true, force: true });
 });
 
@@ -1746,7 +1746,7 @@ test('add --force does NOT bypass the key allow-list (it is a boundary, not a wa
     'add', 'doc.md', '--force');
   assert.ok(e, 'still refused with --force');
   assert.match(e.stderr, /status/);
-  assert.ok(!fs.existsSync(path.join(d, 'doc.md.review.json')), 'nothing written');
+  assert.ok(!fs.existsSync(path.join(d, 'doc.md.sidecar.json')), 'nothing written');
   fs.rmSync(d, { recursive: true, force: true });
 });
 
@@ -1813,17 +1813,134 @@ const doctorIn = (d, ...args) => execFileSync('node', [BIN, 'doctor', ...args],
 
 test('doctor warns when the digest state files are not gitignored, and goes quiet once they are', () => {
   const d = cliDir();   // a git repo with no .gitignore, which is the state a host repo starts in
-  assert.match(doctorIn(d, 'doc.md'), /\*\.review\.seen\*/, 'the warning names the exact pattern to add');
+  assert.match(doctorIn(d, 'doc.md'), /\*\.sidecar\.seen\*/, 'the warning names the exact pattern to add');
   assert.match(doctorIn(d, 'doc.md'), /\.gitignore/, 'and says where it goes');
-  fs.writeFileSync(path.join(d, '.gitignore'), '*.review.seen*\n');
-  assert.doesNotMatch(doctorIn(d, 'doc.md'), /review\.seen/, 'ignored → nothing extra to say');
+  fs.writeFileSync(path.join(d, '.gitignore'), '*.sidecar.seen*\n');
+  assert.doesNotMatch(doctorIn(d, 'doc.md'), /\.seen/, 'ignored → nothing extra to say');
   fs.rmSync(d, { recursive: true, force: true });
 });
 
 test('doctor says nothing about gitignore outside a git work tree', () => {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-nogit-'));
   fs.writeFileSync(path.join(d, 'doc.md'), CLI_DOC);
-  assert.doesNotMatch(doctorIn(d, 'doc.md'), /review\.seen/, 'no repo, nothing to ignore');
+  assert.doesNotMatch(doctorIn(d, 'doc.md'), /\.seen/, 'no repo, nothing to ignore');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+/* ---------------------------------------------------------------------------
+   The .review.* → .sidecar.* rename (1.7.0). A load migrates; doctor reports
+   what a load has not reached yet.
+   --------------------------------------------------------------------------- */
+
+// stdout AND stderr: the rename notice goes to stderr on purpose, so it can never land in the middle
+// of `show --json`.
+const cliBoth = (d, ...args) => {
+  const r = spawnSync('node', [BIN, ...args], { cwd: d, encoding: 'utf8' });
+  return { out: r.stdout, err: r.stderr, status: r.status };
+};
+
+// A complete pre-1.7 sibling set: the review, the cursor, one agent's doc baseline, an asset dir.
+function legacySet(d, doc = 'doc.md') {
+  const at = path.join(d, doc);
+  fs.writeFileSync(at + '.review.json', JSON.stringify({ schema: 1, items: [
+    { id: 'legacy1', kind: 'comment', by: 'you', status: 'open',
+      anchor: { quote: 'Success metrics are not defined yet.' },
+      thread: [{ by: 'you', at: '2026-08-01T10:00:00Z', text: 'from before the rename' }] }] }));
+  fs.writeFileSync(at + '.review.seen.json', JSON.stringify({ claude: { docHash: 'abc', items: {}, at: '2026-08-01T10:00:00Z' } }));
+  fs.writeFileSync(at + '.review.seen.base.claude', CLI_DOC);
+  fs.mkdirSync(at + '.review.assets', { recursive: true });
+  fs.writeFileSync(path.join(at + '.review.assets', 'ab12cd34ef56.png'), 'not really a png');
+}
+
+test('a load renames the whole pre-1.7 sibling set, items and all, and says so once', () => {
+  const d = cliDir();
+  legacySet(d);
+  const { out, err } = cliBoth(d, 'show', 'doc.md');
+  for (const suffix of ['.sidecar.json', '.sidecar.seen.json', '.sidecar.seen.base.claude',
+                        '.sidecar.assets', '.sidecar.assets/ab12cd34ef56.png'])
+    assert.ok(fs.existsSync(path.join(d, 'doc.md' + suffix)), `${suffix} moved across`);
+  const left = fs.readdirSync(d).filter(n => n.includes('.review.'));
+  assert.deepEqual(left, [], 'nothing keeps the old name');
+  assert.match(out, /legacy1/, 'the review still reads, through its new name');
+  assert.equal(err.trim().split('\n').length, 1, 'one line about the rename, not one per file');
+  assert.match(err, /\.sidecar\./);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('both names present: the new one wins, the old one is left alone and warned about', () => {
+  const d = cliDir();
+  legacySet(d);
+  fs.writeFileSync(path.join(d, 'doc.md.sidecar.json'), JSON.stringify({ schema: 1, items: [
+    { id: 'current1', kind: 'comment', by: 'you', status: 'open',
+      anchor: { quote: 'Success metrics are not defined yet.' },
+      thread: [{ by: 'you', at: '2026-08-13T10:00:00Z', text: 'after the rename' }] }] }));
+  const { out, err } = cliBoth(d, 'show', 'doc.md');
+  assert.match(out, /current1/, 'the .sidecar.json is what gets read');
+  assert.doesNotMatch(out, /legacy1/, 'the two item sets are never merged');
+  assert.match(err, /both/i, 'and the ambiguity is said out loud');
+  assert.ok(fs.existsSync(path.join(d, 'doc.md.review.json')), 'the old file is left for a human to decide about');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('the server migrates on load as well — the rename sits in the shared load path', async () => {
+  const f = path.join(dir, 'renamed.md');
+  fs.writeFileSync(f, DOC);
+  fs.writeFileSync(f + '.review.json', JSON.stringify({ schema: 1, items: [
+    { id: 'srv1', kind: 'comment', by: 'you', status: 'open', anchor: { quote: 'Closing paragraph.' }, thread: [] }] }));
+  const s = await fetchRetry(`${BASE}/api/state?path=renamed.md`).then(j);
+  assert.deepEqual(s.review.items.map(i => i.id), ['srv1'], 'the review arrives, read from its new name');
+  assert.ok(fs.existsSync(f + '.sidecar.json'));
+  assert.ok(!fs.existsSync(f + '.review.json'));
+});
+
+// Rolling a current sibling set back to the old names, which is what a pre-1.7 install left behind.
+const unrename = (d) => { for (const n of fs.readdirSync(d).filter(n => n.includes('.sidecar.')))
+  fs.renameSync(path.join(d, n), path.join(d, n.replace('.sidecar.', '.review.'))); };
+
+test('the migrated cursor is still a cursor — no spurious full replay after the rename', () => {
+  const d = cliDir();
+  cli(d, 'comment', 'doc.md', '--quote', 'Success metrics are not defined yet.', '--text', 'targets?');
+  cli(d, 'digest', 'doc.md');
+  unrename(d);
+  assert.match(cli(d, 'digest', 'doc.md'), /nothing new/, 'the cursor came across with the review');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('a wait armed on pre-1.7 names still surfaces the backlog its cursor was holding', async () => {
+  const d = cliDir();
+  cli(d, 'comment', 'doc.md', '--quote', 'Success metrics are not defined yet.', '--text', 'targets?');
+  cli(d, 'digest', 'doc.md');   // the cursor knows about that card, and about nothing after it
+  patchReview(d, (r) => r.items.push({ id: 'human1', kind: 'comment', by: 'you', status: 'open',
+    anchor: { quote: 'Repeated line here.', occurrence: 0 },
+    thread: [{ by: 'you', at: '2026-08-13T10:00:00Z', text: 'and this one?' }] }));
+  unrename(d);
+  // The load is what renames, so it has to run before the cursor is read: an unrenamed cursor reads as
+  // no cursor, the baseline falls back to current state, and this card sleeps until the timeout.
+  const { code, out } = await spawnWait(d, { timeout: 3 });
+  assert.equal(code, 0, 'it wakes on the backlog instead of sleeping through it');
+  assert.match(out, /and this one\?/);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('doctor reports files still on the .review.* names, and the command that renames them', () => {
+  const d = cliDir();
+  legacySet(d);
+  const out = doctorIn(d, 'doc.md');
+  assert.match(out, /still on the pre-1\.7 \.review\.\* names/);
+  assert.match(out, /doc\.md\.review\.json/, 'it names what it found');
+  assert.match(out, /sidecar show/, 'and how to fix it');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('doctor treats a *.review.seen* gitignore pattern as stale, covered or not', () => {
+  const d = cliDir();
+  fs.writeFileSync(path.join(d, '.gitignore'), '*.review.seen*\n');
+  const before = doctorIn(d, 'doc.md');
+  assert.match(before, /\*\.sidecar\.seen\*/, 'the pattern that would actually cover the state');
+  assert.match(before, /\.gitignore:1:\*\.review\.seen\*.*pre-1\.7/, 'and the line holding the dead one');
+  fs.writeFileSync(path.join(d, '.gitignore'), '*.sidecar.seen*\n*.review.seen*\n');
+  const after = doctorIn(d, 'doc.md');
+  assert.match(after, /dead \.gitignore line/, 'covered, and the old line is still worth deleting');
   fs.rmSync(d, { recursive: true, force: true });
 });
 
@@ -1836,9 +1953,9 @@ test('doctor says nothing about gitignore outside a git work tree', () => {
 const cliE = (d, env, ...args) => execFileSync('node', [BIN, ...args],
   { cwd: d, encoding: 'utf8', env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
 // Patch the on-disk review the way the browser/server would (add a human item, a reply, a decision).
-const patchReview = (d, fn) => { const p = path.join(d, 'doc.md.review.json');
+const patchReview = (d, fn) => { const p = path.join(d, 'doc.md.sidecar.json');
   const r = JSON.parse(fs.readFileSync(p, 'utf8')); fn(r); fs.writeFileSync(p, JSON.stringify(r, null, 2)); };
-const seen = (d) => { const p = path.join(d, 'doc.md.review.seen.json');
+const seen = (d) => { const p = path.join(d, 'doc.md.sidecar.seen.json');
   return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : null; };
 // Run `sidecar wait` as a real background process; `onReady` fires once the watcher is up so a test
 // can trigger an fs event. No server on SIDECAR_PORT here — presence pings just fail fast (400ms).
@@ -1967,10 +2084,10 @@ test('digest: two SIDECAR_AGENT values hold independent cursors', () => {
 test('digest: corrupt or deleted seen file → no crash, treated as a full replay', () => {
   const d = cliDir();
   cli(d, 'comment', 'doc.md', '--quote', 'Success metrics', '--text', 'targets?');
-  fs.writeFileSync(path.join(d, 'doc.md.review.seen.json'), '{ this is not json');
+  fs.writeFileSync(path.join(d, 'doc.md.sidecar.seen.json'), '{ this is not json');
   const out = cli(d, 'digest', 'doc.md');            // must not throw
   assert.match(out, /no last-seen marker/, 'corrupt cursor degrades to full replay');
-  fs.rmSync(path.join(d, 'doc.md.review.seen.json'));
+  fs.rmSync(path.join(d, 'doc.md.sidecar.seen.json'));
   assert.match(cli(d, 'digest', 'doc.md'), /no last-seen marker/, 'a deleted cursor replays too');
   fs.rmSync(d, { recursive: true, force: true });
 });
@@ -2004,7 +2121,7 @@ test('digest: the agent dropping its own card wakes nothing', () => {
 // disappearing is a real change to the review and has to keep reporting.
 test('digest: a card someone else authored still reports when it is removed', () => {
   const d = cliDir();
-  fs.writeFileSync(path.join(d, 'doc.md.review.json'), JSON.stringify({ schema: 1, items: [
+  fs.writeFileSync(path.join(d, 'doc.md.sidecar.json'), JSON.stringify({ schema: 1, items: [
     { id: 'c-human', kind: 'comment', by: 'alex', status: 'open',
       anchor: { quote: 'Success metrics', occurrence: 0 }, thread: [] }] }, null, 2));
   cli(d, 'digest', 'doc.md');                        // cursor records it as alex's
@@ -2020,7 +2137,7 @@ test('digest: a legacy cursor entry with no author still reports the removal', (
   cli(d, 'suggest', 'doc.md', '--quote', 'Success metrics', '--replacement', 'Success metrics (defined below)');
   cli(d, 'digest', 'doc.md');
   const id = sc(d).items[0].id;
-  const sp = path.join(d, 'doc.md.review.seen.json');
+  const sp = path.join(d, 'doc.md.sidecar.seen.json');
   const all = JSON.parse(fs.readFileSync(sp, 'utf8'));
   delete all.claude.items[id].by;                    // as an older sidecar would have written it
   fs.writeFileSync(sp, JSON.stringify(all, null, 2));
@@ -2093,7 +2210,7 @@ test('wait: an accept prints the digest exactly once (double-print regression)',
    hunks, and nothing may be re-sent across looks.
    --------------------------------------------------------------------------- */
 
-const basefile = (d, agent = 'claude', doc = 'doc.md') => path.join(d, doc + '.review.seen.base.' + agent);
+const basefile = (d, agent = 'claude', doc = 'doc.md') => path.join(d, doc + '.sidecar.seen.base.' + agent);
 // The fixture without git — sidecar's serverless contract says this must work identically.
 function cliDirNoGit() {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-cli-'));
@@ -2315,7 +2432,7 @@ test('a comment can anchor to a diagram node label inside a flow fence', () => {
   assert.throws(() => cli(d, 'comment', 'f.md', '--quote', 'Verify email', '--text', 'x'),
     /ambiguous — 3 matches/, 'a bare node label is refused, not silently anchored to the first mention');
   cli(d, 'comment', 'f.md', '--quote', 'Verify email', '--occurrence', '0', '--text', 'is this step needed?');
-  const it = JSON.parse(fs.readFileSync(path.join(d, 'f.md.review.json'), 'utf8')).items[0];
+  const it = JSON.parse(fs.readFileSync(path.join(d, 'f.md.sidecar.json'), 'utf8')).items[0];
   assert.equal(it.status, 'open', 'a node label anchors like any other quote — not orphaned');
   const hit = Anchor.findNth(VIS_DOC, it.anchor.quote, it.anchor.occurrence || 0);
   assert.ok(hit, 'the anchor resolves in the document');
@@ -2350,7 +2467,7 @@ test('assets refuses traversal, absolute paths, URLs and non-images', async () =
 });
 
 /* ────────────────────────────────────────────────────────────────────────────
-   IMAGES IN COMMENTS — a pasted screenshot becomes a file in `<doc>.review.assets/`
+   IMAGES IN COMMENTS — a pasted screenshot becomes a file in `<doc>.sidecar.assets/`
    and a markdown link in the comment body. The review JSON never holds bytes, and
    the reference is the same doc-relative form /assets already serves.
    ──────────────────────────────────────────────────────────────────────────── */
@@ -2365,7 +2482,7 @@ test('asset upload writes a content-hashed file beside the review and returns do
   const r = await postBytes('/api/asset?doc=doc.md', PNG_1x1);
   assert.equal(r.status, 200);
   const out = await r.json();
-  assert.match(out.src, /^doc\.md\.review\.assets\/[0-9a-f]{12}\.png$/);
+  assert.match(out.src, /^doc\.md\.sidecar\.assets\/[0-9a-f]{12}\.png$/);
   assert.equal(out.markdown, `![](${out.src})`);
   assert.ok(fs.existsSync(path.join(dir, out.src)), 'the bytes landed on disk');
   assert.deepEqual(fs.readFileSync(path.join(dir, out.src)), PNG_1x1, 'byte-identical, not re-encoded');
@@ -2380,7 +2497,7 @@ test('the same image twice is one file — content-addressed, so re-pasting does
   const a = await (await postBytes('/api/asset?doc=doc.md', PNG_1x1)).json();
   const b = await (await postBytes('/api/asset?doc=doc.md', PNG_1x1)).json();
   assert.equal(a.src, b.src);
-  const files = fs.readdirSync(path.join(dir, 'doc.md.review.assets'));
+  const files = fs.readdirSync(path.join(dir, 'doc.md.sidecar.assets'));
   assert.equal(files.filter(f => f.endsWith('.png')).length, 1);
   assert.equal(files.filter(f => f.endsWith('.tmp')).length, 0, 'no temp file left behind');
 });
@@ -2394,10 +2511,10 @@ test('asset upload refuses non-images by their BYTES, not their claimed type', a
 });
 
 test('asset upload refuses an unknown document — an attachment is not a write primitive', async () => {
-  // Without the existence check this would create `<anything>.review.assets/` anywhere under the root.
+  // Without the existence check this would create `<anything>.sidecar.assets/` anywhere under the root.
   const r = await postBytes('/api/asset?doc=nope.md', PNG_1x1);
   assert.equal(r.status, 404);
-  assert.ok(!fs.existsSync(path.join(dir, 'nope.md.review.assets')), 'no directory created for a doc that is not there');
+  assert.ok(!fs.existsSync(path.join(dir, 'nope.md.sidecar.assets')), 'no directory created for a doc that is not there');
   const esc = await postBytes(`/api/asset?doc=${encodeURIComponent('../../../../tmp/evil.md')}`, PNG_1x1);
   assert.equal(esc.status, 403);
 });
@@ -2408,8 +2525,8 @@ test('an image in a comment body survives the review round-trip as a path, never
   s.review.items.push({ id: 'cimg1', kind: 'comment', by: 'you', anchor: { quote: 'Closing paragraph.' },
     status: 'open', thread: [{ by: 'you', at: new Date().toISOString(), text: `look:\n\n${up.markdown}` }] });
   await put('/api/review', { path: 'doc.md', review: s.review });
-  const raw = fs.readFileSync(path.join(dir, 'doc.md.review.json'), 'utf8');
-  assert.match(raw, /doc\.md\.review\.assets\//);
+  const raw = fs.readFileSync(path.join(dir, 'doc.md.sidecar.json'), 'utf8');
+  assert.match(raw, /doc\.md\.sidecar\.assets\//);
   assert.doesNotMatch(raw, /base64|data:image/, 'the sidecar stays a small text file');
 });
 
@@ -2417,9 +2534,9 @@ test('CLI --image copies the file in and appends a markdown link to the comment'
   const d = cliDir();
   fs.writeFileSync(path.join(d, 'shot.png'), PNG_1x1);
   cli(d, 'comment', 'doc.md', '--quote', 'Success metrics are not defined yet.', '--text', 'see this', '--image', 'shot.png');
-  const review = JSON.parse(fs.readFileSync(path.join(d, 'doc.md.review.json'), 'utf8'));
+  const review = JSON.parse(fs.readFileSync(path.join(d, 'doc.md.sidecar.json'), 'utf8'));
   const body = review.items[0].thread[0].text;
-  assert.match(body, /^see this\n\n!\[\]\(doc\.md\.review\.assets\/[0-9a-f]{12}\.png\)$/);
+  assert.match(body, /^see this\n\n!\[\]\(doc\.md\.sidecar\.assets\/[0-9a-f]{12}\.png\)$/);
   const rel = body.match(/\(([^)]+)\)/)[1];
   // Copied, not referenced: the agent's screenshot usually sits in a scratch dir that gets cleaned up,
   // and a review that renders only until then is a review that silently rots.
@@ -2434,7 +2551,7 @@ test('CLI --image is repeatable, and refuses a path that is not there', () => {
   fs.writeFileSync(path.join(d, 'a.png'), PNG_1x1);
   fs.writeFileSync(path.join(d, 'b.gif'), Buffer.concat([Buffer.from('GIF89a'), Buffer.alloc(20)]));
   cli(d, 'comment', 'doc.md', '--quote', 'Success metrics are not defined yet.', '--text', 'two', '--image', 'a.png', '--image', 'b.gif');
-  const review = JSON.parse(fs.readFileSync(path.join(d, 'doc.md.review.json'), 'utf8'));
+  const review = JSON.parse(fs.readFileSync(path.join(d, 'doc.md.sidecar.json'), 'utf8'));
   const links = [...review.items[0].thread[0].text.matchAll(/!\[\]\(([^)]+)\)/g)].map(m => m[1]);
   assert.equal(links.length, 2);
   assert.match(links[0], /\.png$/); assert.match(links[1], /\.gif$/);

@@ -51,7 +51,7 @@ and re-arm promptly, because a wake you sit on is visible as exactly that.
 Anchors are quoted text, not line numbers. A quote matching nothing — or matching more than one span —
 is refused before anything is written; `sidecar check doc.md --quote "…"` tests one in advance.
 
-They can attach screenshots to comments. A body containing `![](doc.md.review.assets/….png)` is a
+They can attach screenshots to comments. A body containing `![](doc.md.sidecar.assets/….png)` is a
 picture they want you to look at — open that path with your own file tools before you answer.
 
 You cannot accept or reject. Those are the human's.

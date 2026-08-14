@@ -98,7 +98,7 @@ document; tap the highlight to open its card, tap a card's quote to jump to the 
 **Screenshots.** Paste or drop an image into any comment or reply box, or use the picture button beside
 **resolve**; click it to see it full size. Showing a broken layout beats describing one. Your agent can
 attach images with `--image` and read the ones you attach, so *"here's what it does at 375px"* is a
-thing you can hand it directly. They live as files in `<doc>.review.assets/` next to the review, so they
+thing you can hand it directly. They live as files in `<doc>.sidecar.assets/` next to the review, so they
 commit with the document and delete with it.
 
 **Suggest** (your agent). Suggestion cards propose a replacement for a quoted span, shown as a word-level
@@ -126,9 +126,13 @@ Hardened for exactly its threat model, which is single-user, single-machine, loc
   silently clobber changes made on disk.
 
 Single-machine matters: finish a review before syncing clones. Merge-by-id reconciles concurrent writes
-to one file, not two divergent histories. (The agent also keeps a `<file>.review.seen.json` cursor of what
-it has read and a `<file>.review.seen.base.<agent>` copy of the doc as of its last look, which its digest
-diffs against. That is local agent state rather than review content; gitignore both as `*.review.seen*`.)
+to one file, not two divergent histories. (The agent also keeps a `<file>.sidecar.seen.json` cursor of what
+it has read and a `<file>.sidecar.seen.base.<agent>` copy of the doc as of its last look, which its digest
+diffs against. That is local agent state rather than review content; gitignore both as `*.sidecar.seen*`.)
+
+Upgrading from 1.6 or earlier: these siblings were named `<file>.review.*` and are renamed the first
+time sidecar opens the document. Update a `*.review.seen*` line in your `.gitignore` to
+`*.sidecar.seen*`; `sidecar doctor` says so too, along with anything still on the old names.
 
 ## Development
 

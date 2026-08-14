@@ -105,7 +105,7 @@ const VERSION = (() => { try { return require('./package.json').version || '?'; 
 // A relative `![](./flow.png)` is relative to the DOCUMENT, but the page is served from `/?f=…`, so the
 // browser resolves it against the app root and 404s. The client hands over both halves and resolution
 // happens here, through the same safePath the file API uses — one confinement check, not two.
-// A comment's image is the same shape: the body holds `![](doc.md.review.assets/ab12….png)`, relative
+// A comment's image is the same shape: the body holds `![](doc.md.sidecar.assets/ab12….png)`, relative
 // to the document, and arrives here through exactly this route. Attachments needed no serving code.
 app.get('/assets', (req, res) => {
   const src = String(req.query.src || '');
@@ -135,7 +135,7 @@ app.post('/api/asset', express.raw({ type: () => true, limit: MAX_BYTES }), (req
   let doc;
   try { doc = safePath(String(req.query.doc || '')); }
   catch { return res.status(403).json({ error: 'path escapes root' }); }
-  // Confined AND real: without this an upload could create `<anything>.review.assets/` anywhere under
+  // Confined AND real: without this an upload could create `<anything>.sidecar.assets/` anywhere under
   // the root, which is a write primitive dressed up as an attachment.
   if (!fs.existsSync(doc) || !fs.statSync(doc).isFile()) return res.status(404).json({ error: 'no such document' });
   try {
@@ -365,8 +365,8 @@ chokidar.watch(BASE_DIR, {
   ignored: (p) => p.includes('node_modules') || path.basename(p).startsWith('.git'),
   ignoreInitial: true, depth: 6,
 }).on('all', (event, p) => {
-  if (!isMarkdown(p) && !p.endsWith('.review.json')) return;
-  const rel = path.relative(BASE_DIR, p.replace(/\.review\.json$/, ''));
+  if (!isMarkdown(p) && !p.endsWith('.sidecar.json')) return;
+  const rel = path.relative(BASE_DIR, p.replace(/\.sidecar\.json$/, ''));
   for (const c of clients) c.write(`data: ${JSON.stringify({ event, rel })}\n\n`);
 });
 
