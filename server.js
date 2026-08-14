@@ -10,7 +10,7 @@ const chokidar = require('chokidar');
 // Review-file load/save/merge lives in lib/review.js so the CLI runs the SAME logic (see lib/cli.js).
 const { sidecarPath, loadReview, saveReview, findAnchor, annotateOrphans, spliceRisk, replacementRisk, mergeItem } = require('./lib/review.js');
 // Where a review's images live and what counts as one — shared with the CLI's --image (lib/assets.js).
-const { IMAGE_TYPES, MAX_BYTES, saveAsset } = require('./lib/assets.js');
+const { SERVED_TYPES, FONT_TYPES, MAX_BYTES, saveAsset } = require('./lib/assets.js');
 // The element anchor's shared rules — the sel validation this file runs on a write, and the Node-side
 // liveness annotateOrphans resolves with (lib/element.js).
 const Element = require('./lib/element.js');
@@ -118,7 +118,7 @@ app.get('/assets', (req, res) => {
   // file-read primitive for anything the served root contains, image extension or not.
   if (!src || /^([a-z][a-z0-9+.-]*:|\/\/|\/)/i.test(src)) return res.status(400).json({ error: 'relative image paths only' });
   const ext = path.extname(src).toLowerCase();
-  if (!IMAGE_TYPES[ext]) return res.status(400).json({ error: 'not an image' });
+  if (!SERVED_TYPES[ext]) return res.status(400).json({ error: 'not an image or font' });
   let abs;
   try { abs = safePath(path.resolve(path.dirname(safePath(String(req.query.doc || ''))), src)); }
   catch { return res.status(403).json({ error: 'path escapes root' }); }
@@ -126,9 +126,15 @@ app.get('/assets', (req, res) => {
   // An SVG is a document, not just pixels: served same-origin it could carry script, and this origin
   // has the file read/write API on it. Inside an <img> nothing runs, but a user can also open this URL
   // directly — so deny everything the file might try to load or execute, and pin the type against sniffing.
-  res.set('Content-Type', IMAGE_TYPES[ext]);
+  res.set('Content-Type', SERVED_TYPES[ext]);
   res.set('X-Content-Type-Options', 'nosniff');
   res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+  // A font is fetched by the ASSET FRAME, which is sandboxed without allow-same-origin and therefore
+  // has an opaque origin. A CSS font fetch is always CORS-mode, so it arrives with `Origin: null` and
+  // is dropped unless the response says otherwise — the frame would render the whole poster in a
+  // fallback face. Images need none of this (an <img> is not CORS-gated), so the header goes on fonts
+  // alone rather than on everything this route serves.
+  if (FONT_TYPES[ext]) res.set('Access-Control-Allow-Origin', '*');
   res.sendFile(abs);
 });
 
@@ -233,9 +239,16 @@ app.put('/api/review', (req, res) => {
   for (const it of incoming.items) if (!/^[\w-]+$/.test(it.id || '')) return res.status(400).json({ error: 'invalid item id' });
   // An element anchor's `sel` is echoed the same way (into the frame as a selector, and onto the card),
   // so it gets the same treatment: a value the CLI would refuse cannot arrive through the browser instead.
+  // The `path` is echoed into a selector too and gets the same rule. Each half is checked WHEN PRESENT:
+  // an element carrying neither a data-sc nor an id has no sel to store and anchors by path + signature
+  // alone, which is the third resolution the picker (and CONTEXT.md) already describe. An anchor with
+  // neither half references nothing at all.
   for (const it of incoming.items) {
     const el = it.anchor && it.anchor.element;
-    if (el && !Element.validSel(el.sel)) return res.status(400).json({ error: `invalid element sel: ${el.sel}` });
+    if (!el) continue;
+    if (el.sel !== undefined && !Element.validSel(el.sel)) return res.status(400).json({ error: `invalid element sel: ${el.sel}` });
+    if (el.path !== undefined && !Element.validPath(el.path)) return res.status(400).json({ error: `invalid element path: ${el.path}` });
+    if (el.sel === undefined && !el.path) return res.status(400).json({ error: 'element anchor needs a sel or a path' });
   }
   const byId = new Map(current.items.map(i => [i.id, i]));
   // Same id → non-destructive merge (union thread, keep the more-advanced status); new id → insert.

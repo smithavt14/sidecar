@@ -1,11 +1,15 @@
 # Asset frame: an iframe with an injected picker, never same-origin
 
-Assets (HTML files reviewed as rendered visuals) render in a sandboxed iframe. The server
-strips the asset's own `<script>` tags before serving and injects sidecar's picker; the sandbox
-carries `allow-scripts` and never `allow-same-origin`, so the picker talks to the page only via
-postMessage and nothing inside the frame can reach sidecar's file read/write API. The exact
-guarantee: **the asset's scripts never run, and the only script in the frame is sidecar's
-picker.**
+Assets (HTML files reviewed as rendered visuals) render in a sandboxed iframe. Sidecar strips the
+asset's own `<script>` tags and injects its picker; the sandbox carries `allow-scripts` and never
+`allow-same-origin`, so the picker talks to the page only via postMessage and nothing inside the
+frame can reach sidecar's file read/write API. The exact guarantee: **the asset's scripts never run,
+and the only script in the frame is sidecar's picker.**
+
+The stripping happens in the CLIENT and the frame's srcdoc is assembled there
+(`public/assetframe.js`), which this ADR first assumed the server would do. The page already loads
+DOMPurify to render markdown, so doing it there costs no new dependency and no new serving route,
+and the guarantee is the same guarantee either way.
 
 ## Considered options
 

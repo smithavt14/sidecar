@@ -9,8 +9,10 @@ description: |
   ("let's review this doc," "let's edit this together," "look this over and suggest changes," "work
   through this proposal with me," "let's revise this"). Sidecar gives tracked suggestion cards with
   word-level diffs, comment threads, and rich-text editing on the real file, anchored by content
-  rather than line numbers. NOT for a quick one-line take or a prose-tightening pass, and not for
-  code review. Needs the document as a file on disk.
+  rather than line numbers. It also reviews an .html file as the visual it renders — a poster, a
+  social card, an email template — where comments anchor to elements instead of to text. NOT for a
+  quick one-line take or a prose-tightening pass, and not for code review. Needs the document as a
+  file on disk.
 ---
 
 # sidecar — reviewing a document with a human
@@ -293,6 +295,62 @@ can't express. The same path form works inside a comment; `--image` above is the
 re-serializing edited blocks, and an `<svg>` cannot survive that trip. So *you* change a diagram by
 editing the file; they change it by asking you to. Their comments and your edits work as normal
 everywhere else in the document.
+
+---
+
+## Assets — reviewing an .html file as the thing it renders
+
+A document is markdown **or an asset**: an `.html` file (`.html`, `.htm`) reviewed as a rendered
+visual. A poster, a social card, a signup sheet, an email template. Open it the same way you open
+markdown, `sidecar poster.html` or `?f=poster.html`, and the human sees the page as a page: full CSS,
+real fonts, real images, scaled to fit the column.
+
+**An asset is read-only in the viewer, and its review anchors to ELEMENTS rather than to quoted text.**
+That is the whole difference. Everything else — threads, replies, resolve, orphans, the digest, the
+cursor, `wait` — is unchanged.
+
+```bash
+sidecar elements poster.html                      # every anchorable element: label, tag, its text
+sidecar comment poster.html --element headline --text "Two words too long for this line."
+sidecar flag poster.html --element '#cta' --text "This link goes nowhere."
+sidecar check poster.html --element headline      # pre-flight one, the way --quote does for markdown
+sidecar check poster.html                         # lint every element anchor already stored
+```
+
+`<ref>` is a `data-sc` value (`headline`), an `#id`, or the selector spelling (`[data-sc=headline]`).
+`--quote` on an asset and `--element` on markdown are both hard errors: they are two anchor kinds and
+the document decides which one it takes.
+
+**`sidecar elements` is how you see what they see.** It lists everything the file marks as anchorable,
+which is every element carrying a `data-sc` or an `id`. If it prints nothing, the file has no handles
+yet — add `data-sc="…"` to the elements worth discussing (you are allowed to edit the file; it is a
+document like any other) and run it again. Two elements sharing a label are both listed, and
+`check --element` says so rather than picking one.
+
+**The human is not limited to that list.** In their browser the render is live: hovering outlines the
+element under the cursor and clicking it opens a comment on it, whether or not it carries an
+attribute. An element with neither a `data-sc` nor an `id` anchors by its position and its text
+instead, which is most of a real poster. So expect element items you never named — their anchor is
+just as durable as one you wrote.
+
+**You edit the file; the frame reloads.** There is no save, no accept, no splice: `suggest`, `answer`
+and `reanchor` all refuse an asset, because accepting a diff would mean splicing raw bytes into HTML.
+Change the markup yourself and `sidecar reply` that it is done, exactly as you would for a mechanical
+edit in markdown. The watcher pushes the new render into their browser.
+
+**An element item orphans when its element goes** — `orphanReason: element-changed`, shown on the card
+as *orphaned — element changed*, and it revives on its own if the element comes back. What keeps it
+alive is two things at once: the attribute you named, and a signature of the element's text. Rename
+the attribute and the signature still finds it; rewrite the text and the attribute still does.
+
+**Images and fonts the asset references keep working.** Relative `src` and `url()` references are
+resolved against the document, so `<img src="./face.jpg">` and `@font-face { src: url(./x.woff2) }`
+render. Absolute URLs are left alone and, since the render is isolated, external ones may simply not
+load — prefer local files for anything the review depends on.
+
+**Nothing in the asset executes.** The frame strips every `<script>`, event handler and `javascript:`
+URL before rendering, and runs sandboxed. A poster that "works" only with its JavaScript will render
+as its unscripted self, which is worth knowing before you ask why an animation is missing.
 
 ---
 

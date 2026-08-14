@@ -3018,3 +3018,367 @@ test('an asset keeps the same sibling files a markdown document does', () => {
     assert.ok(fs.existsSync(path.join(d, 'poster.html' + suffix)), `poster.html${suffix} is written`);
   fs.rmSync(d, { recursive: true, force: true });
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+   THE ASSET FRAME (1.7.0, phase 3) — an asset renders in a sandboxed iframe
+   whose srcdoc the client assembles. Two properties hold the isolation
+   guarantee up (docs/adr/0001-asset-frame-isolation.md) and both are pinned
+   here: the asset's own scripts never run, and the sandbox is exactly
+   `allow-scripts`. Below that, the picker's pure half — candidates, paths,
+   signatures, resolution — exercised through require(), the way the shared
+   matcher already is.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+const AssetFrame = require('./public/assetframe.js');
+const Picker = require('./public/picker.js');
+
+// A DOMPurify bound to a jsdom window, which is exactly what the page hands buildFrame (its own
+// global). Same library, same version, same profile — so what the suite asserts about the srcdoc is
+// what the browser assembles.
+function purifier() {
+  const { window } = new JSDOM('<!doctype html><html><body></body></html>');
+  return require('dompurify')(window);
+}
+
+// Everything an asset should NOT be able to smuggle into the frame, in one fixture.
+const HOSTILE = `<!doctype html>
+<html>
+<head><style>@font-face { src: url(./face.woff2) } .b { background: url('shot.png') } .c { background: url(https://cdn.example.com/x.png) }</style></head>
+<body onload="boom()">
+  <h1 data-sc="hero" style="background:url(bg.jpg)" onclick="steal()">Headline</h1>
+  <script>fetch('/api/state?path=doc.md')</script>
+  <iframe src="./nested.html"></iframe><object data="./o.pdf"></object><embed src="./e.swf">
+  <img src="./pic.png" srcset="small.png 1x, /abs.png 2x">
+  <img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">
+  <a href="./page.html">a link</a><a href="javascript:alert(1)">js</a>
+</body>
+</html>`;
+
+test('the served page pins the asset frame to sandbox="allow-scripts", and never allow-same-origin', async () => {
+  // Read the file AND what the server hands the browser, because the guarantee is about what actually
+  // reaches the page. The flag set lives in markup rather than being assembled in code precisely so it
+  // can be asserted as one literal string.
+  const onDisk = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+  const served = await fetchRetry(`${BASE}/`).then(r => r.text());
+  for (const [what, html] of [['on disk', onDisk], ['as served', served]]) {
+    assert.match(html, /<iframe class="asset-frame" sandbox="allow-scripts"/, `the frame is sandboxed ${what}`);
+    // The permanent one, from the spec's "not in this release": no flag, no option, no escape hatch.
+    // With it the frame would share this origin, which carries the file read/write API.
+    assert.doesNotMatch(html, /allow-same-origin/, `allow-same-origin appears nowhere ${what}`);
+  }
+});
+
+test('the asset profile strips everything that executes and keeps everything that styles', () => {
+  const out = AssetFrame.buildFrame({ html: HOSTILE, docRel: 'poster.html', purify: purifier(), picker: 'PICKER_SOURCE' });
+  // The asset's own script is gone, and so is every handler and javascript: URL that would run without one.
+  assert.doesNotMatch(out, /fetch\('\/api\/state/, 'the asset script is gone');
+  assert.doesNotMatch(out, /onload=|onclick=/, 'inline handlers are gone');
+  assert.doesNotMatch(out, /javascript:/, 'javascript: URLs are gone');
+  // Another browsing context inside the frame is a second thing to reason about, so there is none.
+  for (const tag of ['iframe', 'object', 'embed']) assert.ok(!out.includes('<' + tag), `<${tag}> is stripped`);
+  // …and the half that differs from the markdown profile: an asset's styling IS the document.
+  assert.match(out, /<style>/, '<style> survives');
+  assert.match(out, /@font-face/, 'and its contents');
+  assert.match(out, /<h1 data-sc="hero" style="background:url/, 'the inline style survives');
+  // Exactly one script, and it is ours. This pairs with the sandbox flags above: neither is alone.
+  assert.equal((out.match(/<script/g) || []).length, 1, 'one script tag');
+  assert.match(out, /<script>PICKER_SOURCE<\/script>/);
+  assert.match(out, /^<!doctype html>/, 'and a doctype, or the frame parses in quirks mode');
+});
+
+test('relative references are rewritten to /assets; absolute, protocol-relative and data: are not', () => {
+  const out = AssetFrame.buildFrame({ html: HOSTILE, docRel: 'brand/poster.html', purify: purifier(), picker: '' });
+  const at = (src) => '/assets?doc=' + encodeURIComponent('brand/poster.html') + '&src=' + encodeURIComponent(src);
+  assert.ok(out.includes(at('./pic.png').replace(/&/g, '&amp;')), 'an <img src>');
+  assert.ok(out.includes(at('small.png').replace(/&/g, '&amp;')), 'the first srcset candidate');
+  assert.ok(out.includes('/abs.png 2x'), 'and an absolute one in the same srcset is left alone');
+  assert.ok(out.includes(at('./face.woff2')), 'a url() in a <style> block');
+  assert.ok(out.includes(at('shot.png')), 'a single-quoted one');
+  assert.ok(out.includes('url(https://cdn.example.com/x.png)'), 'an absolute url() is untouched');
+  assert.match(out, /src="data:image\/gif/, 'a data: URL is untouched');
+  assert.match(out, /<a href="\.\/page\.html"/, 'and an <a href> is a destination, not a subresource — untouched');
+});
+
+test('the url() rewriter reaches every spelling of a CSS reference, and only the relative ones', () => {
+  const css = AssetFrame.rewriteCss(
+    `a{background:url(one.png)} b{background:url("two.png")} c{background:url( 'three.png' )}
+     d{background:url(/abs.png)} e{background:url(//cdn/x.png)} f{background:url(data:image/gif;base64,AA)}`, 'p.html');
+  for (const n of ['one.png', 'two.png', 'three.png'])
+    assert.ok(css.includes('src=' + encodeURIComponent(n)), `${n} is rewritten`);
+  assert.ok(css.includes('url(/abs.png)'), 'an absolute path is left alone');
+  assert.ok(css.includes('url(//cdn/x.png)'), 'so is a protocol-relative one');
+  assert.ok(css.includes('url(data:image/gif;base64,AA)'), 'and so is a data: URL');
+});
+
+test('buildFrame refuses a picker source that could close its own script tag', () => {
+  // Script content serializes raw, so this sequence would end the tag and spill the rest into the
+  // document as markup. It has never appeared in picker.js; the guard is what keeps it that way.
+  assert.throws(() => AssetFrame.buildFrame({ html: '<p>x</p>', docRel: 'p.html', purify: purifier(),
+    picker: 'var s = "</script><img onerror=alert(1)>"' }), /<\/script/);
+});
+
+test('the real picker.js inlines cleanly and boots only inside a frame', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'public', 'picker.js'), 'utf8');
+  const out = AssetFrame.buildFrame({ html: '<p>x</p>', docRel: 'p.html', purify: purifier(), picker: src });
+  assert.ok(out.includes('sidecar:'), 'the picker source made it into the srcdoc');
+  assert.equal((out.match(/<script/g) || []).length, 1);
+  // require()d, it must export and NOT touch a DOM — the Node tests below depend on that, and so does
+  // a stray <script src="/picker.js"> in the page itself.
+  assert.equal(typeof Picker.candidatesFor, 'function');
+});
+
+test('/assets serves the font types an asset needs, and still refuses anything unlisted', async () => {
+  for (const name of ['face.woff2', 'face.woff', 'face.ttf', 'face.otf'])
+    fs.writeFileSync(path.join(dir, name), 'not really a font');
+  fs.writeFileSync(path.join(dir, 'style.css'), 'body { color: red }');
+  const types = { 'face.woff2': 'font/woff2', 'face.woff': 'font/woff', 'face.ttf': 'font/ttf', 'face.otf': 'font/otf' };
+  for (const name in types) {
+    const r = await fetchRetry(`${BASE}/assets?doc=doc.md&src=${encodeURIComponent('./' + name)}`);
+    assert.equal(r.status, 200, name);
+    assert.equal(r.headers.get('content-type'), types[name]);
+    assert.equal(r.headers.get('x-content-type-options'), 'nosniff', 'the type stays pinned');
+    assert.match(r.headers.get('content-security-policy'), /default-src 'none'/);
+    // The frame is an opaque origin and a CSS font fetch is CORS-mode, so without this the poster
+    // renders in a fallback face. Images need none of it, and do not get it.
+    assert.equal(r.headers.get('access-control-allow-origin'), '*');
+  }
+  const img = await fetchRetry(`${BASE}/assets?doc=doc.md&src=${encodeURIComponent('./pic.svg')}`);
+  assert.equal(img.headers.get('access-control-allow-origin'), null, 'an image is not opened up');
+  for (const bad of ['./style.css', './doc.md', './server.js'])
+    assert.equal((await fetchRetry(`${BASE}/assets?doc=doc.md&src=${encodeURIComponent(bad)}`)).status, 400, bad);
+});
+
+// ---------- the picker's pure half ----------
+
+// A DOM to pick out of, built the way the frame's would be.
+function pickerDom(html) {
+  return new JSDOM('<!doctype html><html><body>' + html + '</body></html>').window.document;
+}
+
+test('a pick offers its candidates best-first: data-sc, then id, then the structural path', () => {
+  const doc = pickerDom('<main><h1 data-sc="hero" id="top">Train your own image gen model</h1>'
+    + '<p id="sub">Ten minutes.</p><p>bare</p><p>also bare</p></main>');
+  const both = Picker.candidatesFor(doc.querySelector('h1'));
+  assert.deepEqual(both.map(c => c.sel), ['[data-sc=hero]', '#top', undefined],
+    'data-sc outranks id, and the path is always the last resort');
+  assert.equal(both[0].label, 'hero');
+  assert.ok(both.every(c => c.sig === 'Train your own image gen model'), 'every candidate carries the signature');
+  assert.ok(both.every(c => c.path === 'main>h1'), 'and the same path');
+
+  const idOnly = Picker.candidatesFor(doc.querySelector('#sub'));
+  assert.deepEqual(idOnly.map(c => c.sel), ['#sub', undefined]);
+  // An element carrying neither attribute is still reviewable — most real posters have no data-sc at
+  // all, and refusing to anchor one would leave nothing to comment on.
+  const bare = Picker.candidatesFor(doc.querySelectorAll('p')[1]);
+  assert.equal(bare.length, 1);
+  assert.equal(bare[0].sel, undefined);
+  assert.equal(bare[0].label, 'p');
+  assert.equal(bare[0].path, 'main>p:nth-of-type(2)');
+});
+
+test('the structural path is a tag chain, indexed only where a tag repeats, and stops at <body>', () => {
+  const doc = pickerDom('<main><section><h2>One</h2></section><section><h2>Two</h2><h2>Three</h2></section></main>');
+  const secs = doc.querySelectorAll('section');
+  assert.equal(Picker.pathOf(secs[0].querySelector('h2')), 'main>section:nth-of-type(1)>h2',
+    'the section repeats so it is indexed; its lone h2 is not');
+  assert.equal(Picker.pathOf(secs[1].querySelectorAll('h2')[1]), 'main>section:nth-of-type(2)>h2:nth-of-type(2)');
+  assert.equal(Picker.pathOf(doc.querySelector('main')), 'main', 'the chain stops before <body>');
+  // Every step has to survive the store's own path rule, or the write is refused after the human typed
+  // the comment.
+  for (const p of ['main>section:nth-of-type(2)>h2:nth-of-type(2)', 'main', 'div>h1'])
+    assert.ok(Element.validPath(p), p);
+  for (const bad of ['', 'main h1', 'main>[x=1]', 'main>h1:nth-child(2)', 'a'.repeat(400)])
+    assert.ok(!Element.validPath(bad), JSON.stringify(bad) + ' is refused');
+});
+
+test('the picker and lib/element.js agree on a sel, a snippet and a synthesized quote', () => {
+  // selectorFor re-derives what parseRef knows, because the frame gets picker.js and nothing else.
+  // These are the three forms an agent can type and the picker can store.
+  for (const [ref, css] of [['[data-sc=hero]', '[data-sc="hero"]'], ['hero', '[data-sc="hero"]'], ['#sub', '[id="sub"]']]) {
+    assert.equal(Picker.selectorFor(ref), css, ref);
+    assert.ok(Element.validSel(ref), ref + ' is a sel the store holds');
+  }
+  assert.equal(Picker.selectorFor('a b'), null, 'and a value neither would store resolves to nothing');
+
+  // The quote a picker comment writes and the quote `sidecar comment --element` writes have to be the
+  // same string, or the same element reads two ways depending on who commented on it. The fixture nests
+  // inline tags on purpose: Node reads the file with every tag replaced by a SPACE, so a picker reading
+  // textContent would glue "your"+"own" into one word and agree with nothing.
+  const html = '<h1 data-sc="headline">Train <b>your</b><i>own</i> image generation model in ten minutes flat, no GPU and no account and no waiting</h1>';
+  const el = pickerDom(html).querySelector('h1');
+  const fromNode = Element.extract(html)[0];
+  assert.equal(Picker.textOf(el), Element.stripTags('Train <b>your</b><i>own</i> image generation model in ten minutes flat, no GPU and no account and no waiting'),
+    'the picker reads an element the way the Node rule reads the file');
+  assert.equal(Picker.snippet(Picker.textOf(el)), fromNode.text, 'the elided display snippet matches');
+  assert.equal(Picker.synthQuote('headline', Picker.snippet(Picker.textOf(el))),
+    Element.synthQuote(fromNode.label, fromNode.text), 'and so does the whole quote');
+  assert.ok(fromNode.text.endsWith('…'), 'both elide at 80 characters');
+
+  // The SIGNATURE is a different string on purpose: Node checks liveness by matching it against the
+  // tag-stripped file, and an ellipsis appears nowhere in the source.
+  const sig = Picker.candidatesFor(el)[0].sig;
+  assert.ok(!sig.includes('…'), 'no ellipsis in a signature');
+  assert.equal(sig.length, 80);
+  assert.equal(Element.isLive(html.replace('data-sc="headline"', 'class="big"'), { sel: '[data-sc=headline]', sig }), true,
+    'so a signature the picker wrote still resolves by the Node rule after the attribute is renamed');
+});
+
+test('the picker resolves sel first, then path checked against sig, then sig alone', () => {
+  const doc = pickerDom('<main><h1 data-sc="headline">Train your own image gen model</h1>'
+    + '<section><p>Ten minutes, no GPU required.</p></section></main>');
+  const sig = 'Train your own image gen model';
+
+  const bySel = Picker.resolve(doc, { sel: '[data-sc=headline]', path: 'nope>nope', sig: 'wrong' });
+  assert.equal(bySel.by, 'sel', 'the attribute the agent named wins');
+  assert.equal(bySel.el.tagName, 'H1');
+
+  // Attribute gone, path still good: the path is trusted only because the signature agrees.
+  const byPath = Picker.resolve(doc, { sel: '[data-sc=gone]', path: 'main>h1', sig });
+  assert.equal(byPath.by, 'path');
+  assert.equal(byPath.el.tagName, 'H1');
+  // A path that now points at the wrong element is refused by the signature and falls through.
+  const stale = Picker.resolve(doc, { sel: '[data-sc=gone]', path: 'main>section>p', sig });
+  assert.equal(stale.by, 'sig', 'a path whose signature disagrees is not trusted');
+  assert.equal(stale.el.tagName, 'H1');
+  // Nothing left but the text.
+  assert.equal(Picker.resolve(doc, { sig }).by, 'sig');
+  assert.equal(Picker.resolve(doc, { sel: '[data-sc=gone]', sig: 'not in this document' }), null);
+
+  // A wrapper holding one child reads the same text as the child, so the deepest match is the one a
+  // human pointed at.
+  const nested = pickerDom('<main><div><span>Only text</span></div></main>');
+  assert.equal(Picker.resolve(nested, { sig: 'Only text' }).el.tagName, 'SPAN');
+});
+
+test('an element anchor may be stored by path and signature alone, and a bad path is refused', async () => {
+  // The picker's third candidate: an element with neither a data-sc nor an id. `sel` is absent rather
+  // than invalid, and the store holds it — CONTEXT.md's element anchor resolves "by structural path
+  // checked against a text-content signature" for exactly this case.
+  const ok = await put('/api/review', { path: 'poster.html', review: { items: [
+    { id: 'c-bare', kind: 'comment', by: 'you', status: 'open',
+      anchor: { element: { path: 'main>footer', sig: '© 2026 spktr' }, quote: 'footer · © 2026 spktr' }, thread: [] }] } });
+  assert.equal(ok.status, 200);
+  const stored = (await ok.json()).review.items.find(i => i.id === 'c-bare');
+  assert.deepEqual(stored.anchor.element, { path: 'main>footer', sig: '© 2026 spktr' });
+
+  // A path is run through querySelector inside the frame, so it gets the same treatment the sel does.
+  const bad = await put('/api/review', { path: 'poster.html', review: { items: [
+    { id: 'c-badpath', kind: 'comment', by: 'you', status: 'open',
+      anchor: { element: { path: 'main > *:has(script)', sig: 'x' }, quote: 'x' }, thread: [] }] } });
+  assert.equal(bad.status, 400);
+  assert.match((await bad.json()).error, /invalid element path/);
+
+  // And an element anchor that names nothing at all is not an anchor.
+  const empty = await put('/api/review', { path: 'poster.html', review: { items: [
+    { id: 'c-empty', kind: 'comment', by: 'you', status: 'open',
+      anchor: { element: { sig: 'x' }, quote: 'x' }, thread: [] }] } });
+  assert.equal(empty.status, 400);
+  assert.match((await empty.json()).error, /needs a sel or a path/);
+});
+
+test('check prints a path-only anchor by its path rather than by an absent sel', () => {
+  const d = assetDir();
+  fs.writeFileSync(path.join(d, 'poster.html.sidecar.json'), JSON.stringify({ schema: 1, items: [
+    { id: 'c-bare', kind: 'comment', by: 'claude', status: 'open',
+      anchor: { element: { path: 'main>footer', sig: '© 2026 spktr' }, quote: 'footer · © 2026 spktr' },
+      thread: [{ by: 'claude', at: '2026-08-13T10:00:00Z', text: 'the year is wrong' }] }] }, null, 2));
+  const out = cli(d, 'check', 'poster.html');
+  assert.match(out, /ok {3}c-bare {2}main>footer \(\+sig\)/);
+  assert.doesNotMatch(out, /undefined/);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('a comment on a picture survives: no attribute, no text, and Node abstains instead of orphaning', () => {
+  // The case the real fixture forced. A poster is mostly pictures, and a picture carries no data-sc, no
+  // id and no text — so the anchor is a path and the signature is empty. The Node rule is textual and
+  // has nothing to check, and calling that "the element is gone" would orphan every picture comment the
+  // moment it was written.
+  const poster = '<main><div class="plate"><img src="./face.jpg"></div><p>caption</p></main>';
+  const el = pickerDom(poster).querySelector('img');
+  const cand = Picker.candidatesFor(el)[0];
+  assert.equal(cand.sel, undefined);
+  assert.equal(cand.sig, '');
+  assert.equal(cand.path, 'main>div>img');
+  const element = { path: cand.path, sig: cand.sig };
+  assert.equal(Element.isLive(poster, element), true, 'Node abstains on a path it cannot run');
+  // It still orphans on the evidence it DOES have: a signature that stopped matching is a real answer.
+  assert.equal(Element.isLive('<main><p>caption</p></main>', { path: 'main>h1', sig: 'gone now' }), false);
+
+  // And the store takes it, so the comment can actually be written.
+  const { annotateOrphans } = require('./lib/review.js');
+  const review = { items: [{ id: 'c-pic', kind: 'comment', status: 'open',
+    anchor: { element, quote: 'img' }, thread: [] }] };
+  annotateOrphans(poster, review);
+  assert.equal(review.items[0].status, 'open');
+});
+
+test('the picker, booted inside the real srcdoc, speaks the whole protocol', () => {
+  // The DOM half, exercised the only way it can be without a browser: build the srcdoc the page would
+  // build, run it under jsdom with scripts ON, and drive it. jsdom does no layout, so the rects are all
+  // zero — geometry VALUES are for the browser pass; that they are reported, keyed by item, is here.
+  const srcdoc = AssetFrame.buildFrame({ html: POSTER, docRel: 'poster.html', purify: purifier(),
+    picker: fs.readFileSync(path.join(__dirname, 'public', 'picker.js'), 'utf8') });
+  const dom = new JSDOM(srcdoc, { runScripts: 'dangerously', pretendToBeVisual: true });
+  const win = dom.window, doc = win.document;
+  const sent = [];
+  // At the jsdom top level window.parent IS the window, which is also why the picker did not boot
+  // itself — it only does that inside a frame. So this captures its outbound channel.
+  win.postMessage = (msg) => sent.push(msg);
+  assert.equal(typeof win.SidecarPicker, 'object', 'the inlined picker ran');
+  win.SidecarPicker.boot(win);
+  const ready = sent.find(m => m.type === 'sidecar:ready');
+  assert.ok(ready, 'it reports the canvas on boot');
+  assert.equal(typeof ready.width, 'number');
+
+  const say = (data) => { sent.length = 0; win.dispatchEvent(new win.MessageEvent('message', { data })); };
+
+  // init with what a TERMINAL-written item knows: a sel and nothing else.
+  say({ type: 'sidecar:init', items: [{ id: 'c1', element: { sel: '[data-sc=headline]' } }] });
+  assert.deepEqual(sent.find(m => m.type === 'sidecar:anchors').anchors, { c1: 'resolved' });
+  assert.deepEqual(Object.keys(sent.find(m => m.type === 'sidecar:geometry').rects), ['c1']);
+  assert.equal(doc.querySelectorAll('.sc-anchored').length, 1, 'the element carries its cue');
+  // …and the picker hands back what only a DOM could know, for the store to keep.
+  const bf = sent.find(m => m.type === 'sidecar:backfill');
+  assert.equal(bf.id, 'c1');
+  assert.equal(bf.element.path, 'main>h1');
+  assert.equal(bf.element.sig, 'Train your own image gen model');
+  // Written back, that anchor still resolves by the NODE rule after its attribute is renamed — which is
+  // the whole point of the backfill.
+  assert.equal(Element.isLive(POSTER.replace('data-sc="headline"', 'class="big"'), bf.element), true);
+
+  // A click on a bare element is a pick; a click on one that already carries an item opens that card.
+  const footer = doc.querySelector('footer');
+  sent.length = 0;
+  footer.dispatchEvent(new win.MouseEvent('mouseover', { bubbles: true }));
+  assert.equal(sent.find(m => m.type === 'sidecar:hover').label, 'footer');
+  assert.equal(doc.querySelectorAll('.sc-hover').length, 1);
+  sent.length = 0;
+  footer.dispatchEvent(new win.MouseEvent('click', { bubbles: true, cancelable: true }));
+  const pick = sent.find(m => m.type === 'sidecar:pick');
+  assert.equal(pick.label, 'footer');
+  assert.equal(pick.text, '© 2026 spktr');
+  assert.equal(pick.candidates[0].path, 'main>footer');
+  sent.length = 0;
+  doc.querySelector('h1').dispatchEvent(new win.MouseEvent('click', { bubbles: true, cancelable: true }));
+  assert.deepEqual(sent.filter(m => m.type === 'sidecar:open').map(m => m.id), ['c1']);
+  assert.equal(sent.some(m => m.type === 'sidecar:pick'), false, 'and it does not also start a second thread');
+
+  // A link inside the frame must never navigate: the sandbox lets a frame navigate ITSELF, which would
+  // replace the asset with whatever the URL resolves to.
+  const ev = new win.MouseEvent('click', { bubbles: true, cancelable: true });
+  doc.querySelector('a').dispatchEvent(ev);
+  assert.equal(ev.defaultPrevented, true);
+
+  // The two inbound cues from the rail.
+  say({ type: 'sidecar:highlight', id: 'c1' });
+  assert.equal(doc.querySelectorAll('.sc-lit').length, 1);
+  say({ type: 'sidecar:highlight', id: null });
+  assert.equal(doc.querySelectorAll('.sc-lit').length, 0);
+  say({ type: 'sidecar:pulse', id: 'c1' });
+  assert.equal(doc.querySelectorAll('.sc-flash').length, 1);
+
+  // An anchor whose element is gone reports missing, which is what the card's orphan badge reads.
+  say({ type: 'sidecar:init', items: [{ id: 'c9', element: { sel: '[data-sc=ghost]', sig: 'nothing here' } }] });
+  assert.deepEqual(sent.find(m => m.type === 'sidecar:anchors').anchors, { c9: 'missing' });
+  dom.window.close();
+});

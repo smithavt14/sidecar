@@ -5,7 +5,7 @@ For *driving* sidecar as an agent (reviewing a document with a human), see
 
 ## Shape
 
-No build step. Ten files carry the whole tool:
+No build step. Twelve files carry the whole tool:
 
 | File | What it is |
 |---|---|
@@ -19,6 +19,8 @@ No build step. Ten files carry the whole tool:
 | `public/anchor.js` | The ONE content-anchor matcher, loaded by both the browser and Node. |
 | `public/serialize.js` | The tight-diff serialize/reindex round-trip, shared with the Node tests. |
 | `public/flow.js` | ```flow fences → SVG. Pure string in/out; no DOM, no dependency. |
+| `public/assetframe.js` | An asset's HTML → the sandboxed frame's srcdoc: the sanitize profile, the `/assets` rewriting, the picker inlining. |
+| `public/picker.js` | The ONE script that runs inside an asset frame. Picks, cues, geometry, and the postMessage protocol. |
 
 ## Two document kinds, two anchor kinds
 
@@ -41,6 +43,28 @@ instead of replacing it. Node has no DOM, so liveness there is textual (`lib/ele
 attribute is still written in the file, or the signature still reads out of it after tags are
 stripped. A dead one orphans with `orphanReason: 'element-changed'` and revives the same way a text
 anchor does.
+
+**`sel` is optional and `path` is not a lesser anchor.** Most real posters carry no `data-sc` and no
+`id` on anything, so an element picked in the browser often has only a structural path and a
+signature — refusing those would leave nothing in the file commentable. Both halves are validated
+where present (`validSel`, `validPath`), for the same reason an item id is: each is echoed back into a
+selector. An anchor naming neither is refused.
+
+Two authorities decide whether an element anchor is live, and they see different things. The picker
+has a DOM and runs `sel`, then `path` verified against `sig`, then a document-wide search for `sig`
+alone; it reports the answer out as `anchors {id: resolved|missing}`, which is what the card's orphan
+badge reads on an asset. Node is textual and **abstains** on a path-only anchor with no signature (a
+picture has no text), because calling every picture comment dead is a worse failure than deferring to
+the side that can actually see. The signature is taken the way Node reads the file, tags becoming
+spaces, so `<span>a</span><span>b</span>` signs as `a b` on both sides.
+
+The frame is assembled in the CLIENT (`public/assetframe.js`), which is what keeps this
+dependency-free: the page already has DOMPurify. `/api/state` returns the asset's raw HTML in the
+`markdown` field, the asset profile keeps `<style>` and inline styles while stripping everything that
+executes, relative `src`/`href`/`url()` references are rewritten to `/assets`, and the picker is
+inlined as the srcdoc's only script. Everything the page needs back out of the frame — the canvas
+size to scale by, per-item rects to dock cards by, picks — crosses a postMessage boundary, because the
+sandbox withholds this page's origin. `docs/adr/0001-asset-frame-isolation.md` has the why.
 
 ## What sidecar actually promises
 
@@ -103,7 +127,10 @@ hover title in the UI.
   in-process against its own baseline), atomic blocks emitting their source bytes rather than
   going through turndown, the legacy rename moving the full sibling set while never merging two
   reviews when both names are present, `/api/state` refusing a file in neither allowlist, save and
-  format refusing an asset, and an element `sel` being validated wherever an item id is.
+  format refusing an asset, an element `sel` and `path` being validated wherever an item id is, the
+  asset frame's sandbox flag set being exactly `allow-scripts` (asserted against the whole served
+  page, which is why no comment in `public/index.html` spells the same-origin flag), and the
+  assembled srcdoc carrying no script but the picker.
 
 ## Attached images
 

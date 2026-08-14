@@ -8,6 +8,7 @@
 <script src="/anchor.js"></script>   <!-- the shared matcher; server requires the same file so both agree on occurrences -->
 <script src="/serialize.js"></script>   <!-- the tight-diff serialize/reindex round-trip; Node tests require the same file -->
 <script src="/flow.js"></script>   <!-- ```flow fences → SVG; pure string in/out, Node tests require the same file -->
+<script src="/assetframe.js"></script>   <!-- an .html asset → the sandboxed frame's srcdoc; Node tests require the same file -->
 <script src="/lib/marked/marked.min.js"></script>
 <script src="/lib/dompurify/dist/purify.min.js"></script>   <!-- marked v12 has no sanitizer; scrub its HTML before it hits innerHTML (XSS) -->
 <script src="/lib/diff/dist/diff.min.js"></script>
@@ -136,6 +137,17 @@
     opacity:0; transition:opacity .15s; pointer-events:none; }
   #doc .block[data-atomic]:hover .fl-hint { opacity:1; }
   @media (hover:none) { .fl-hint { display:none; } }
+  /* ---------- the asset frame ----------
+     An .html asset renders in a sandboxed iframe at its NATURAL size, scaled down to the document
+     column with a transform (see sizeFrame). The wrapper carries the scaled height, because a
+     transform does not change layout size and the page would otherwise scroll to the unscaled one. */
+  #doc .asset-wrap { position:relative; margin:10px 0 0; }
+  #doc iframe.asset-frame { display:block; border:0; transform-origin:top left; background:#fff;
+    border-radius:12px; box-shadow:var(--shadow); }
+  /* the document column's read-only tell, beside the filename in the header */
+  .kindtag { font-size:10.5px; font-weight:600; letter-spacing:.05em; text-transform:uppercase;
+    color:var(--muted); background:var(--fill); border-radius:6px; padding:3px 8px; white-space:nowrap; }
+  .kindtag:empty { display:none; }
   #doc table { border-collapse:collapse; } #doc td, #doc th { border:1px solid var(--line-2); padding:6px 11px; font-size:14px; }
   /* a document blockquote is CONTENT, not the agent — keep it monochrome (yellow is reserved) */
   #doc blockquote { border-left:2px solid var(--line-2); margin-left:0; padding-left:14px; color:var(--muted); }
@@ -482,6 +494,7 @@
         <span class="wm">sidecar</span>
       </a>
     </h1>
+    <div id="kind" class="kindtag"></div>
     <div id="presence" class="presence away"></div>
     <div class="spacer"></div>
     <div id="turn" class="turn"></div>
@@ -520,6 +533,13 @@
 <!-- One file picker for every compose box, not one per card: the "image" button records which
      textarea asked, then clicks this. accept is a hint, not a check — the server sniffs the bytes. -->
 <input type="file" id="picker" accept="image/*" multiple hidden>
+<!-- The asset frame, written out as markup rather than built in code so the flag set is one literal
+     string a test can pin — and the test pins the WHOLE FILE, asserting the same-origin flag is spelled
+     nowhere in it, which is why no comment here spells it either. `allow-scripts` and nothing else: a
+     frame granted this page's origin would reach sidecar's file read/write API, and the isolation
+     guarantee (docs/adr/0001-asset-frame-isolation.md) would be gone. The only script inside is the
+     picker, which assetframe.js inlines after DOMPurify has stripped the asset's own. -->
+<template id="assetFrameTpl"><iframe class="asset-frame" sandbox="allow-scripts" referrerpolicy="no-referrer" title="asset preview"></iframe></template>
 <div id="sheetBackdrop" onclick="toggleSheet(false)"></div>
 <button id="sheetToggle" onclick="toggleSheet()">review <span class="n" id="sheetCount"></span></button>
 
@@ -640,12 +660,18 @@ async function reloadFile() {
 }
 function applyState(s) {
   hideBanner();
-  state = s; dirty = false; setStatus('saved');
+  state = s; dirty = false;
+  // An asset never saves, so "saved" would be a claim about nothing. The slot carries the picker's
+  // hover label instead (see the frame's `hover` message).
+  setStatus(s.kind === 'asset' ? '' : 'saved');
   if (s.code) { const b = document.querySelector('.brand'); if (b) b.title = 'server code ' + s.code; }   // §6b: staleness visible on hover
   renderPwd(); renderDoc(); renderSide();
 }
-// pwd line above the doc — the document's path, terminal-style (dir muted, filename inked)
+// pwd line above the doc — the document's path, terminal-style (dir muted, filename inked). The kind
+// tag beside the filename says "asset" on an HTML document, because the read-only surface is otherwise
+// an unexplained absence: no caret, no toolbar, nothing to blame.
 function renderPwd() {
+  $('kind').textContent = isAsset() ? 'asset · read-only' : '';
   const p = state.pwd || FILE || '';
   const i = p.lastIndexOf('/');
   $('pwd').innerHTML = i >= 0
@@ -693,16 +719,13 @@ function renderMd(tokens) { return DOMPurify.sanitize(marked.parser(tokens)); }
 function renderDoc() {
   const doc = $('doc');
   doc.innerHTML = '';
-  // TEMPORARY (v1.7.0 phase 2). An asset is HTML reviewed as a rendered visual, and the sandboxed
-  // frame that renders it lands in phase 3. Until then say so plainly rather than running the file
-  // through the markdown path, which would draw its source as text under an editable surface.
+  // An asset is HTML reviewed as a rendered visual: it goes into a sandboxed frame, not through the
+  // markdown path, which would draw its source as text under an editable surface.
   if (state.kind === 'asset') {
     doc.contentEditable = 'false';
     blocks = [];
-    const el = document.createElement('div');
-    el.className = 'block';
-    el.textContent = 'asset — rendering lands in phase 3';
-    doc.appendChild(el);
+    doc.appendChild(buildAssetFrame());
+    refreshFrame();
     return;
   }
   const tokens = marked.lexer(state.markdown);
@@ -733,6 +756,151 @@ function rewriteAssetSrc(img) {
   const src = img.getAttribute('src') || '';
   if (!src || /^([a-z][a-z0-9+.-]*:|\/\/|\/)/i.test(src)) return;   // absolute, protocol-relative, or data: → leave it
   img.setAttribute('src', '/assets?doc=' + encodeURIComponent(FILE) + '&src=' + encodeURIComponent(src));
+}
+
+// ---------- the asset frame ----------
+// An .html asset renders in a sandboxed iframe whose srcdoc the CLIENT assembles: DOMPurify strips the
+// asset's scripts, handlers and embedded browsing contexts while keeping its styles, relative
+// references are rewritten to the /assets route, and sidecar's picker is inlined as the only script
+// that runs in there. The pipeline itself lives in /assetframe.js, shared with the Node tests.
+//
+// Everything the page needs from inside the frame crosses a postMessage boundary, because the sandbox
+// deliberately withholds this page's origin from it: the natural canvas size (to scale by), per-item
+// rects (to dock cards by), and picks. See docs/adr/0001-asset-frame-isolation.md for why a frame and
+// not a shadow root.
+const isAsset = () => !!state && state.kind === 'asset';
+let frameEl = null, frameNatural = null, frameScale = 1;
+let frameGeometry = {};    // item id → rect in the frame's own coordinates
+let frameAnchors = {};     // item id → 'resolved' | 'missing', the frame's own view of each anchor
+let pendingElement = null; // the element anchor a pick is composing against
+
+// The picker's source, fetched once and inlined. Fetched from the PAGE, which is same-origin with the
+// server; the frame could not fetch it at all without a round trip on an opaque origin.
+let pickerSrc = null;
+async function pickerSource() {
+  if (pickerSrc == null) pickerSrc = await (await fetch('/picker.js')).text();
+  return pickerSrc;
+}
+
+function buildAssetFrame() {
+  const wrap = document.createElement('div');
+  wrap.className = 'asset-wrap';
+  // Cloned from the template in the markup so the sandbox flags are never assembled in code — see the
+  // comment on #assetFrameTpl.
+  frameEl = $('assetFrameTpl').content.firstElementChild.cloneNode(true);
+  frameGeometry = {}; frameAnchors = {}; frameNatural = null; frameScale = 1;
+  wrap.appendChild(frameEl);
+  return wrap;
+}
+
+async function refreshFrame() {
+  const el = frameEl, src = await pickerSource();
+  if (el !== frameEl) return;   // a reload landed while the source was in flight; that render owns the frame
+  frameEl.setAttribute('srcdoc', AssetFrame.buildFrame({
+    html: state.markdown, docRel: FILE, purify: DOMPurify, picker: src }));
+}
+
+// Scale the natural canvas into the document column. A transform rather than a width: an asset is laid
+// out to the pixel (a 1080x1350 poster), so reflowing it to fit would review a different document.
+function sizeFrame() {
+  if (!frameEl || !frameNatural || !frameEl.parentElement) return;
+  const avail = frameEl.parentElement.clientWidth;
+  // Zero is "layout has not run", never a real column width — `ready` can land while the page is in a
+  // hidden pane or background tab, where committing 0 would pin the frame at scale(0) until the next
+  // window resize. Retry on a timer: rAF is precisely what a hidden page starves.
+  if (!avail) { setTimeout(sizeFrame, 250); return; }
+  frameScale = Math.min(1, avail / Math.max(1, frameNatural.width));
+  frameEl.style.width = frameNatural.width + 'px';
+  frameEl.style.height = frameNatural.height + 'px';
+  frameEl.style.transform = frameScale < 1 ? 'scale(' + frameScale + ')' : '';
+  // A transform does not change layout size, so the wrapper carries the scaled height or the page
+  // scrolls to the unscaled one and leaves a screen of blank below a tall poster.
+  frameEl.parentElement.style.height = Math.ceil(frameNatural.height * frameScale) + 'px';
+}
+
+function sendFrame(name, body) {
+  if (!frameEl || !frameEl.contentWindow) return;
+  const msg = { type: 'sidecar:' + name };
+  for (const k in body) msg[k] = body[k];
+  // '*' is forced: the frame's origin is opaque, so there is no origin string to name it by. The page's
+  // side of the trust check is the `event.source` test in the listener below.
+  frameEl.contentWindow.postMessage(msg, '*');
+}
+// The anchors the frame should resolve and mark: every live element item.
+function frameItems() {
+  return state.review.items
+    .filter(i => ['open', 'pending', 'orphaned'].includes(i.status) && i.anchor && i.anchor.element)
+    .map(i => ({ id: i.id, element: i.anchor.element }));
+}
+// A frame rect in PAGE coordinates. The iframe's own bounding rect already carries the scale, so only
+// the offset inside the frame has to be scaled.
+function frameRectFor(id) {
+  const r = frameGeometry[id];
+  if (!r || !frameEl) return null;
+  const fr = frameEl.getBoundingClientRect();
+  return { top: fr.top + r.top * frameScale, left: fr.left + r.left * frameScale,
+    width: r.width * frameScale, height: r.height * frameScale };
+}
+
+window.addEventListener('message', (e) => {
+  // The frame has an opaque origin, so `e.origin` is the string "null" and proves nothing. Identity is
+  // the window handle: only the frame this page created is listened to.
+  if (!frameEl || e.source !== frameEl.contentWindow) return;
+  const m = e.data;
+  if (!m || typeof m.type !== 'string' || m.type.indexOf('sidecar:') !== 0) return;
+  switch (m.type.slice(8)) {
+    case 'ready':
+      frameNatural = { width: m.width, height: m.height };
+      sizeFrame();
+      sendFrame('init', { items: frameItems() });
+      scheduleDock();
+      break;
+    case 'geometry': frameGeometry = m.rects || {}; scheduleDock(); break;
+    case 'anchors': frameAnchors = m.anchors || {}; break;
+    case 'backfill': backfillElement(m.id, m.element); break;
+    // The cursor affordance: the header's status slot says what a click would land on. An asset never
+    // saves, so the slot is free and it is already where the eye goes for document state.
+    case 'hover': setStatus(m.label ? 'comment on ' + m.label : ''); break;
+    case 'open': openReview(m.id); break;
+    case 'pick': onFramePick(m); break;
+  }
+});
+
+// A click on a bare element → the ordinary comment composer, pre-filled with the element reference.
+// The first candidate is the best one (data-sc, then id, then the structural path), and the quote is
+// synthesized exactly as lib/element.js does it, so a picker comment and a `sidecar comment --element`
+// comment on the same element read identically on the card.
+function onFramePick(m) {
+  const cand = (m.candidates || [])[0];
+  if (!cand) return;
+  const element = {};
+  if (cand.sel) element.sel = cand.sel;
+  if (cand.path) element.path = cand.path;
+  if (cand.sig) element.sig = cand.sig;
+  const t = (m.text || '').trim();
+  pendingElement = { element, quote: t ? cand.label + ' · ' + t : String(cand.label) };
+  pendingNode = null; pendingSel = pendingElement.quote;
+  pendingSelBlock = null; pendingSelOffset = null; savedRange = null;
+  const fr = frameEl.getBoundingClientRect(), r = m.rect || { top: 0, left: 0, width: 0, height: 0 };
+  selRect = { left: fr.left + r.left * frameScale, top: fr.top + r.top * frameScale,
+    bottom: fr.top + (r.top + r.height) * frameScale, right: fr.left + (r.left + r.width) * frameScale };
+  openComment();
+}
+
+// The picker resolved an anchor and knows more about it than the store does — a terminal-written item
+// carries only its `sel`, and one that re-resolved by signature has a path that has moved. Write the
+// refreshed hint back through the ordinary merge, which is field-by-field for element anchors
+// (lib/review.js mergeItem) precisely so this cannot clobber the synthesized quote.
+async function backfillElement(id, element) {
+  const it = state.review.items.find(i => i.id === id);
+  if (!it || !element || !element.path) return;
+  const cur = (it.anchor && it.anchor.element) || {};
+  if (cur.path === element.path && cur.sig === element.sig) return;   // nothing new — never write in a loop
+  it.anchor = { ...it.anchor, element: { ...cur, path: element.path, sig: element.sig } };
+  try {
+    const r = await api('PUT', '/api/review', { path: FILE, review: state.review });
+    state.review = r.review;
+  } catch (e) { console.error('sidecar: could not backfill the element anchor', id, e); }
 }
 
 // ---------- atomic blocks ----------
@@ -977,6 +1145,10 @@ let pendingSelBlock = null, pendingSelOffset = null, selRect = null;
 function onSelectEnd(e) {
   const t = e.target;
   if (!t || !t.closest || t.closest('#seltool,#popover,aside,header')) return;
+  // An asset has no text anchors and no editing, so the selection toolbar has nothing to offer on one —
+  // and its comment button would produce a quote anchor the CLI refuses on this document kind. Picking
+  // happens inside the frame instead.
+  if (isAsset()) { hideTool(); return; }
   setTimeout(() => {
     const sel = window.getSelection();
     const text = sel ? sel.toString().trim() : '';
@@ -1087,7 +1259,7 @@ function showTool() {
   st.style.top = Math.max(scrollY + 4, selRect.top + scrollY - st.offsetHeight - 8) + 'px';
 }
 function hideTool() { $('seltool').style.display = 'none'; }
-function hidePopover() { $('popover').style.display = 'none'; $('popover').innerHTML = ''; pendingNode = null; }
+function hidePopover() { $('popover').style.display = 'none'; $('popover').innerHTML = ''; pendingNode = null; pendingElement = null; }
 
 $('seltool').addEventListener('mousedown', (e) => e.preventDefault()); // keep the text selection alive
 $('seltool').addEventListener('click', (e) => {
@@ -1368,7 +1540,11 @@ async function submitComment() {
   const body = $('pobody').value.trim();
   if (!body || !pendingSel) return hidePopover();
   await flushSave();  // anchor must match what's on disk
-  const anchor = (pendingNode && nodeAnchor(pendingNode))
+  // Three anchor sources, one submit path: an element picked in an asset frame, a diagram node, or a
+  // text selection. The element case carries its own synthesized quote (label · snippet) so cards, the
+  // digest and `show` keep reading the one field.
+  const anchor = (pendingElement && { element: pendingElement.element, quote: pendingElement.quote })
+    || (pendingNode && nodeAnchor(pendingNode))
     || { quote: pendingSel, occurrence: occurrenceFor(pendingSel, pendingSelBlock, pendingSelOffset) };
   const item = { id: 'c' + Date.now(), kind: 'comment', by: state.user,
     anchor, status: 'open',
@@ -1442,13 +1618,17 @@ function diffHtml(quote, replacement) {
   return '<div class="diffbox">' + Diff.diffWords(quote, replacement).map(p =>
     p.added ? '<ins>' + esc(p.value) + '</ins>' : p.removed ? '<del>' + esc(p.value) + '</del>' : esc(p.value)).join('') + '</div>';
 }
-// An orphan has two very different causes and the card must not conflate them: an anchor that never
-// resolved once was mis-anchored from birth (a selection spanning two blocks, an agent quoting text that
-// isn't there), while "text changed" means it DID resolve and the human then edited underneath it.
-// Reporting the first as "text changed" blames the human for an edit they never made.
+// An orphan has three causes and the card must not conflate them: an anchor that never resolved once
+// was mis-anchored from birth (a selection spanning two blocks, an agent quoting text that isn't
+// there); "text changed" means it DID resolve and the human then edited underneath it; and on an asset
+// the element it named is no longer in the file, which is not a text edit at all. Reporting any of them
+// as another blames the wrong thing for the break.
 // Module scope on purpose — BOTH renderActive and nestedSugHtml call it.
-const orphanLabel = (it) => it.orphanReason === 'never-matched'
-  ? 'orphaned — anchor never matched' : 'orphaned — text changed';
+// `fromFrame` is the picker's verdict on an anchor the store still believes in — the same break, seen
+// by the authority that has a DOM.
+const orphanLabel = (it, fromFrame) => it.orphanReason === 'never-matched' ? 'orphaned — anchor never matched'
+  : (fromFrame || it.orphanReason === 'element-changed') ? 'orphaned — element changed'
+  : 'orphaned — text changed';
 
 // How many replies a suggestion has picked up, as a quiet header badge. A comment needs no such cue,
 // since its body IS the thread and a conversation on one is self-evident. A pending suggestion's body
@@ -1480,8 +1660,15 @@ function nestedSugHtml(sug) {
 // text the human has since rewritten) has no position and gets -1, which floats it to the top of the
 // rail where it's visible, instead of sinking it to the bottom.
 function docRank(items) {
-  const { full } = docText();
   const rank = new Map();
+  // An asset has no rendered text on this side of the frame boundary, so the order comes from the
+  // geometry the picker reported. Same contract: an anchor with no position gets -1 and floats to the
+  // top of the rail rather than sinking out of sight.
+  if (isAsset()) {
+    for (const it of items) rank.set(it.id, frameGeometry[it.id] ? frameGeometry[it.id].top : -1);
+    return rank;
+  }
+  const { full } = docText();
   for (const it of items) {
     let hit = null;
     try { hit = it.anchor && Anchor.findNth(full, it.anchor.quote, it.anchor.occurrence || 0); }
@@ -1544,9 +1731,15 @@ function dockCards() {
     // next slot — which, given the -1 sort rank, is the top of the rail. A comment on a diagram node has
     // no mark either, by design (markAnchors marks the <g> instead) — measure the node, or the card docks
     // beside whatever prose happens to repeat the label.
-    const mark = doc.querySelector('mark.anchor[data-id="' + cssId(id) + '"]')
-      || doc.querySelector('.fl-node.anchored[data-item-id="' + cssId(id) + '"]');
-    const target = mark ? mark.getBoundingClientRect().top - listTop : cursor;
+    // On an asset there is no mark to measure: the element lives inside the frame, and its rect arrived
+    // over postMessage. Same rule either way — no position means the next slot, which the -1 rank has
+    // already put at the top.
+    const mark = isAsset() ? null
+      : (doc.querySelector('mark.anchor[data-id="' + cssId(id) + '"]')
+        || doc.querySelector('.fl-node.anchored[data-item-id="' + cssId(id) + '"]'));
+    const inFrame = isAsset() ? frameRectFor(id) : null;
+    const target = mark ? mark.getBoundingClientRect().top - listTop
+      : inFrame ? inFrame.top - listTop : cursor;
     const top = Math.max(Math.round(target), cursor);
     card.style.top = top + 'px';
     cursor = top + card.offsetHeight + CARD_GAP;
@@ -1661,7 +1854,12 @@ function renderActive(list, top, childSug) {
   }
   for (const it of top) {
     const el = document.createElement('div');
-    el.className = 'card' + (it.status === 'orphaned' ? ' orphaned' : ''); el.dataset.id = it.id;
+    // Two authorities can call an item orphaned and the card shows either. The store's status comes from
+    // the Node rule, which is textual and abstains on an element it cannot check (a picture has no
+    // signature to match). The frame's `anchors` message is the DOM's own answer for the render the
+    // human is looking at, and on an asset it is the more informed of the two.
+    const dead = it.status === 'orphaned' || frameAnchors[it.id] === 'missing';
+    el.className = 'card' + (dead ? ' orphaned' : ''); el.dataset.id = it.id;
     // Per-item guard. A throw while building ONE card used to abort the whole loop, so every item after
     // it silently vanished from the rail while the tab count still claimed they were there — the human
     // sees "3 active", counts two, and has no way to know. Whatever goes wrong with one item, the rest
@@ -1670,7 +1868,7 @@ function renderActive(list, top, childSug) {
     const label = it.flag ? 'flag' : it.kind;
     let head = `<span class="who ${whoCls(it.by)}">${esc(it.by)}</span> <span class="badge ${label}">${label}</span>`;
     if (it.kind === 'suggestion') head += replyCount(it);
-    if (it.status === 'orphaned') head += ` <span class="badge orphaned">${orphanLabel(it)}</span>`;
+    if (dead) head += ` <span class="badge orphaned">${orphanLabel(it, frameAnchors[it.id] === 'missing')}</span>`;
     // No interpolated inline handlers: the id lives on the card's data-id (set safely above) and every
     // control carries a static data-action, dispatched by the delegated listeners on #side (see below).
     let body = `<div class="quote" title="click to locate" data-action="locate">${esc(it.anchor.quote)}</div>`;
@@ -2011,6 +2209,9 @@ function wrapAnchor(quote, occurrence, id) {
 // caret); the marks refresh on the next render/save cycle.
 function markAnchors() {
   const doc = $('doc');
+  // An asset's cues are drawn by the picker, inside the frame, on the elements themselves. Hand it the
+  // current anchor set instead of running the text matcher over a document that holds one iframe.
+  if (isAsset()) { sendFrame('init', { items: frameItems() }); return; }
   if (document.activeElement === doc || doc.contains(document.activeElement)) return;
   doc.querySelectorAll('mark.anchor').forEach(m => { const p = m.parentNode; while (m.firstChild) p.insertBefore(m.firstChild, m); p.removeChild(m); });
   doc.querySelectorAll('.fl-node.anchored').forEach(g => { g.classList.remove('anchored'); delete g.dataset.itemId; });
@@ -2071,8 +2272,9 @@ window.addEventListener('keydown', (e) => { if (e.key === 'Meta' || e.key === 'C
 window.addEventListener('keyup', (e) => { if (e.key === 'Meta' || e.key === 'Control') setModHeld(false); });
 window.addEventListener('blur', () => setModHeld(false));
 // Resize changes both the text reflow and the desktop/mobile cutoff, so the docked layout is recomputed
-// (or torn down, below 781px) on every resize.
-window.addEventListener('resize', scheduleDock);
+// (or torn down, below 781px) on every resize. An asset frame also re-scales: its canvas is fixed, the
+// column it has to fit into is not.
+window.addEventListener('resize', () => { if (isAsset()) sizeFrame(); scheduleDock(); });
 // Everything in the document that stands for this item: its prose highlights, or the diagram node
 // standing in for them. One helper so jumping, flashing and docking can never disagree about where an
 // item lives — they did, and a node comment flashed nothing while its card docked next to a paragraph.
@@ -2085,6 +2287,7 @@ function openReview(id) {
   toggleSheet(true);
   document.querySelectorAll('.flash').forEach(m => m.classList.remove('flash'));
   pulse(anchorEls(id));
+  if (isAsset()) sendFrame('pulse', { id });
   const card = $('side').querySelector('.card[data-id="' + id + '"]');
   if (card) { card.scrollIntoView({ behavior: 'smooth', block: 'center' }); pulse([card]); }
 }
@@ -2093,11 +2296,27 @@ function locate(id) {
   toggleSheet(false);
   markAnchors();
   document.querySelectorAll('.flash').forEach(m => m.classList.remove('flash'));
+  // On an asset the flash happens inside the frame; the page can only scroll to the element's rect,
+  // which it has from the picker's geometry.
+  if (isAsset()) {
+    sendFrame('pulse', { id });
+    const r = frameRectFor(id);
+    if (r) scrollTo({ top: Math.max(0, scrollY + r.top - innerHeight / 2), behavior: 'smooth' });
+    return;
+  }
   const marks = anchorEls(id);
   if (!marks.length) return;
   marks[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
   pulse(marks);
 }
+// Hovering a card lights its element in the frame — the asset's answer to the highlight a text anchor
+// already carries in the document. Delegated, because renderSide rebuilds every card.
+$('side').addEventListener('mouseover', (e) => {
+  if (!isAsset()) return;
+  const card = e.target.closest && e.target.closest('.card[data-id]');
+  sendFrame('highlight', { id: card ? card.dataset.id : null });
+});
+$('side').addEventListener('mouseleave', () => { if (isAsset()) sendFrame('highlight', { id: null }); });
 
 boot();
 </script>
