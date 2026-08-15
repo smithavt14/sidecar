@@ -3,6 +3,68 @@
 All notable changes to sidecar. Versions follow [semver](https://semver.org); dates are the day the
 version was tagged.
 
+## 1.8.0 (2026-08-15)
+
+**A review is a folder now, not a file.** Reviewing a product means reading a brief, a research
+report, and a business case, and each of those used to be an island. A panel down the left lists
+every document in the folder you have open, and clicking one loads it in place: same view, same live
+event stream, the URL still naming the document. It sorts three ways and remembers which per folder:
+spine (`summary.md` first, `brief.md` second, the rest alphabetical), last updated, and waiting on
+you. A breadcrumb steps up a level, the panel collapses to an icon strip with its width persisted,
+and below 780px it becomes a drawer. Existing single-document deep links (`?f=…`) behave exactly as
+they did.
+
+**Follow a citation without leaving the document.** A relative link naming another document in the
+served root opens in sidecar on a plain click, with the panel following along and browser back
+returning to the paragraph you were on. Everything else a link can be keeps the behaviour it had: an
+outbound URL, a `mailto:`, an anchor within the document, a path that climbs out of the served root,
+a file sidecar does not review. Cmd-click still opens a second tab, and an `.html` asset participates
+through the same rule its element picker already used.
+
+**The folder says what is still waiting on you.** Each row badges the items on that document whose
+next move is YOURS: a live comment whose latest message is the agent's, and a pending suggestion,
+which only you can decide. A document whose open items are the agent's move shows a neutral dot, and
+one with nothing open shows nothing, because a folder where every row wears a number stops meaning
+anything. The panel's second tab is an inbox: every open item across the folder, grouped by document,
+waiting on you first, and clicking one opens that document at the anchored span. The rule is one
+function the server runs over the folder and the page runs over the open document, so the badge and
+the rail can never report two different numbers.
+
+**One watcher for the whole folder.** `sidecar wait --dir <folder>` and `sidecar digest --dir
+<folder>` take a folder where the single-document verbs take a file: one process over every document
+in it, one digest with a heading per document, and one `DONE` that is true only when every document
+is done. It aggregates and stores nothing of its own. The cursor is still one
+`<doc>.sidecar.seen.json` per document, so a folder wait and a per-document wait can be swapped for
+each other mid-review and neither replays a turn nor skips one. Exit codes match the single-document
+contract (0 acted, 1 timeout, 2 a bad path or a watcher already holding the folder), `--force` takes
+over a wedged one, and the lock lives in tmp so nothing new appears beside the documents. A document
+created mid-wait joins on its own, baselined where it stands. Presence covers every document in the
+folder while a folder wait is armed.
+
+**The rail holds still while the agent rewrites the document.** Commenting on a sentence and then
+having the agent rewrite it used to move the card out from under your cursor: the anchor stopped
+matching, the item floated to the top of the rail as orphaned, and `reanchor` dropped it back down a
+few seconds later. A card whose reply box has the caret or holds unsent text is now pinned where it
+is and moves for nothing; a card whose anchor stops matching holds its last known position, greyed,
+instead of floating; and nothing shows as orphaned until the anchor has failed for seven seconds,
+which an edit and its reanchor normally round-trip inside. The stored review is unchanged: this is
+only what the card does about it.
+
+**Also:**
+
+- The window is one application shell: the panel is the frame, the wordmark and the document's own
+  header sit on one unbroken rule, and the review rail fills the width the document does not want, up
+  to 520px, instead of leaving a dead band on a wide screen. A rail width you dragged still wins at
+  every size.
+- A ` ```flow ` diagram no longer shrinks to fit its column at any cost. It renders at a size its
+  labels can be read at and scrolls sideways inside its own box when that is wider than the column,
+  which took the CCDC brief's diagrams from 24% scale to 85% at phone width.
+- A legacy-named or unreadable sidecar counts zero in the panel rather than being migrated as a side
+  effect of listing the folder. Its row still draws.
+
+**Upgrading:** re-arm any `sidecar wait` armed before the upgrade, same as every release. Nothing on
+disk changes format.
+
 ## 1.7.0 (2026-08-14)
 
 **Sidecar reviews posters now.** Open an `.html` file and it renders as it was designed, at scale,

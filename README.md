@@ -23,6 +23,7 @@ Sidecar brings the review to the file instead: suggestion cards, word-level diff
 - **Real files, real diffs.** Edits write the actual markdown, and untouched blocks keep their exact original bytes, so `git diff` shows just what changed, and git is your undo.
 - **Any agent with a shell.** Claude Code, Cursor, Codex, and the rest. One small CLI, no plugin, no API key.
 - **A live loop, not a mailbox.** Your agent can watch the review and answer inside your comment threads the moment you act, and the thread shows _claude is replying_ while the answer is being written.
+- **A folder, not one file.** Serve a project directory and the review is the whole project: a panel lists its documents, badges say which ones are waiting on you, and an inbox collects every open thread across them. Your agent watches the folder with one `wait --dir`.
 - **Anchored to content, not line numbers.** If text moves, anchors follow; if it's gone, the item goes orphaned, loudly, instead of editing the wrong place.
 - **Cheap turns.** After the first read, your agent sees only what changed since its last look, so a long review doesn't mean re-reading the document every turn.
 - **Mobile friendly.** One `tailscale serve` line puts the review on your phone over your own tailnet, where a comment can carry the screenshot you just took.
@@ -76,12 +77,28 @@ it publicly.
 1. Your agent drafts a markdown file (or you open one of yours).
 2. It seeds the review with suggestion cards and comments anchored to real text.
 3. You read, accept, reject, reply, and edit rich text in place. Desk or phone.
-4. The agent, backgrounded on `sidecar wait`, answers the moment you act, proposing rewrites right
+4. The agent, backgrounded on `sidecar wait` (or `sidecar wait --dir` for a whole folder), answers the moment you act, proposing rewrites right
    inside your comment threads. While it composes, the thread it's answering shows a quiet
    *claude is replying*, which clears as each reply lands.
 5. You click **done reviewing** → the agent makes one commit. The dirty diff *was* the review state.
 
 ## What you can do
+
+**Move around a folder.** The panel down the left lists every document in the folder you are reading,
+and clicking one opens it in place. Sort by *spine* (`summary.md` first, `brief.md` second, then
+alphabetical), by *last updated*, or by *waiting on you*; the choice sticks per folder. A breadcrumb
+steps up a level, the panel collapses to an icon strip, and below 780px it becomes a drawer. Relative
+links between documents work too: `[the research](./market-research.md)` opens in sidecar rather than
+in a download, so following a citation keeps you in the review, and browser back returns you to the
+paragraph you left.
+
+**See what is still waiting on you.** Each row carries a count of the items on that document whose
+next move is yours: an open comment whose latest message is your agent's, plus every pending
+suggestion card. A document waiting on the agent shows a neutral dot, and a settled one shows
+nothing. The **inbox** tab lists those open items across the whole folder, grouped by document, and
+clicking one opens that document at the anchored text. Your agent sees the same folder from its side:
+`sidecar wait --dir <folder>` is one process over every document in it, so nothing sits unwatched
+while you read.
 
 **Edit.** The rendered document *is* the editor.
 - **Type-to-format:** `#`/`##`/`###` + space for headings, `-`/`1.` for lists, `>` for a quote, ` ``` `
@@ -145,9 +162,10 @@ npm start -- ~/path/to/your/docs      # → http://localhost:4880
 npm test                              # end-to-end tests against a real server + temp fixture repo, plus round-trip/anchor units
 ```
 
-It's a ~3,800-line tool with no build step: `public/index.html` is the whole frontend, `server.js` the
-whole backend. The shared matcher (`public/anchor.js`) and serializer (`public/serialize.js`) run in both
-the browser and Node, so the tests exercise the real logic.
+It's a ~7,700-line tool with no build step: `public/index.html` is the frontend, with a handful of
+pure modules beside it, and `server.js` is the whole backend. The shared matcher (`public/anchor.js`),
+serializer (`public/serialize.js`), turn rule (`public/turn.js`), and link router (`public/doclink.js`)
+run in both the browser and Node, so the tests exercise the real logic.
 
 ## Credits
 

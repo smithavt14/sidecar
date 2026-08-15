@@ -178,7 +178,13 @@ sidecar show doc.md --needs-reply  # just the threads whose last message is thei
 sidecar show doc.md --json         # same, machine-readable
 sidecar check doc.md               # lint every anchor in the sidecar
 sidecar check doc.md --quote "…"   # pre-flight one quote before you write it
+
+sidecar wait --dir /abs/folder     # the same block over every document in a folder, one process
+sidecar digest --dir /abs/folder   # the same delta, one heading per document
 ```
+
+Reviewing more than one document? `wait` and `digest` take `--dir <folder>` where they take a file.
+See **Folders** below.
 
 `wait` and `digest` share a persistent last-seen cursor (a sibling `foo.md.sidecar.seen.json`, keyed by
 your `SIDECAR_AGENT`), so each reports only what changed since the last time you looked and advances the
@@ -367,6 +373,68 @@ as its unscripted self, which is worth knowing before you ask why an animation i
 
 ---
 
+## Folders: a review across several documents
+
+A product review is usually a folder rather than a file: a brief, a market research report, a
+business case. Serve the folder (`sidecar ~/path/to/project`) and both sides get the folder.
+
+**What they see.** A panel down the left lists every document in the open document's folder, that
+folder only, no recursion. Clicking a row opens it in place. The panel sorts three ways and
+remembers which per folder: *spine* (`summary.md` first, `brief.md` second, then alphabetical),
+*last updated*, and *waiting on you*.
+
+Each row carries a badge counting the items on that document whose next move is THEIRS: a live
+comment whose latest message is yours, plus every pending suggestion. A document with open items
+that are yours to move shows a neutral dot instead, and a settled document shows nothing. The
+panel's **Inbox** tab lists those open items across the whole folder, grouped by document; clicking
+one opens that document and lands on the anchored span. So they can see where the conversation
+stands without opening five documents, and your reply is what clears a row.
+
+**Relative links between documents open in sidecar.** Write `[the research](./market-research.md)`
+in a brief and a click on it loads that document in place, with browser back returning to the
+paragraph they left. Outbound URLs, `mailto:`, in-document anchors, and paths outside the served
+root behave exactly as they did. So a citation you write is a citation they can follow.
+
+**What you do: one watcher for the whole folder.**
+
+```bash
+sidecar wait --dir /abs/path/to/folder            # blocks until they act on ANY document in it
+sidecar digest --dir /abs/path/to/folder          # the same delta right now, per document
+sidecar digest --dir /abs/path/to/folder --peek   # …reading it without advancing anything
+```
+
+**Use `--dir` for any review covering more than one document.** One process instead of one per
+document, one digest with a `###` heading per document, and no set of background watchers to keep
+armed, which is where a document quietly stops being watched and a comment on it goes unanswered.
+
+The contract is the single-document one, read a folder at a time:
+
+- **Exit 0**: they acted. The digest is on stdout, labelled by document. Respond, then arm it again.
+- **Exit 1**: the timeout. Nothing advanced; it means run it again. `--timeout <seconds>` as usual.
+- **Exit 2**: the path is not a folder, or another watcher already holds it.
+- `DONE: true` only when **every** document in the folder is done. Until then the tail names how many
+  are, so you can watch a review close without opening anything.
+- **One folder watcher per folder per agent.** A second one refuses and names the holder's pid;
+  `--force` takes over a wedged one. Two would share every cursor in the folder, so whichever
+  advanced one first would decide what the other believed it had seen.
+- **The per-document cursors are unchanged.** `--dir` aggregates and stores nothing of its own: still
+  one `<doc>.sidecar.seen.json` per document, keyed by your agent name, advanced exactly as running
+  `sidecar digest` on each would. So you can swap between a folder wait and a per-document wait
+  mid-review, and a per-document `wait` inside a folder someone is dir-waiting is allowed rather than
+  refused. Neither replays a turn nor skips one.
+- **The lock lives in tmp**, not beside the documents, so nothing new appears in the folder and a
+  `*.sidecar.seen*` gitignore line still covers everything sidecar writes there.
+- **Presence covers the folder.** While a folder wait is armed, every document in it reads *claude is
+  here*; when it wakes, the document that woke it shows *claude is replying* on those threads while
+  the rest of the folder reads *claude is working*.
+- **A document created mid-wait joins on its own**, baselined where it stands, so creating a file is
+  not itself an event and the first real change to it is. You do not re-arm to pick it up.
+
+Passing a folder to the single-document `sidecar wait` tells you which flag it wanted rather than
+sleeping until its timeout.
+
+---
+
 ## Waiting for them — the step agents skip
 
 **Nothing pushes into your session.** sidecar will not interrupt you, and the human's comment will
@@ -380,6 +448,10 @@ sidecar wait /abs/path/to/doc.md      # blocks until they act, then prints the d
 
 Pass an **absolute path**. A relative one resolves against your cwd, and `wait` exits `2` rather than
 watching the wrong file.
+
+**If the review covers a folder, arm `sidecar wait --dir <folder>` instead** and read the rest of
+this section as written: everything below is true of both, and one folder watcher replaces the pile
+of per-document ones.
 
 **If your harness can run a command in the background and wake you when it exits, use that** — Claude
 Code: Bash with `run_in_background`. `wait` fs-watches, so it costs nothing while it sleeps and
@@ -413,7 +485,8 @@ call. It also means a wake you sit on looks exactly like what it is.
 
 1. **Draft** the document (the first version is usually yours).
 2. **Suggest** — cards and comments anchored to real text.
-3. **Hand over both URLs**, then arm `sidecar wait` as above.
+3. **Hand over both URLs**, then arm `sidecar wait` as above, or `sidecar wait --dir` when the review
+   covers a folder.
 4. **When it returns, act on its digest.** In steady state that is enough — the digest is everything
    that changed since your last look (decisions with their reasons, new comments and replies in full,
    orphans, the doc diff), not just the one event that woke it. Reach for `sidecar digest` to re-check

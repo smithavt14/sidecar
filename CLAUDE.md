@@ -5,7 +5,7 @@ For *driving* sidecar as an agent (reviewing a document with a human), see
 
 ## Shape
 
-No build step. Seventeen files carry the whole tool:
+No build step. Nineteen files carry the whole tool:
 
 | File | What it is |
 |---|---|
@@ -15,7 +15,9 @@ No build step. Seventeen files carry the whole tool:
 | `lib/element.js` | The element anchor: reference normalization, sel validation, and the Node-side liveness rule. |
 | `lib/assets.js` | Where an attached image lands and what counts as one. Shared by the upload route and `--image`. |
 | `lib/wait.js` | `sidecar wait` — the fs-watching reactive-loop primitive. Server-independent by design. |
+| `lib/digest.js` | The persistent per-agent cursor, the doc baseline beside it, and the one digest renderer both `wait` and `digest` print. |
 | `lib/dir.js` | The folder under `--dir`: which documents it holds, several digests read as one, the one-watcher lock. |
+| `lib/presence.js` | The presence ping. Decorative and server-optional: a failed POST never affects the command that made it. |
 | `public/index.html` | The entire frontend: rendering, contenteditable editor, directory panel, review rail. |
 | `public/navsort.js` | The directory panel's ordering. Pure list in/out; no DOM, no dependency. |
 | `public/doclink.js` | Does a link in a document open IN sidecar, and which document. Pure string in/out. |
@@ -164,7 +166,7 @@ a second before the file watcher does, so `navSelfUpdate` re-runs the same funct
 document's review after every render. Two answers to one question agree by being one function.
 
 The counting reads STORED status and nothing else. `public/stability.js`'s grace window is the client's,
-the server has no such state, and an item inside its window is being shown as open anyway — so
+the server has no such state, and an item inside its window is being shown as open anyway, so
 `orphaned` counts as live on both sides and the badge and the rail can never disagree. An orphaned
 SUGGESTION is the one asymmetry: it is open but it is not your turn, because repairing an anchor is
 `sidecar reanchor` and the human cannot run it.
@@ -229,15 +231,21 @@ hover title in the UI.
   Keep that when you change the surrounding code; delete them when the reason stops being true.
 - Layout preferences (each panel's width, whether it is collapsed, whether the review rail's width was
   set by hand rather than filled, and the directory panel's sort, one key per folder) persist in
-  `localStorage` under an `sc:` prefix, through the wrapped `uiStore` —
-  Safari in private mode throws on `setItem`, and nothing about a preference is worth an exception on
-  the path that renders the review. Document and review state never go there; those are files.
+  `localStorage` under an `sc:` prefix, through the wrapped `uiStore`. Safari in private mode throws
+  on `setItem`, and nothing about a preference is worth an exception on the path that renders the
+  review. Document and review state never go there; those are files.
+- The shell is the panel fixed to the window, the document inset past it, and the review rail taking
+  whatever width is left over, up to 520px. The measure the old 1280px cap was protecting belongs to
+  the document, so the document carries it (908px) and the rail fills the rest. `sc:railPinned` is
+  what separates a width the human dragged from one the fill computed: every session predating the
+  fill already has an `sc:railWidth` on file, and reading that as a preference would mean nobody who
+  had used sidecar before ever saw the new layout.
 - A history entry carries `{ f, y }`: which document, and where the reader left it. The browser's own
   `scrollRestoration` is off, since switching documents never navigates and its restore would fire
   against the outgoing document's height. Anything else belonging to one document is cleared in
   `resetDocState`, which runs on every swap.
-- Whether a link opens IN sidecar is `public/doclink.js` and nothing else. Three callers ask it — the
-  document's click handlers, the render that marks a link, and the asset frame's `pick` — so a rule
+- Whether a link opens IN sidecar is `public/doclink.js` and nothing else. Three callers ask it (the
+  document's click handlers, the render that marks a link, and the asset frame's `pick`), so a rule
   added there is a rule all three follow. The frame reports the href out and the page decides, because
   the frame is given the picker and no way to fetch a second script.
 - Safety properties that tests cover and should stay covered: atomic sidecar writes, merge-by-id never
