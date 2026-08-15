@@ -5,7 +5,7 @@ For *driving* sidecar as an agent (reviewing a document with a human), see
 
 ## Shape
 
-No build step. Sixteen files carry the whole tool:
+No build step. Seventeen files carry the whole tool:
 
 | File | What it is |
 |---|---|
@@ -15,6 +15,7 @@ No build step. Sixteen files carry the whole tool:
 | `lib/element.js` | The element anchor: reference normalization, sel validation, and the Node-side liveness rule. |
 | `lib/assets.js` | Where an attached image lands and what counts as one. Shared by the upload route and `--image`. |
 | `lib/wait.js` | `sidecar wait` — the fs-watching reactive-loop primitive. Server-independent by design. |
+| `lib/dir.js` | The folder under `--dir`: which documents it holds, several digests read as one, the one-watcher lock. |
 | `public/index.html` | The entire frontend: rendering, contenteditable editor, directory panel, review rail. |
 | `public/navsort.js` | The directory panel's ordering. Pure list in/out; no DOM, no dependency. |
 | `public/doclink.js` | Does a link in a document open IN sidecar, and which document. Pure string in/out. |
@@ -171,6 +172,37 @@ SUGGESTION is the one asymmetry: it is open but it is not your turn, because rep
 The panel reads the sidecar RAW rather than through `loadReview`, which also migrates the pre-1.7
 `.review.*` names. Migrating a whole folder as a side effect of listing it is a rename nobody asked
 for, so a legacy-named or unparseable sidecar counts zero and its row still draws.
+
+## One watcher for the whole folder
+
+`sidecar wait --dir <folder>` and `sidecar digest --dir <folder>` take a folder where the single-document
+verbs take a file: the same doc set the panel lists (`lib/dir.js` `docsIn`, no recursion, the `docKind`
+allowlist), one digest with a `###` heading per document, one `DONE` for the folder that is true only when
+every document is done.
+
+**It is an aggregation layer and holds no state of its own.** The cursor is still one
+`<doc>.sidecar.seen.json` per document, keyed by agent, and a folder digest advances each one exactly as
+running `sidecar digest` on each would. So a folder wait and a per-document wait can be swapped for each
+other mid-review, and neither replays a turn nor skips one. A directory-level cursor was the obvious
+alternative and it is a second store to keep honest; the first time the two disagreed, the agent would
+have answered twice or not at all.
+
+The watcher watches the FOLDER rather than the list of documents it held at launch, which is what lets a
+document created mid-review join without the agent re-arming. A document first seen mid-wait is baselined
+where it stands, exactly as a document with no cursor is at launch, so creating a file is not itself an
+event and the first real change to it is.
+
+**One folder watcher per agent**, enforced by a lock in tmp keyed by (realpath, agent): two of them share
+every cursor in the folder, so whichever advances one first decides what the other believes it has already
+seen. A held lock is a live pid AND a heartbeat inside 60s, since a pid can be recycled and an mtime alone
+cannot tell a killed watcher from a busy one. `--force` takes over. A per-document `wait` inside the folder
+coexists with a folder wait rather than being refused: it writes no lock and has to keep behaving exactly
+as it does, and the cost of the overlap is one doubled digest on one document, which self-heals because
+both processes read and advance the same cursor file.
+
+Presence covers every document in the folder while a folder wait is armed, by pinging each one (the server
+keys presence per document and needs no change for this). The woken document's ping carries the thread ids,
+so its cards read "claude is replying" while the rest of the folder reads "claude is working".
 
 ## Testing
 

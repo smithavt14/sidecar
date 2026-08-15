@@ -4234,3 +4234,240 @@ test('a citation inside an asset reaches the page as a pick carrying its href', 
   assert.equal(DocLink.route(second.href, from), null);
   dom.window.close();
 });
+
+// ---------- the folder layer: `wait --dir` / `digest --dir` (lib/dir.js) ----------
+// Reviewing a product means reviewing a folder, so one watcher and one digest cover it. The cursors
+// underneath stay per document — these assert the aggregation over them, the doc set it aggregates,
+// and the lock that keeps two folder watchers off the same cursors.
+const Dir = require('./lib/dir.js');
+const { computeDigest: cd, renderDigest: rd, digestBody: db } = require('./lib/digest.js');
+
+// A delta shaped like computeDigest's, without the disk round-trip.
+const delta = (over = {}) => ({ decided: [], orphaned: [], news: [], replies: [], removed: [],
+  docChanged: false, docPatch: null, done: false, empty: true, noMarker: false, at: null,
+  snapshot: { docHash: 'h', items: {}, at: 'now' }, ...over });
+const oneNew = (q, text) => delta({ empty: false, news: [{ id: 'c1', kind: 'comment', q, text }] });
+
+test('the folder doc set is the panel\'s: this directory only, documents only, sorted', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-dirset-'));
+  for (const n of ['zeta.md', 'brief.md', 'poster.html', 'notes.txt', 'data.json', '.hidden.md'])
+    fs.writeFileSync(path.join(d, n), 'x');
+  fs.mkdirSync(path.join(d, 'sub'));
+  fs.writeFileSync(path.join(d, 'sub', 'deep.md'), 'x');       // no recursion: the panel shows one folder
+  fs.writeFileSync(path.join(d, 'brief.md.sidecar.json'), '{}');   // a sidecar is not a document
+  fs.writeFileSync(path.join(d, 'brief.md.sidecar.seen.json'), '{}');
+  assert.deepEqual(Dir.docsIn(d).map(p => path.basename(p)), ['brief.md', 'poster.html', 'zeta.md']);
+  assert.deepEqual(Dir.docsIn(path.join(d, 'nope')), [], 'a folder that is not there is empty, never a throw');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('the folder digest labels every event with its document, and counts live against total', () => {
+  const out = Dir.renderDirDigest('/p/ccdc', [
+    { rel: 'brief.md', d: oneNew('the bet', 'say who it is for') },
+    { rel: 'business-case.md', d: delta() },
+    { rel: 'market-research.md', d: delta({ empty: false, replies: [{ id: 'c2', q: 'counties', text: 'which ones' }] }) },
+  ]);
+  assert.match(out, /## sidecar — your turn in \/p\/ccdc \(2 of 3 documents\)/);
+  assert.match(out, /### brief\.md\n- NEW comment @ “the bet”: say who it is for/);
+  assert.match(out, /### market-research\.md\n- REPLY @ “counties”: which ones/);
+  assert.ok(!out.includes('business-case.md'), 'a document with nothing unseen is counted, not printed');
+  assert.match(out, /\nDONE: false$/);
+});
+
+test('a folder digest with nothing unseen says so once, not once per document', () => {
+  const out = Dir.renderDirDigest('/p/ccdc', [{ rel: 'a.md', d: delta() }, { rel: 'b.md', d: delta() }]);
+  assert.equal(out, 'nothing new across 2 documents in /p/ccdc\n\nDONE: false');
+  assert.match(Dir.renderDirDigest('/p/empty', []), /^nothing new across 0 documents/);
+});
+
+test('folder DONE is true only when every document is done; a partial says which', () => {
+  const half = Dir.renderDirDigest('/p/ccdc', [
+    { rel: 'a.md', d: delta({ done: true }) }, { rel: 'b.md', d: delta() }]);
+  assert.match(half, /DONE: false {2}\(1 of 2 marked done: a\.md\)/, 'one finished document does not end the review');
+  const all = Dir.renderDirDigest('/p/ccdc', [
+    { rel: 'a.md', d: delta({ done: true }) }, { rel: 'b.md', d: delta({ done: true }) }]);
+  assert.match(all, /\nDONE: true$/);
+  assert.ok(!/marked done:/.test(all), 'and it does not then list them all back');
+});
+
+test('a document with no cursor is labelled per document, since the others still have theirs', () => {
+  const out = Dir.renderDirDigest('/p/ccdc', [
+    { rel: 'fresh.md', d: { ...oneNew('q', 't'), noMarker: true } },
+    { rel: 'seen.md', d: oneNew('q2', 't2') },
+  ]);
+  assert.match(out, /### fresh\.md {2}\(no last-seen marker\)/);
+  assert.match(out, /### seen\.md\n/, 'the document with a cursor carries no such note');
+});
+
+test('the doc-changes section nests under the document name in a folder digest', () => {
+  const withDiff = delta({ empty: false, docChanged: true, docPatch: '@@ -1 +1 @@\n-a\n+b' });
+  assert.match(Dir.renderDirDigest('/p', [{ rel: 'a.md', d: withDiff }]), /#### doc changes \(since your last look\)/);
+  // and the single-document digest still says ### — its heading is the top level there.
+  assert.match(rd(withDiff), /\n### doc changes \(since your last look\)/);
+});
+
+test('digestBody is the single-document renderer minus its frame (the split kept renderDigest honest)', () => {
+  const d = oneNew('the bet', 'say who');
+  assert.equal(rd(d), '## sidecar — your turn\n' + db(d) + '\n\nDONE: false');
+  const both = delta({ empty: false, news: d.news, docChanged: true, docPatch: '@@ -1 +1 @@\n-a\n+b' });
+  assert.equal(rd(both), '## sidecar — your turn\n' + db(both) + '\n\nDONE: false');
+});
+
+test('the folder lock: one watcher per (folder, agent), and a different agent gets its own', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-dirlock-'));
+  const p = Dir.lockPath(d, 'claude');
+  assert.notEqual(p, Dir.lockPath(d, 'gemini'), 'the agent is part of the key');
+  assert.notEqual(p, Dir.lockPath(d + '2', 'claude'), 'and so is the folder');
+  assert.equal(Dir.heldBy(p), null, 'nothing held to begin with');
+  assert.ok(Dir.acquireLock(d, 'claude').path, 'the first watcher takes it');
+  assert.equal(Dir.heldBy(p).pid, process.pid);
+  // Another agent on the same folder is a separate loop with its own cursors — it is not refused.
+  assert.ok(Dir.acquireLock(d, 'gemini').path);
+  assert.equal(Dir.heldBy(Dir.lockPath(d, 'gemini')).agent, 'gemini');
+  assert.ok(Dir.acquireLock(d, 'claude').path, 'and a process is never a rival to itself');
+  Dir.releaseLock(p); Dir.releaseLock(Dir.lockPath(d, 'gemini'));
+  assert.equal(Dir.heldBy(p), null, 'and it is free again on the way out');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('a lock whose holder is dead, or whose heartbeat stopped, is not held', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-dirlock2-'));
+  const p = Dir.lockPath(d, 'claude');
+  const live = { pid: process.pid, dir: d, agent: 'claude', at: 'now' };
+
+  fs.writeFileSync(p, JSON.stringify(live));
+  assert.ok(Dir.heldBy(p), 'a running holder with a fresh heartbeat holds it');
+
+  // Stopped heartbeat: the file is old, whoever wrote it is not beating any more.
+  const old = new Date(Date.now() - Dir.LOCK_TTL - 5000);
+  fs.utimesSync(p, old, old);
+  assert.equal(Dir.heldBy(p), null, 'three missed beats and the lock is free');
+  Dir.touchLock(p);
+  assert.ok(Dir.heldBy(p), 'a beat revives it');
+
+  // Dead holder: a pid nothing is running. 0x7FFFFFF is beyond any live pid on macOS/Linux.
+  fs.writeFileSync(p, JSON.stringify({ ...live, pid: 0x7FFFFFF }));
+  assert.equal(Dir.heldBy(p), null, 'a fresh file from a dead process is not a claim');
+
+  // A rival that is BOTH alive and beating is refused, and --force takes it.
+  fs.writeFileSync(p, JSON.stringify({ ...live, pid: 1 }));   // pid 1 is always alive (EPERM reads as alive)
+  assert.equal(Dir.acquireLock(d, 'claude').error.pid, 1, 'refused, and it names the holder');
+  assert.ok(Dir.acquireLock(d, 'claude', { force: true }).path, '--force takes over');
+  assert.equal(JSON.parse(fs.readFileSync(p, 'utf8')).pid, process.pid);
+
+  // Release only ever removes OUR lock — a process that was forced out must not delete the new claim.
+  fs.writeFileSync(p, JSON.stringify({ ...live, pid: 1 }));
+  Dir.releaseLock(p);
+  assert.ok(fs.existsSync(p), 'someone else\'s lock survives our release');
+  fs.writeFileSync(p, JSON.stringify(live));
+  Dir.releaseLock(p);
+  assert.ok(!fs.existsSync(p), 'and our own is cleaned up');
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+// ---- the folder verbs, as real processes (no server: the filesystem is the sync layer) ----
+
+const dirFixture = () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-dirwait-'));
+  fs.writeFileSync(path.join(d, 'brief.md'), '# Brief\n\nThe first claim lives here.\n');
+  fs.writeFileSync(path.join(d, 'research.md'), '# Research\n\nThe second claim lives here.\n');
+  fs.writeFileSync(path.join(d, 'ignored.json'), '{}');
+  return d;
+};
+// Alex's side of the loop: the human writing a comment, run as a different agent name.
+const asAlex = (args, cwd) => spawnSync('node', [path.join(__dirname, 'server.js'), ...args],
+  { cwd, env: { ...process.env, SIDECAR_AGENT: 'alex', SIDECAR_PORT: '4990' }, encoding: 'utf8' });
+const dirCli = (args, cwd) => spawnSync('node', [path.join(__dirname, 'server.js'), ...args],
+  { cwd, env: { ...process.env, SIDECAR_PORT: '4990' }, encoding: 'utf8' });
+
+test('sidecar wait --dir wakes on a change to ANY document and names which one', async () => {
+  const d = dirFixture();
+  dirCli(['digest', '--dir', d], d);   // seed both cursors, so the wait starts from a clean folder
+  const w = spawn('node', [path.join(__dirname, 'server.js'), 'wait', '--dir', d, '--timeout', '20'],
+    { env: { ...process.env, SIDECAR_PORT: '4990' }, stdio: 'pipe' });
+  let out = ''; w.stdout.on('data', (x) => out += x.toString());
+  await new Promise((res) => setTimeout(res, 900));   // let the fs-watcher attach
+  asAlex(['comment', 'research.md', '--quote', 'The second claim lives here.', '--text', 'WAKE-ON-ANY-DOC'], d);
+  const code = await new Promise((res) => w.on('exit', res));
+  assert.equal(code, 0, 'the folder wait exits 0 once they act on any document in it');
+  assert.match(out, /### research\.md/, 'the digest labels the event with its document');
+  assert.match(out, /WAKE-ON-ANY-DOC/);
+  assert.ok(!out.includes('### brief.md'), 'and says nothing about the document that did not change');
+  // The cursor that advanced is research.md's own — the folder holds none of its own.
+  assert.ok(fs.existsSync(path.join(d, 'research.md.sidecar.seen.json')));
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('a second wait --dir by the same agent refuses (exit 2) rather than racing the first', async () => {
+  const d = dirFixture();
+  const w = spawn('node', [path.join(__dirname, 'server.js'), 'wait', '--dir', d, '--timeout', '8'],
+    { env: { ...process.env, SIDECAR_PORT: '4990' }, stdio: 'pipe' });
+  await new Promise((res) => setTimeout(res, 900));
+  const second = dirCli(['wait', '--dir', d, '--timeout', '2'], d);
+  assert.equal(second.status, 2, 'refused, the same exit code a bad path gets');
+  assert.match(second.stderr, /already watching/);
+  assert.match(second.stderr, /--force/, 'and it says how to take over');
+  w.kill();
+  await new Promise((res) => w.on('exit', res));
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('wait --dir on something that is not a folder exits 2, and --timeout exits 1', async () => {
+  const d = dirFixture();
+  const bad = dirCli(['wait', '--dir', path.join(d, 'brief.md')], d);
+  assert.equal(bad.status, 2, 'a file is not a folder');
+  assert.match(bad.stderr, /no folder at/);
+  const asFile = dirCli(['wait', d, '--timeout', '2'], d);
+  assert.equal(asFile.status, 2, 'and a folder passed as the file argument says which flag it wanted');
+  assert.match(asFile.stderr, /--dir/);
+  dirCli(['digest', '--dir', d], d);
+  const quiet = dirCli(['wait', '--dir', d, '--timeout', '1'], d);
+  assert.equal(quiet.status, 1, 'a quiet folder times out at 1, exactly as one quiet document does');
+  assert.match(quiet.stdout, /still watching/);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('digest --dir reports every document, then advances each cursor (and --peek advances none)', () => {
+  const d = dirFixture();
+  dirCli(['digest', '--dir', d], d);
+  asAlex(['comment', 'brief.md', '--quote', 'The first claim lives here.', '--text', 'ONE'], d);
+  asAlex(['comment', 'research.md', '--quote', 'The second claim lives here.', '--text', 'TWO'], d);
+
+  const peek = dirCli(['digest', '--dir', d, '--peek'], d);
+  assert.match(peek.stdout, /\(2 of 2 documents\)/);
+  assert.match(peek.stdout, /### brief\.md\n- NEW comment @ “The first claim lives here\.”: ONE/);
+  assert.match(peek.stdout, /### research\.md\n- NEW comment @ “The second claim lives here\.”: TWO/);
+
+  const again = dirCli(['digest', '--dir', d, '--peek'], d);
+  assert.equal(again.stdout, peek.stdout, '--peek advanced nothing, so it reads the same twice');
+
+  const real = dirCli(['digest', '--dir', d], d);
+  assert.equal(real.stdout, peek.stdout);
+  assert.match(dirCli(['digest', '--dir', d], d).stdout, /^nothing new across 2 documents/,
+    'and once looked at, both cursors have moved');
+
+  // The cursors are the ordinary per-document ones: a single-document digest agrees with the folder.
+  assert.match(dirCli(['digest', path.join(d, 'brief.md')], d).stdout, /^nothing new since/);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('a document created while wait --dir is armed joins the folder it is watching', async () => {
+  const d = dirFixture();
+  dirCli(['digest', '--dir', d], d);
+  const w = spawn('node', [path.join(__dirname, 'server.js'), 'wait', '--dir', d, '--timeout', '20'],
+    { env: { ...process.env, SIDECAR_PORT: '4990' }, stdio: 'pipe' });
+  let out = ''; w.stdout.on('data', (x) => out += x.toString());
+  await new Promise((res) => setTimeout(res, 900));
+  // Creating it must NOT wake the watcher: a new file is baselined where it stands, exactly as a
+  // document with no cursor is at launch. The first real change to it is the news.
+  fs.writeFileSync(path.join(d, 'business-case.md'), '# Case\n\nThe payback is eighteen months.\n');
+  await new Promise((res) => setTimeout(res, 900));
+  assert.equal(out, '', 'the file appearing is not itself an event');
+  asAlex(['comment', 'business-case.md', '--quote', 'The payback is eighteen months.', '--text', 'LATE-DOC'], d);
+  const code = await new Promise((res) => w.on('exit', res));
+  assert.equal(code, 0);
+  assert.match(out, /### business-case\.md/, 'a document that did not exist at launch is watched anyway');
+  assert.match(out, /LATE-DOC/);
+  assert.match(out, /\(1 of 3 documents\)/, 'and the folder is now three');
+  fs.rmSync(d, { recursive: true, force: true });
+});
