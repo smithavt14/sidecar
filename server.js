@@ -181,6 +181,31 @@ app.get('/api/files', (req, res) => {
   res.json({ files, defaultFile: rootIsFile ? path.relative(BASE_DIR, ROOT) : null });
 });
 
+// ---------- one directory's documents, for the left panel ----------
+// /api/files walks the WHOLE served tree and loads every review on the way — 474 documents in the
+// vault this runs against, which is a payload the panel would then throw nearly all of away. The
+// panel only ever shows one folder, so it asks for one folder: no recursion, no directories, and
+// nothing that is not a document by the same `docKind` allowlist the picker and the watcher use.
+// `path` is the DIRECTORY, relative to the served root; empty means the root itself.
+app.get('/api/dir', (req, res) => {
+  const abs = safePath(String(req.query.path || ''));
+  if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) return res.status(404).json({ error: 'no such directory' });
+  const docs = [];
+  for (const e of fs.readdirSync(abs, { withFileTypes: true })) {
+    if (!e.isFile() || e.name.startsWith('.') || !isDoc(e.name)) continue;
+    const p = path.join(abs, e.name);
+    // The document's own mtime, not the max with its sidecar's: this sorts by "last updated", which
+    // is a claim about the DOCUMENT. /api/files says "last reviewed" and takes the max on purpose —
+    // two different questions, so they read two different numbers rather than one shared fudge.
+    let mtime = 0; try { mtime = fs.statSync(p).mtimeMs; } catch (_) {}
+    docs.push({ rel: path.relative(BASE_DIR, p), name: e.name, mtime });
+  }
+  // The panel walks up through `parent`; at the served root there is nowhere further up, and null
+  // says so rather than handing back a path outside the root that safePath would then refuse.
+  res.json({ dir: path.relative(BASE_DIR, abs), name: path.basename(abs),
+    parent: abs === BASE_DIR ? null : path.relative(BASE_DIR, path.dirname(abs)), docs });
+});
+
 app.get('/api/state', (req, res) => {
   const abs = safePath(req.query.path);
   // Classify before reading. `?f=page.html` used to load through the markdown path unguarded, which is

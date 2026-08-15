@@ -2387,6 +2387,93 @@ test('flow render: labels are escaped and data-node carries an index, never flow
   assert.ok(!/data-\w+="[^"]*--&gt;/.test(svg) && !/data-\w+="[^"]*-->/.test(svg), 'no attribute carries an arrow');
 });
 
+// ---------- the directory panel's ordering (public/navsort.js) ----------
+// The SAME file index.html loads via <script>, so what the panel draws is what these assert.
+const Nav = require('./public/navsort.js');
+const docsOf = (names) => names.map((n, i) => ({ rel: 'p/' + n, name: n, mtime: 1000 + i }));
+const namesOf = (list) => list.map(d => d.name);
+
+test('spine sort: summary first, brief second, the rest alphabetical', () => {
+  const out = Nav.sort(docsOf(['market-research.md', 'brief.md', 'zeta.md', 'summary.md', 'business-case.md']), 'spine');
+  assert.deepEqual(namesOf(out), ['summary.md', 'brief.md', 'business-case.md', 'market-research.md', 'zeta.md']);
+});
+
+test('spine sort: a folder with neither summary nor brief is plain alphabetical', () => {
+  const out = Nav.sort(docsOf(['zeta.md', 'alpha.md', 'middle.md']), 'spine');
+  assert.deepEqual(namesOf(out), ['alpha.md', 'middle.md', 'zeta.md']);
+});
+
+test('spine sort: brief leads when there is no summary, and neither name is hoisted from a longer one', () => {
+  const out = Nav.sort(docsOf(['design-brief.md', 'automated-pursuit-brief.md', 'brief.md', 'a-summary.md']), 'spine');
+  // Only the exact filenames are the spine — `design-brief.md` is an ordinary document, and a folder
+  // full of *-brief.md (the grant-developer one) must not have one of them promoted at random.
+  assert.deepEqual(namesOf(out), ['brief.md', 'a-summary.md', 'automated-pursuit-brief.md', 'design-brief.md']);
+});
+
+test('spine sort: an .html asset sits in the same order as markdown, by name', () => {
+  const out = Nav.sort(docsOf(['poster.html', 'notes.md', 'summary.md']), 'spine');
+  assert.deepEqual(namesOf(out), ['summary.md', 'notes.md', 'poster.html']);
+});
+
+test('spine sort: names collate numerically, so slice2 comes before slice10', () => {
+  const out = Nav.sort(docsOf(['slice10-walkthrough.md', 'slice2-walkthrough.md']), 'spine');
+  assert.deepEqual(namesOf(out), ['slice2-walkthrough.md', 'slice10-walkthrough.md']);
+});
+
+test('spine sort is total and repeatable — case never leaves two names tied to readdir order', () => {
+  const a = Nav.sort(docsOf(['Beta.md', 'beta.md', 'Alpha.md']), 'spine');
+  const b = Nav.sort(docsOf(['beta.md', 'Alpha.md', 'Beta.md']), 'spine');
+  assert.deepEqual(namesOf(a), namesOf(b), 'the same set sorts the same way whatever order it arrives in');
+  assert.equal(namesOf(a)[0], 'Alpha.md');
+});
+
+test('sort does not mutate the list it is given', () => {
+  const input = docsOf(['zeta.md', 'summary.md']);
+  Nav.sort(input, 'spine');
+  assert.deepEqual(namesOf(input), ['zeta.md', 'summary.md'], 'the caller keeps its own order');
+});
+
+test('updated sort: newest first, and equal timestamps fall back to spine order', () => {
+  const docs = [
+    { rel: 'p/old.md', name: 'old.md', mtime: 10 },
+    { rel: 'p/new.md', name: 'new.md', mtime: 90 },
+    { rel: 'p/zeta.md', name: 'zeta.md', mtime: 50 },
+    { rel: 'p/summary.md', name: 'summary.md', mtime: 50 },
+  ];
+  assert.deepEqual(namesOf(Nav.sort(docs, 'updated')), ['new.md', 'summary.md', 'zeta.md', 'old.md']);
+});
+
+test('updated sort: a document with no mtime sorts last rather than throwing', () => {
+  const docs = [{ rel: 'p/a.md', name: 'a.md' }, { rel: 'p/b.md', name: 'b.md', mtime: 5 }];
+  assert.deepEqual(namesOf(Nav.sort(docs, 'updated')), ['b.md', 'a.md']);
+});
+
+test('waiting-on-you sort: turn counts descending, and with none it IS spine order', () => {
+  const plain = docsOf(['zeta.md', 'brief.md', 'summary.md']);
+  // Nothing computes `turn` yet (the badges are their own slice), so every count is absent. The mode
+  // has to resolve to the spine order rather than to whatever readdir returned.
+  assert.deepEqual(namesOf(Nav.sort(plain, 'turn')), namesOf(Nav.sort(plain, 'spine')));
+  const counted = [
+    { rel: 'p/summary.md', name: 'summary.md', turn: 0 },
+    { rel: 'p/zeta.md', name: 'zeta.md', turn: 3 },
+    { rel: 'p/brief.md', name: 'brief.md', turn: 1 },
+  ];
+  assert.deepEqual(namesOf(Nav.sort(counted, 'turn')), ['zeta.md', 'brief.md', 'summary.md']);
+});
+
+test('an unknown sort mode falls back to spine rather than to nothing', () => {
+  const docs = docsOf(['zeta.md', 'summary.md']);
+  assert.deepEqual(namesOf(Nav.sort(docs, 'nonsense')), ['summary.md', 'zeta.md']);
+  assert.deepEqual(namesOf(Nav.sort(docs, undefined)), ['summary.md', 'zeta.md']);
+  assert.deepEqual(Nav.sort(undefined, 'spine'), [], 'and no list at all is an empty one');
+});
+
+test('every sort mode the panel offers is one the sorter answers to', () => {
+  // The switcher renders straight off MODES/LABELS, so a mode with no label would draw as `undefined`.
+  for (const m of Nav.MODES) assert.equal(typeof Nav.LABELS[m], 'string', `${m} has a label`);
+  assert.deepEqual(Nav.MODES, ['spine', 'updated', 'turn']);
+});
+
 test('atomic blocks: a flow fence and an HTML island survive an edit elsewhere, byte-for-byte', () => {
   const { doc, blocks, td } = buildDoc(VIS_DOC);
   blockByText(doc, 'Middle paragraph.').querySelector('p').textContent = 'Middle paragraph, edited.';
@@ -2709,6 +2796,39 @@ test('the file picker walk lists assets beside markdown', async () => {
   assert.ok(rels.includes('poster.html'), 'the asset is offered for review');
   assert.ok(rels.includes('doc.md'), 'markdown still is');
   assert.ok(!rels.includes('notes.txt'), 'and a file in neither allowlist is not');
+});
+
+test('the directory listing is one folder of documents: no recursion, no directories, no non-documents', async () => {
+  fs.mkdirSync(path.join(dir, 'folder', 'deeper'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'folder', 'summary.md'), '# summary\n');
+  fs.writeFileSync(path.join(dir, 'folder', 'card.html'), '<h1>card</h1>');
+  fs.writeFileSync(path.join(dir, 'folder', 'notes.txt'), 'not a document');
+  fs.writeFileSync(path.join(dir, 'folder', '.hidden.md'), '# hidden\n');
+  fs.writeFileSync(path.join(dir, 'folder', 'deeper', 'buried.md'), '# buried\n');
+  const d = await fetchRetry(`${BASE}/api/dir?path=folder`).then(j);
+  assert.deepEqual(d.docs.map(x => x.name).sort(), ['card.html', 'summary.md']);
+  assert.ok(d.docs.every(x => typeof x.mtime === 'number' && x.mtime > 0), 'each carries an mtime to sort by');
+  assert.equal(d.docs[0].rel.startsWith('folder/'), true, 'rel is relative to the served root');
+  assert.equal(d.dir, 'folder');
+  assert.equal(d.parent, '', 'the parent of a top-level folder is the root itself');
+});
+
+test('the directory listing at the served root has no parent to walk up to', async () => {
+  const d = await fetchRetry(`${BASE}/api/dir?path=`).then(j);
+  assert.equal(d.dir, '');
+  assert.equal(d.parent, null, 'null, not a path outside the root');
+  assert.ok(d.docs.some(x => x.name === 'doc.md'));
+  assert.ok(!d.docs.some(x => x.name === 'folder'), 'a directory is not a document');
+});
+
+test('the directory listing is confined to the served root, and refuses a file', async () => {
+  const escaped = await fetchRetry(`${BASE}/api/dir?path=../..`);
+  assert.equal(escaped.status, 400);
+  assert.match((await escaped.json()).error, /escapes root/);
+  const notADir = await fetchRetry(`${BASE}/api/dir?path=doc.md`);
+  assert.equal(notADir.status, 404, 'a document is not a folder');
+  const missing = await fetchRetry(`${BASE}/api/dir?path=nope`);
+  assert.equal(missing.status, 404);
 });
 
 // A live /events subscription, resolved once the stream is open so a write made after it cannot slip

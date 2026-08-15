@@ -8,6 +8,7 @@
 <script src="/anchor.js"></script>   <!-- the shared matcher; server requires the same file so both agree on occurrences -->
 <script src="/serialize.js"></script>   <!-- the tight-diff serialize/reindex round-trip; Node tests require the same file -->
 <script src="/flow.js"></script>   <!-- ```flow fences → SVG; pure string in/out, Node tests require the same file -->
+<script src="/navsort.js"></script>   <!-- the directory panel's ordering; pure list in/out, Node tests require the same file -->
 <script src="/assetframe.js"></script>   <!-- an .html asset → the sandboxed frame's srcdoc; Node tests require the same file -->
 <script src="/lib/marked/marked.min.js"></script>
 <script src="/lib/dompurify/dist/purify.min.js"></script>   <!-- marked v12 has no sanitizer; scrub its HTML before it hits innerHTML (XSS) -->
@@ -48,6 +49,12 @@
     /* The review rail's width, in one place: the grid track, the drag handle's position and the
        persisted preference are all this number. JS overwrites it on the root element. */
     --rail-w:372px;
+    /* The directory panel's width, the same way. Two variables rather than one because the panel has
+       a second resting size: --nav-w is the preference the human dragged to, --nav-track is what the
+       grid actually gives it, which collapsing swaps for the icon strip without touching the
+       preference underneath. */
+    --nav-w:248px;
+    --nav-track:var(--nav-w);
     color-scheme:light;
   }
   * { box-sizing: border-box; }
@@ -91,8 +98,12 @@
      dispatcher seeing the BUTTON as e.target, never the path inside it. */
   button.iconbtn { padding:7px 6px; line-height:0; }
   button.iconbtn svg { width:16px; height:16px; display:block; pointer-events:none; }
-  main { position:relative; display:grid; grid-template-columns: minmax(0,1fr) var(--rail-w); gap:0;
-    max-width:1280px; margin:0 auto; }
+  /* Three columns: the folder, the document, the review. The cap grows by the panel's track instead
+     of staying at 1280, so adding the panel takes width from the WINDOW where there is some and only
+     narrows the document once there is not — otherwise every existing document lost 248px of measure
+     the day the panel arrived. */
+  main { position:relative; display:grid; grid-template-columns: var(--nav-track) minmax(0,1fr) var(--rail-w);
+    gap:0; max-width:calc(1280px + var(--nav-track)); margin:0 auto; }
   /* ---------- the divider between the document and the rail ----------
      Absolutely placed over the column boundary rather than given a grid track of its own, so the two
      tracks stay exactly what they were and nothing that measures the document column (sizeFrame,
@@ -107,11 +118,12 @@
   /* While dragging, the cursor has to hold everywhere (the pointer leaves the 11px strip immediately)
      and nothing may select. The asset frame is a separate document that would otherwise swallow the
      pointer the moment the drag crossed it. */
-  body.rail-dragging { cursor:col-resize; user-select:none; }
-  body.rail-dragging iframe { pointer-events:none; }
-  /* Collapsed: the second track is gone, so the document column measures the full width — which is
-     why toggleRail re-runs the same relayout a window resize does. */
-  body.rail-collapsed main { grid-template-columns: minmax(0,1fr); }
+  body.rail-dragging, body.nav-dragging { cursor:col-resize; user-select:none; }
+  body.rail-dragging iframe, body.nav-dragging iframe { pointer-events:none; }
+  /* Collapsed: the rail's track is gone, so the document column measures wider — which is why
+     toggleRail re-runs the same relayout a window resize does. The panel's track stays; collapsing
+     the two panels is two independent decisions. */
+  body.rail-collapsed main { grid-template-columns: var(--nav-track) minmax(0,1fr); }
   body.rail-collapsed aside, body.rail-collapsed #railGrip { display:none; }
   /* The rail's toggle: an icon button in the header chrome. Its badge is the agent's yellow, because
      what it counts is the agent's notes arriving while the panel was shut. */
@@ -120,6 +132,84 @@
     border-radius:99px; background:var(--yellow); color:var(--chip-fg); box-shadow:0 0 0 1.5px var(--bg);
     font:600 10px/14px 'Geist', ui-sans-serif, sans-serif; text-align:center; }
   #railToggle .n:empty { display:none; }
+  /* ---------- the directory panel ----------
+     The folder the open document lives in, listed. Unlike the rail it scrolls in its own box: nothing
+     in here has to stay level with the text, and a folder of sixty documents would otherwise run the
+     page's scroll height off the bottom of a short one. */
+  #nav { position:sticky; top:51px; align-self:start; max-height:calc(100vh - 51px); overflow-y:auto;
+    display:flex; flex-direction:column; gap:8px; min-width:0;
+    padding:0 8px 28px; border-right:1px solid var(--line); background:var(--bg); }
+  /* The path and the switcher stay put while the list scrolls under them — a sixty-document folder
+     otherwise scrolls its own controls away, and the panel scrolls itself to the open document on
+     load. Opaque, and it carries the panel's top padding, so nothing shows through above it. */
+  .nav-head { position:sticky; top:0; z-index:4; background:var(--bg); padding:14px 0 8px;
+    display:flex; flex-direction:column; gap:8px; }
+  /* The breadcrumb is the OPEN DOCUMENT's path, not a trail of where you have clicked, and every
+     segment is live. Stepping up a level is clicking a shallower one; coming back down is clicking a
+     deeper one, which is the half a one-way "up" button loses — a folder above a project usually
+     holds no documents at all, so up with no way back is a dead end. */
+  #navCrumb { display:flex; flex-wrap:wrap; align-items:center; gap:0 1px; padding:0 4px;
+    font-family:'Geist Mono', ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; line-height:1.6; }
+  #navCrumb button { border:none; background:none; box-shadow:none; padding:1px 3px; border-radius:5px;
+    font:inherit; color:var(--faint); max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #navCrumb button:hover { background:var(--fill); color:var(--fg); transform:none; }
+  #navCrumb button.here { color:#57574f; font-weight:600; }
+  #navCrumb .sep { color:var(--fainter); }
+  /* the sort switcher — a menu, not three tabs: at 248px three labels have nowhere to sit, and the
+     one that is chosen is the one worth reading */
+  #navSort { position:relative; padding:0 2px; }
+  #navSort .sortbtn { display:flex; align-items:center; gap:6px; width:100%; border:none; background:none;
+    box-shadow:none; color:var(--muted); font:600 12px 'Geist', ui-sans-serif, sans-serif;
+    padding:5px 7px; border-radius:8px; }
+  #navSort .sortbtn:hover { background:var(--fill); color:var(--fg); transform:none; }
+  #navSort .sortbtn .car { margin-left:auto; font-size:9px; opacity:.55; }
+  #navSort .menu { position:absolute; top:calc(100% + 4px); left:2px; right:2px; z-index:6;
+    background:var(--bg); border:1px solid var(--line-2); border-radius:10px; box-shadow:var(--shadow);
+    padding:4px; display:flex; flex-direction:column; gap:1px; }
+  #navSort .menu[hidden] { display:none; }
+  #navSort .menu button { display:block; width:100%; text-align:left; white-space:nowrap; border:none;
+    background:none; box-shadow:none; padding:7px 9px; border-radius:7px; color:var(--fg);
+    font:500 12.5px 'Geist', ui-sans-serif, sans-serif; }
+  #navSort .menu button:hover { background:var(--fill); transform:none; }
+  #navSort .menu button[aria-checked="true"] { font-weight:600; color:var(--ink); background:var(--fill); }
+  .nav-list { display:flex; flex-direction:column; gap:1px; }
+  .nav-list a { display:flex; align-items:center; gap:7px; min-width:0; padding:7px 9px; border-radius:9px;
+    text-decoration:none; color:var(--fg); font-size:13.5px; line-height:1.35; }
+  .nav-list a:hover { background:var(--fill); }
+  /* the open document: filled and inked, no accent bar. The panel is chrome and stays monochrome —
+     yellow belongs to the agent. */
+  .nav-list a.on { background:var(--fill); color:var(--ink); font-weight:600; }
+  .nav-list a .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .nav-list a .ext { flex:none; font-family:'Geist Mono', ui-monospace, monospace; font-size:10px;
+    color:var(--fainter); }
+  .nav-list a .ago { flex:none; margin-left:auto; font-family:'Geist Mono', ui-monospace, monospace;
+    font-size:10.5px; color:var(--faint); }
+  .nav-list a .ini { display:none; }
+  .nav-empty { padding:14px 10px; color:var(--muted); font-size:12.5px; line-height:1.5; }
+  /* the handle between the panel and the document — the rail's grip mirrored, same 11px of grab area
+     straddling the hairline, same reason it is placed over the boundary rather than given a track */
+  #navGrip { position:absolute; top:0; bottom:0; left:calc(var(--nav-track) - 6px); width:11px; z-index:3;
+    cursor:col-resize; touch-action:none; }
+  #navGrip::after { content:''; position:absolute; top:0; bottom:0; right:5px; width:1px;
+    background:var(--ink); opacity:0; transition:opacity .15s ease; }
+  #navGrip:hover::after, #navGrip:focus-visible::after, body.nav-dragging #navGrip::after { opacity:.3; }
+  #navGrip:focus { outline:none; }
+  #navToggle { position:relative; }
+  /* Collapsed is an icon strip and only ever a DESKTOP state: down at the drawer breakpoint the panel
+     is a fixed overlay with no track to shrink, so these rules are scoped rather than undone one by
+     one below — the rail learned that lesson the expensive way. */
+  @media (min-width: 781px) {
+    body.nav-collapsed { --nav-track:56px; }
+    body.nav-collapsed #nav { padding:14px 6px 28px; align-items:center; }
+    body.nav-collapsed .nav-head, body.nav-collapsed #navGrip { display:none; }
+    /* Each document keeps its click target, as its initial. A strip of blank squares would be a
+       decoration; this one still switches documents, and the title carries the name. */
+    body.nav-collapsed .nav-list a { justify-content:center; width:36px; height:34px; padding:0; }
+    body.nav-collapsed .nav-list a .nm, body.nav-collapsed .nav-list a .ext,
+    body.nav-collapsed .nav-list a .ago { display:none; }
+    body.nav-collapsed .nav-list a .ini { display:block; font-size:13px; text-transform:uppercase; }
+    body.nav-collapsed .nav-empty { display:none; }
+  }
   /* The document itself is the editor: edit rich text in place, no mode switch, no chrome. */
   /* pwd — the document's path as a terminal breadcrumb, sitting above the doc title */
   #pwd { padding:34px 44px 0; min-width:0; font-family:'Geist Mono', ui-monospace,SFMono-Regular,Menlo,monospace;
@@ -460,9 +550,9 @@
   .empty { color:var(--muted); font-size:13px; text-align:center; padding:40px 0; line-height:1.55; }
 
   /* --- mobile: single-column doc, review panel becomes a pull-up bottom sheet --- */
-  #sheetToggle, #sheetBackdrop { display:none; }
+  #sheetToggle, #sheetBackdrop, #navBackdrop { display:none; }
   @media (max-width: 780px) {
-    main { grid-template-columns: minmax(0,1fr); }   /* minmax(0,…) so a code block can't force overflow */
+    main, body.rail-collapsed main { grid-template-columns: minmax(0,1fr); }   /* minmax(0,…) so a code block can't force overflow */
     /* The rail is a fixed overlay down here, so there are no two columns to divide and nothing for a
        drag to resize: the handle is removed rather than left half-working, and hiding the panel is
        already the sheet's job, so the header toggle goes with it. A collapsed state carried down from
@@ -470,6 +560,24 @@
        order against the same-specificity rule above. */
     #railGrip, #railToggle { display:none; }
     body.rail-collapsed aside { display:flex; }
+    /* The panel is a drawer down here, for the same reason the rail is a sheet: there is one column
+       and nothing to divide, so the grip goes rather than half-working. Its header button stays,
+       because unlike the rail's sheet the drawer has no other way in. */
+    #navGrip { display:none; }
+    /* align-self is reset explicitly: the panel is still a child of the grid, and the `start` the
+       desktop rule needs for its sticky column leaves the fixed drawer at the height of its own
+       content — a half-height sheet floating over the document. */
+    #nav { position:fixed; top:0; bottom:0; left:0; width:min(300px, 84vw); max-height:none;
+      align-self:stretch; z-index:47; overflow-y:auto;
+      border-right:1px solid var(--line); transform:translateX(-102%); transition:transform .26s ease-out;
+      padding:0 10px calc(env(safe-area-inset-bottom) + 20px); }
+    .nav-head { padding-top:calc(14px + env(safe-area-inset-top)); }   /* clear the notch */
+    /* The shadow arrives with the drawer. Left on permanently it reaches back across the 2% of travel
+       the closed panel keeps off screen and paints a grey seam down the edge of every document. */
+    body.nav-open #nav { transform:translateX(0); box-shadow:12px 0 40px rgba(20,20,15,.18); }
+    #navBackdrop { display:block; position:fixed; inset:0; background:rgba(20,20,15,.28); z-index:46;
+      opacity:0; pointer-events:none; transition:opacity .26s; }
+    body.nav-open #navBackdrop { opacity:1; pointer-events:auto; }
     #doc pre { max-width:100%; }
     #pwd { padding:16px 18px 0; font-size:12px; }
     #doc { padding: 8px 18px 42vh; font-size: 16px; line-height:1.62; }
@@ -526,6 +634,10 @@
 <body>
 <header>
   <div class="hwrap">
+    <button id="navToggle" class="ghost iconbtn" onclick="toggleNav()" aria-controls="nav" aria-expanded="true"
+      title="Hide the folder" aria-label="Hide the folder"><svg viewBox="0 0 20 20" fill="none"
+      stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="2.5" y="3.75" width="15" height="12.5" rx="2.5"/><path d="M7.1 3.75v12.5"/></svg></button>
     <h1 class="brand">
       <a href="/" class="home" title="all documents">
         <img class="mark" src="/mark.svg" alt="" aria-hidden="true">
@@ -546,6 +658,20 @@
   </div>
 </header>
 <main id="main">
+  <!-- The folder the open document lives in. Painted by renderNav; empty until the first /api/dir. -->
+  <nav id="nav" aria-label="documents in this folder">
+    <div class="nav-head">
+      <div id="navCrumb"></div>
+      <div id="navSort">
+        <button class="sortbtn" onclick="toggleSortMenu()" aria-haspopup="true" aria-expanded="false"
+          title="Sort the folder"><span id="navSortLabel">spine</span><span class="car">▾</span></button>
+        <div class="menu" id="navSortMenu" role="menu" hidden></div>
+      </div>
+    </div>
+    <div id="navList" class="nav-list"></div>
+  </nav>
+  <!-- The panel's drag handle. Same contract as #railGrip: over the boundary, not a track of its own. -->
+  <div id="navGrip" role="separator" aria-orientation="vertical" aria-label="Resize the folder panel" tabindex="0"></div>
   <div>
     <div id="pwd"></div>
     <div id="doc"></div>
@@ -586,6 +712,7 @@
      guarantee (docs/adr/0001-asset-frame-isolation.md) would be gone. The only script inside is the
      picker, which assetframe.js inlines after DOMPurify has stripped the asset's own. -->
 <template id="assetFrameTpl"><iframe class="asset-frame" sandbox="allow-scripts" referrerpolicy="no-referrer" title="asset preview"></iframe></template>
+<div id="navBackdrop" onclick="closeNavDrawer()"></div>
 <div id="sheetBackdrop" onclick="toggleSheet(false)"></div>
 <button id="sheetToggle" onclick="toggleSheet()">review <span class="n" id="sheetCount"></span></button>
 
@@ -656,7 +783,10 @@ async function boot() {
   if (!FILE) {
     const { files, defaultFile } = await api('GET', '/api/files');
     if (defaultFile) { location.search = '?f=' + encodeURIComponent(defaultFile); return; }
+    // The whole-tree picker, which is a different question from the panel's one folder: there is no
+    // open document yet, so there is no folder to be in. Its toggle goes with it.
     $('main').style.display = 'none'; $('filelist').style.display = 'block';
+    $('navToggle').style.display = 'none';
     const ext = (p) => { const b = p.split('/').pop(); const i = b.lastIndexOf('.'); return i > 0 ? b.slice(i + 1) : ''; };
     $('filelist').innerHTML = '<div class="h">pick a file</div><div class="sub">documents, most recently reviewed first.</div>' + files.map(f =>
       `<a href="/?f=${encodeURIComponent(f.rel)}"><span class="ext">${esc(ext(f.rel))}</span>` +
@@ -667,10 +797,15 @@ async function boot() {
   }
   document.title = 'sidecar · ' + FILE;
   $('doc').contentEditable = 'true';
+  // Stamp the entry we arrived on, so a back from a document opened in the panel lands here with a
+  // state object rather than on the URL fallback.
+  history.replaceState({ f: FILE }, '', location.href);
   await reloadFile();
+  loadDir(dirOf(FILE));   // not awaited: the document is what was asked for, the folder is context
   const es = new EventSource('/events');
   es.onmessage = async (e) => {
     const { rel } = JSON.parse(e.data);
+    navTouched(rel);       // a sibling moved: the folder's order may have, and a new file may exist
     if (rel !== FILE) return;
     const fresh = await api('GET', '/api/state?path=' + encodeURIComponent(FILE));
     if (fresh.hash === state.hash) {          // our own save, or only the sidecar/presence moved — keep the caret
@@ -774,6 +909,10 @@ function renderDoc() {
     refreshFrame();
     return;
   }
+  // Set on every markdown render, not once at boot: switching from an asset to a document in the same
+  // view would otherwise leave the read-only surface the asset asked for, with no way to type in a
+  // document that is perfectly editable.
+  doc.contentEditable = 'true';
   const tokens = marked.lexer(state.markdown);
   blocks = []; let off = 0;
   for (const t of tokens) {
@@ -2192,20 +2331,35 @@ for (const type of ['paste', 'dragover', 'dragleave', 'drop']) {
   });
 }
 
-// ---------- the review rail: resizable, collapsible, remembered ----------
-// This is the first piece of UI state sidecar persists, so it sets the pattern: an `sc:` prefix per
-// key, primitive values, and every access wrapped. Safari in private mode throws on setItem, and no
-// layout preference is worth an exception on the path that also renders the review.
-const railStore = {
+// ---------- layout preferences: the one store both panels persist through ----------
+// Every UI preference sidecar keeps goes through here: an `sc:` prefix per key, primitive values, and
+// every access wrapped. Safari in private mode throws on setItem, and no layout preference is worth an
+// exception on the path that also renders the review. (Named for the rail, which was the first thing
+// to need it; the directory panel keeps its width, its collapsed state and its per-folder sort here too.)
+const uiStore = {
   get(k, fallback) { try { const v = localStorage.getItem('sc:' + k); return v === null ? fallback : v; } catch { return fallback; } },
   set(k, v) { try { localStorage.setItem('sc:' + k, String(v)); } catch {} },
 };
+// ---------- the review rail: resizable, collapsible, remembered ----------
 const RAIL_MIN = 280;        // below this a card's diff and its buttons stop fitting side by side
 const RAIL_MAX_FRAC = 0.6;   // and past this the document is the sidebar
-const DOC_MIN = 360;         // main is capped at 1280, so a viewport bound alone can still starve the doc
-function railMax() {
+const DOC_MIN = 360;         // main is capped, so a viewport bound alone can still starve the doc
+// What the two side panels may take between them: main, less the width the document keeps whatever
+// happens. Each panel's own max reads this minus whatever the OTHER one is currently occupying, so
+// dragging one wide is bounded by the other rather than by a number that pretends it is alone.
+function colBudget() {
   const mainW = $('main').getBoundingClientRect().width || window.innerWidth;
-  return Math.max(RAIL_MIN, Math.min(Math.round(window.innerWidth * RAIL_MAX_FRAC), Math.round(mainW - DOC_MIN)));
+  return Math.round(mainW - DOC_MIN);
+}
+// A panel's rendered track width, or 0 when it is not in the grid at all (collapsed rail, or either
+// panel below the breakpoint, where the nav is a fixed drawer and the rail a fixed sheet).
+function trackWidth(el, hidden) {
+  if (hidden || !el || !railResizable()) return 0;
+  return Math.round(el.getBoundingClientRect().width) || 0;
+}
+function railMax() {
+  return Math.max(RAIL_MIN, Math.min(Math.round(window.innerWidth * RAIL_MAX_FRAC),
+    colBudget() - trackWidth($('nav'), false)));
 }
 const clampRail = (w) => Math.min(railMax(), Math.max(RAIL_MIN, Math.round(w)));
 // Desktop only. Below the breakpoint the rail is a fixed bottom sheet with no column to divide, so the
@@ -2217,7 +2371,7 @@ const railResizable = () => window.matchMedia('(min-width: 781px)').matches;
 // actually on screen, because a preference nobody has ever seen applied is not a preference. A window
 // narrow enough to clamp the rail does not overwrite it, though — see the resize listener, which
 // re-applies without persisting, so a rail dragged wide on a large display comes back wide there.
-let railWidth = Math.max(RAIL_MIN, Math.round(Number(railStore.get('railWidth', 372)) || 372));
+let railWidth = Math.max(RAIL_MIN, Math.round(Number(uiStore.get('railWidth', 372)) || 372));
 function applyRailWidth(w, persist) {
   railWidth = Math.max(RAIL_MIN, Math.round(w));
   const applied = clampRail(railWidth);
@@ -2228,7 +2382,7 @@ function applyRailWidth(w, persist) {
     grip.setAttribute('aria-valuemin', String(RAIL_MIN));
     grip.setAttribute('aria-valuemax', String(railMax()));
   }
-  if (persist) railStore.set('railWidth', applied);
+  if (persist) uiStore.set('railWidth', applied);
 }
 // The document column just changed width: an asset re-scales to it, and every docked card re-measures
 // against its anchor. The same two calls the window resize listener makes, for the same reason.
@@ -2237,7 +2391,7 @@ const railCollapsed = () => document.body.classList.contains('rail-collapsed');
 function toggleRail(force) {
   const collapse = force === undefined ? !railCollapsed() : !!force;
   document.body.classList.toggle('rail-collapsed', collapse);
-  railStore.set('railCollapsed', collapse ? '1' : '');
+  uiStore.set('railCollapsed', collapse ? '1' : '');
   if (!collapse) { railSeen = railMsgTotal(); railNew = 0; }   // opening it IS reading it
   paintRailToggle();
   relayoutDoc();
@@ -2311,9 +2465,282 @@ function paintRailToggle() {
   });
 })();
 // Restore before the first render so the rail never flashes at the default width and then jumps.
-if (railStore.get('railCollapsed', '')) document.body.classList.add('rail-collapsed');
+if (uiStore.get('railCollapsed', '')) document.body.classList.add('rail-collapsed');
 applyRailWidth(railWidth, false);
 paintRailToggle();
+
+// ---------- the directory panel: the folder the open document lives in ----------
+// Reviewing a product means reviewing a folder — a brief, its research, its business case — and each
+// document used to be an island reachable only by editing the URL. The panel lists one directory, and
+// clicking a document swaps the view in place.
+//
+// It reads ONE folder. The served root here is 474 documents; the panel eager-loads the open
+// directory and nothing else, and it refreshes off the fs-watch push channel that already exists
+// (see navTouched) rather than polling for changes it would mostly not find.
+const NAV_MIN = 180;         // narrower than this and a filename is all ellipsis
+const NAV_MAX_FRAC = 0.32;   // past this the folder is competing with the document it is a way into
+const dirOf = (rel) => { const i = String(rel || '').lastIndexOf('/'); return i < 0 ? '' : rel.slice(0, i); };
+
+let navDir = null;    // the folder currently LISTED, which the breadcrumb can walk away from the open doc
+let navData = null;   // the last /api/dir payload
+let navSort = 'spine';
+
+// The sort is remembered PER FOLDER: a project folder wants its spine on top, a folder of dated notes
+// wants the newest, and one preference cannot be both.
+const navSortFor = (dir) => {
+  const v = uiStore.get('navSort:' + (dir || ''), 'spine');
+  return Nav.MODES.includes(v) ? v : 'spine';
+};
+async function loadDir(dir) {
+  try {
+    const d = await api('GET', '/api/dir?path=' + encodeURIComponent(dir || ''));
+    navDir = d.dir; navData = d; navSort = navSortFor(navDir);
+    renderNav();
+  } catch (e) { console.error('sidecar: could not read the folder', dir, e); }
+}
+// The served root's own name, for the first crumb. It is the head of the document's pwd with the
+// document's relative path taken off the end — the server already sends both, so nothing new rides
+// on /api/state for it.
+function rootName() {
+  const p = String((state && state.pwd) || '');
+  const tail = '/' + FILE;
+  const base = FILE && p.endsWith(tail) ? p.slice(0, -tail.length) : '';
+  return base.split('/').filter(Boolean).pop() || '/';
+}
+// The crumb is built from the OPEN DOCUMENT's path, not from wherever the listing has wandered to, so
+// walking up never strips the way back down. The listed folder is the one marked `here`.
+function renderCrumb() {
+  const parts = [{ label: rootName(), dir: '' }];
+  let acc = '';
+  for (const s of dirOf(FILE).split('/').filter(Boolean)) { acc = acc ? acc + '/' + s : s; parts.push({ label: s, dir: acc }); }
+  $('navCrumb').innerHTML = parts.map((p, i) => (i ? '<span class="sep">/</span>' : '') +
+    `<button data-dir="${esc(p.dir)}" class="${p.dir === navDir ? 'here' : ''}" title="${esc(p.dir || p.label)}">${esc(p.label)}</button>`).join('');
+}
+function renderNav() {
+  if (!navData) return;
+  renderCrumb();
+  $('navSortLabel').textContent = Nav.LABELS[navSort];
+  $('navSortMenu').innerHTML = Nav.MODES.map(m =>
+    `<button role="menuitemradio" aria-checked="${m === navSort}" data-mode="${m}">${esc(Nav.LABELS[m])}</button>`).join('');
+  const docs = Nav.sort(navData.docs, navSort);
+  $('navList').innerHTML = docs.length ? docs.map(d => {
+    const i = d.name.lastIndexOf('.');
+    const stem = i > 0 ? d.name.slice(0, i) : d.name, ext = i > 0 ? d.name.slice(i + 1) : '';
+    // The timestamp shows in the order that is ABOUT it. In spine order it would be three columns of
+    // noise in a 248px panel next to names that are already the point.
+    const ago = navSort === 'updated' ? `<span class="ago">${esc(timeAgo(d.mtime))}</span>` : '';
+    return `<a href="/?f=${encodeURIComponent(d.rel)}" data-rel="${esc(d.rel)}"` +
+      `${d.rel === FILE ? ' class="on" aria-current="page"' : ''} title="${esc(d.name)}">` +
+      `<span class="ini">${esc(stem.slice(0, 1))}</span><span class="nm">${esc(stem)}</span>` +
+      `<span class="ext">${esc(ext)}</span>${ago}</a>`;
+  }).join('') : '<div class="nav-empty">No documents in this folder. The path above is live, in both directions.</div>';
+  revealOpenDoc();
+}
+// A folder can be sixty documents long (this vault has one), and the open one is then somewhere below
+// the fold with nothing saying so. Scroll the PANEL to it, never the page: scrollIntoView would take
+// the document's scroll position with it, which is the reader's, not ours.
+//
+// Once per (folder, document) pair, and never again on a re-render. Every save pushes an event that
+// re-reads the folder, so scrolling on each render would drag the panel back under the reader every
+// time they typed — the same mistake the rail made rebuilding itself on a presence heartbeat.
+let revealedFor = null;
+function revealOpenDoc() {
+  const key = navDir + '|' + FILE;
+  if (revealedFor === key) return;
+  revealedFor = key;
+  const on = $('navList').querySelector('a.on'), nav = $('nav');
+  if (!on || !nav.clientHeight) return;
+  const head = nav.querySelector('.nav-head');
+  const headH = head && getComputedStyle(head).position === 'sticky' ? head.offsetHeight : 0;
+  const top = on.offsetTop, bottom = top + on.offsetHeight;
+  // The sticky header covers the top of the scrollport, so a row behind it is not in view.
+  if (top >= nav.scrollTop + headH && bottom <= nav.scrollTop + nav.clientHeight) return;
+  nav.scrollTop = Math.max(0, Math.round(top - nav.clientHeight / 2 + on.offsetHeight / 2));
+}
+// Real hrefs, so cmd-click and middle-click open a document in a new tab the way any link does. A
+// plain left click is the one this takes over.
+$('navList').addEventListener('click', (e) => {
+  const a = e.target.closest && e.target.closest('a[data-rel]');
+  if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+  e.preventDefault();
+  openDoc(a.dataset.rel);
+});
+$('navCrumb').addEventListener('click', (e) => {
+  const b = e.target.closest && e.target.closest('button[data-dir]');
+  if (b) loadDir(b.dataset.dir);
+});
+$('navSortMenu').addEventListener('click', (e) => {
+  const b = e.target.closest && e.target.closest('button[data-mode]');
+  if (b) setNavSort(b.dataset.mode);
+});
+function toggleSortMenu(force) {
+  const m = $('navSortMenu');
+  const open = force === undefined ? m.hidden : !!force;
+  m.hidden = !open;
+  const btn = $('navSort').querySelector('.sortbtn');
+  if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+function setNavSort(mode) {
+  navSort = Nav.MODES.includes(mode) ? mode : 'spine';
+  uiStore.set('navSort:' + (navDir || ''), navSort);
+  toggleSortMenu(false);
+  renderNav();
+}
+// Anything outside the switcher shuts it. The button's own handler runs first, so opening it does not
+// immediately close it on the way back up.
+document.addEventListener('click', (e) => {
+  if (!$('navSortMenu').hidden && !(e.target.closest && e.target.closest('#navSort'))) toggleSortMenu(false);
+});
+
+// ---------- swapping the document in place ----------
+// Everything that belongs to the OUTGOING document and would otherwise be read against the incoming
+// one: a pending selection, a half-composed element pick, which cards were expanded, the frame. The
+// rail's "arrived while shut" baseline resets too, or the new document's existing items would all
+// count as new mail.
+function resetDocState() {
+  clearTimeout(saveTimer); saveTimer = null;
+  dirty = false; blocks = [];
+  pendingSel = null; pendingSelBlock = null; pendingSelOffset = null; selRect = null;
+  pendingNode = null; pendingElement = null; savedRange = null;
+  expandedCards.clear();
+  shownCardIds = null;      // so the incoming cards are a first render, not an arrival
+  railSeen = null; railNew = 0;
+  sideTab = 'active';
+  // Null FIRST: the window `message` listener identifies the frame by handle, so a late message from
+  // the outgoing asset's frame is dropped rather than landing on the incoming document.
+  frameEl = null; frameNatural = null; frameGeometry = {}; frameAnchors = {}; frameScale = 1;
+  pointerInFrame = false;
+  hideTool(); hidePopover(); hideBanner(); toggleSheet(false); closeNavDrawer();
+  lightbox.classList.remove('on');
+  setStatus('');
+}
+// Load a document into the view we already have. No navigation, so the EventSource, the layout
+// preferences and the page itself survive; `FILE` is a let and every reader of it (the SSE filter, the
+// /assets rewriter, every api call) picks up the new value on its own.
+async function openDoc(rel, opts) {
+  const o = opts || {};
+  if (!rel) return;
+  if (rel === FILE) { closeNavDrawer(); return; }
+  await flushSave();          // the outgoing document leaves with its text saved, not with it pending
+  FILE = rel;
+  document.title = 'sidecar · ' + FILE;
+  // The URL is the document, still: a reload, a bookmark or a copied address has to land back here.
+  if (o.push !== false) history.pushState({ f: rel }, '', '/?f=' + encodeURIComponent(rel));
+  resetDocState();
+  // A row can outlive its file by the second it takes to click it (an agent moving a document mid
+  // review). Say so, and carry on to re-read the folder, which is where the truth shows up.
+  try { await reloadFile(); }             // applyState → renderPwd, renderDoc (frame or blocks), renderSide
+  catch (e) { showBanner('Could not open ' + rel + '. ' + e.message, [{ label: 'OK', fn: () => {} }]); }
+  window.scrollTo({ top: 0 });
+  if (dirOf(rel) !== navDir) await loadDir(dirOf(rel));
+  else renderNav();           // same folder: only the current row moved
+}
+// Back and forward move between documents rather than reloading the page. The initial entry carries no
+// state of ours (boot stamps one), so the URL is the fallback.
+window.addEventListener('popstate', (e) => {
+  const rel = (e.state && e.state.f) || new URLSearchParams(location.search).get('f');
+  if (rel && rel !== FILE) openDoc(rel, { push: false });
+});
+// A write to any document in the LISTED folder moves the mtime the "last updated" order reads, and
+// creating one adds a row. The fs-watch channel already delivers both, so the panel refreshes off it.
+// Debounced, because a save and its sidecar write arrive as two events a few milliseconds apart.
+let navRefreshTimer = null;
+function navTouched(rel) {
+  if (navDir === null || dirOf(rel) !== navDir) return;
+  clearTimeout(navRefreshTimer);
+  navRefreshTimer = setTimeout(() => loadDir(navDir), 250);
+}
+
+// ---------- the panel: resizable, collapsible, remembered ----------
+// The rail's pattern, mirrored: same store, same bounds shape, same "persist what was applied, not
+// what the pointer asked for", same silence below the breakpoint.
+const navIsDrawer = () => !railResizable();
+const navCollapsed = () => document.body.classList.contains('nav-collapsed');
+const navDrawerOpen = () => document.body.classList.contains('nav-open');
+function navMax() {
+  return Math.max(NAV_MIN, Math.min(Math.round(window.innerWidth * NAV_MAX_FRAC),
+    colBudget() - trackWidth($('side'), railCollapsed())));
+}
+const clampNav = (w) => Math.min(navMax(), Math.max(NAV_MIN, Math.round(w)));
+let navWidth = Math.max(NAV_MIN, Math.round(Number(uiStore.get('navWidth', 248)) || 248));
+function applyNavWidth(w, persist) {
+  navWidth = Math.max(NAV_MIN, Math.round(w));
+  const applied = clampNav(navWidth);
+  document.documentElement.style.setProperty('--nav-w', applied + 'px');
+  const grip = $('navGrip');
+  if (grip) {
+    grip.setAttribute('aria-valuenow', String(applied));
+    grip.setAttribute('aria-valuemin', String(NAV_MIN));
+    grip.setAttribute('aria-valuemax', String(navMax()));
+  }
+  if (persist) uiStore.set('navWidth', applied);
+}
+// `show` means the same thing at both sizes — is the folder visible — and the size decides what that
+// costs: a track on the desktop grid, an overlay on top of the document below the breakpoint.
+function toggleNav(show) {
+  if (navIsDrawer()) {
+    document.body.classList.toggle('nav-open', show === undefined ? !navDrawerOpen() : !!show);
+  } else {
+    const collapse = show === undefined ? !navCollapsed() : !show;
+    document.body.classList.toggle('nav-collapsed', collapse);
+    uiStore.set('navCollapsed', collapse ? '1' : '');
+    applyRailWidth(railWidth, false);   // the rail's ceiling moved with the panel's track
+    relayoutDoc();
+  }
+  paintNavToggle();
+}
+function closeNavDrawer() { document.body.classList.remove('nav-open'); paintNavToggle(); }
+function paintNavToggle() {
+  const btn = $('navToggle');
+  if (!btn) return;
+  const shown = navIsDrawer() ? navDrawerOpen() : !navCollapsed();
+  const label = shown ? 'Hide the folder' : 'Show the folder';
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+  btn.setAttribute('aria-expanded', shown ? 'true' : 'false');
+}
+(function navDrag() {
+  const grip = $('navGrip');
+  let dragId = null;
+  grip.addEventListener('pointerdown', (e) => {
+    if (!railResizable() || navCollapsed()) return;
+    dragId = e.pointerId;
+    grip.setPointerCapture(dragId);
+    document.body.classList.add('nav-dragging');
+    e.preventDefault();
+  });
+  grip.addEventListener('pointermove', (e) => {
+    if (dragId === null) return;
+    // The panel's left edge IS main's left edge, so the width is the distance from it to the pointer.
+    applyNavWidth(e.clientX - $('main').getBoundingClientRect().left, false);
+    relayoutDoc();
+  });
+  const endDrag = () => {
+    if (dragId === null) return;
+    try { grip.releasePointerCapture(dragId); } catch {}
+    dragId = null;
+    document.body.classList.remove('nav-dragging');
+    applyNavWidth(navWidth, true);   // one write at the end, not one per pointermove
+    relayoutDoc();
+  };
+  grip.addEventListener('pointerup', endDrag);
+  grip.addEventListener('pointercancel', endDrag);
+  // Right widens the panel, because right is the direction its edge travels — the mirror of the
+  // rail's handle, which is the other way round for the same reason.
+  grip.addEventListener('keydown', (e) => {
+    if (!railResizable() || navCollapsed()) return;
+    const step = e.shiftKey ? 48 : 12;
+    if (e.key === 'ArrowRight') applyNavWidth(clampNav(navWidth) + step, true);
+    else if (e.key === 'ArrowLeft') applyNavWidth(clampNav(navWidth) - step, true);
+    else return;
+    e.preventDefault();
+    relayoutDoc();
+  });
+})();
+// Restore before the first render, so the panel never flashes at the default width and then jumps.
+if (uiStore.get('navCollapsed', '')) document.body.classList.add('nav-collapsed');
+applyNavWidth(navWidth, false);
+paintNavToggle();
 
 // ---------- mobile bottom sheet ----------
 function toggleSheet(force) {
@@ -2469,9 +2896,18 @@ window.addEventListener('blur', () => setModHeld(false));
 // Resize changes both the text reflow and the desktop/mobile cutoff, so the docked layout is recomputed
 // (or torn down, below 781px) on every resize. An asset frame also re-scales: its canvas is fixed, the
 // column it has to fit into is not.
-// The rail's bounds are viewport-relative, so a resize also re-clamps it — without persisting, since
-// narrowing the window is not the human changing their mind about how wide the rail should be.
-window.addEventListener('resize', () => { applyRailWidth(railWidth, false); if (isAsset()) sizeFrame(); scheduleDock(); });
+// Both panels' bounds are viewport-relative, so a resize also re-clamps them — without persisting,
+// since narrowing the window is not the human changing their mind about how wide either should be.
+// Crossing up out of the drawer breakpoint also drops an open drawer: on the desktop grid the panel is
+// a column, and a leftover "open" would come back the next time the window narrowed.
+window.addEventListener('resize', () => {
+  if (!navIsDrawer() && navDrawerOpen()) document.body.classList.remove('nav-open');
+  applyNavWidth(navWidth, false);
+  applyRailWidth(railWidth, false);
+  paintNavToggle();          // the button means "collapse" above the breakpoint and "open" below it
+  if (isAsset()) sizeFrame();
+  scheduleDock();
+});
 // Everything in the document that stands for this item: its prose highlights, or the diagram node
 // standing in for them. One helper so jumping, flashing and docking can never disagree about where an
 // item lives — they did, and a node comment flashed nothing while its card docked next to a paragraph.

@@ -5,7 +5,7 @@ For *driving* sidecar as an agent (reviewing a document with a human), see
 
 ## Shape
 
-No build step. Twelve files carry the whole tool:
+No build step. Thirteen files carry the whole tool:
 
 | File | What it is |
 |---|---|
@@ -15,7 +15,8 @@ No build step. Twelve files carry the whole tool:
 | `lib/element.js` | The element anchor: reference normalization, sel validation, and the Node-side liveness rule. |
 | `lib/assets.js` | Where an attached image lands and what counts as one. Shared by the upload route and `--image`. |
 | `lib/wait.js` | `sidecar wait` — the fs-watching reactive-loop primitive. Server-independent by design. |
-| `public/index.html` | The entire frontend: rendering, contenteditable editor, review rail. |
+| `public/index.html` | The entire frontend: rendering, contenteditable editor, directory panel, review rail. |
+| `public/navsort.js` | The directory panel's ordering. Pure list in/out; no DOM, no dependency. |
 | `public/anchor.js` | The ONE content-anchor matcher, loaded by both the browser and Node. |
 | `public/serialize.js` | The tight-diff serialize/reindex round-trip, shared with the Node tests. |
 | `public/flow.js` | ```flow fences → SVG. Pure string in/out; no DOM, no dependency. |
@@ -139,10 +140,10 @@ hover title in the UI.
 
 - Comments explain *why*, especially where the code looks odd — most of them record a real incident.
   Keep that when you change the surrounding code; delete them when the reason stops being true.
-- Layout preferences (the review rail's width, whether it is collapsed) persist in `localStorage`
-  under an `sc:` prefix, through the wrapped `railStore` — Safari in private mode throws on `setItem`,
-  and nothing about a preference is worth an exception on the path that renders the review. Document
-  and review state never go there; those are files.
+- Layout preferences (each panel's width, whether it is collapsed, and the directory panel's sort, one
+  key per folder) persist in `localStorage` under an `sc:` prefix, through the wrapped `uiStore` —
+  Safari in private mode throws on `setItem`, and nothing about a preference is worth an exception on
+  the path that renders the review. Document and review state never go there; those are files.
 - Safety properties that tests cover and should stay covered: atomic sidecar writes, merge-by-id never
   dropping the other side's work, decided statuses never regressing, path confinement to the served
   root, Host-header allowlisting, DOMPurify on rendered markdown, `git diff` run without a shell
