@@ -5,7 +5,7 @@ For *driving* sidecar as an agent (reviewing a document with a human), see
 
 ## Shape
 
-No build step. Thirteen files carry the whole tool:
+No build step. Fourteen files carry the whole tool:
 
 | File | What it is |
 |---|---|
@@ -17,6 +17,7 @@ No build step. Thirteen files carry the whole tool:
 | `lib/wait.js` | `sidecar wait` — the fs-watching reactive-loop primitive. Server-independent by design. |
 | `public/index.html` | The entire frontend: rendering, contenteditable editor, directory panel, review rail. |
 | `public/navsort.js` | The directory panel's ordering. Pure list in/out; no DOM, no dependency. |
+| `public/doclink.js` | Does a link in a document open IN sidecar, and which document. Pure string in/out. |
 | `public/anchor.js` | The ONE content-anchor matcher, loaded by both the browser and Node. |
 | `public/serialize.js` | The tight-diff serialize/reindex round-trip, shared with the Node tests. |
 | `public/flow.js` | ```flow fences → SVG. Pure string in/out; no DOM, no dependency. |
@@ -144,6 +145,14 @@ hover title in the UI.
   key per folder) persist in `localStorage` under an `sc:` prefix, through the wrapped `uiStore` —
   Safari in private mode throws on `setItem`, and nothing about a preference is worth an exception on
   the path that renders the review. Document and review state never go there; those are files.
+- A history entry carries `{ f, y }`: which document, and where the reader left it. The browser's own
+  `scrollRestoration` is off, since switching documents never navigates and its restore would fire
+  against the outgoing document's height. Anything else belonging to one document is cleared in
+  `resetDocState`, which runs on every swap.
+- Whether a link opens IN sidecar is `public/doclink.js` and nothing else. Three callers ask it — the
+  document's click handlers, the render that marks a link, and the asset frame's `pick` — so a rule
+  added there is a rule all three follow. The frame reports the href out and the page decides, because
+  the frame is given the picker and no way to fetch a second script.
 - Safety properties that tests cover and should stay covered: atomic sidecar writes, merge-by-id never
   dropping the other side's work, decided statuses never regressing, path confinement to the served
   root, Host-header allowlisting, DOMPurify on rendered markdown, `git diff` run without a shell

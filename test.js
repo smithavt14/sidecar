@@ -2474,6 +2474,81 @@ test('every sort mode the panel offers is one the sorter answers to', () => {
   assert.deepEqual(Nav.MODES, ['spine', 'updated', 'turn']);
 });
 
+// ---------- which links open IN sidecar (public/doclink.js) ----------
+// The SAME file index.html loads via <script>. Three callers ask it the question — the document's two
+// click handlers and the asset frame's pick — so every case below is a case all three follow.
+const DocLink = require('./public/doclink.js');
+const cliAllow = require('./lib/cli.js');
+const BRIEF = 'vault/projects/ccdc-portal/brief.md';
+
+test('a relative link to a sibling document opens in sidecar, however it is written', () => {
+  for (const href of ['market-research.md', './market-research.md', './/market-research.md',
+                      'sub/../market-research.md']) {
+    assert.deepEqual(DocLink.route(href, BRIEF),
+      { rel: 'vault/projects/ccdc-portal/market-research.md', hash: '' }, href);
+  }
+  assert.deepEqual(DocLink.route('slices/slice1.md', BRIEF),
+    { rel: 'vault/projects/ccdc-portal/slices/slice1.md', hash: '' }, 'and one a folder down');
+  assert.deepEqual(DocLink.route('../grant-developer/brief.md', BRIEF),
+    { rel: 'vault/projects/grant-developer/brief.md', hash: '' }, 'and one a folder up');
+});
+
+test('an .html asset is a document too, and both extension lists are the CLI\'s', () => {
+  assert.deepEqual(DocLink.route('./poster.html', BRIEF),
+    { rel: 'vault/projects/ccdc-portal/poster.html', hash: '' });
+  assert.deepEqual(DocLink.route('./NOTES.MD', BRIEF),
+    { rel: 'vault/projects/ccdc-portal/NOTES.MD', hash: '' }, 'the extension is matched case-blind');
+  // lib/cli.js cannot be require'd from a browser, so this file carries its own copy of the two
+  // allowlists. A document kind the CLI reviews and this one does not know about is a link that
+  // reloads the whole page instead of switching in place.
+  assert.deepEqual(DocLink.MARKDOWN, cliAllow.MARKDOWN);
+  assert.deepEqual(DocLink.ASSETS, cliAllow.ASSETS);
+});
+
+test('a link that is not a document in this root is left exactly as it is', () => {
+  const native = [
+    'https://example.com/doc.md', 'http://other.host/x.md',   // another host
+    'mailto:alex@example.com', 'javascript:alert(1)', 'data:text/html,x', 'file:///etc/x.md',
+    '//example.com/x.md',                                     // protocol-relative
+    '/absolute/x.md', '/?f=other.md',                         // a URL on this origin, not a path in the root
+    '#a-heading', '#',                                        // an anchor within this document
+    'notes.txt', 'script.js', 'photo.png', 'README',          // not a kind sidecar reviews
+    'folder/', '', '   ', './',
+    '../../../../../../etc/passwd.md',                        // out of the served root
+    'research.md?raw=1',                                      // a query is not part of any path in the root
+  ];
+  for (const href of native) assert.equal(DocLink.route(href, BRIEF), null, JSON.stringify(href));
+});
+
+test('climbing out of the served root is refused, and climbing back in is not', () => {
+  // The root is implicit: every path is relative to it, so a link that runs out of segments to pop has
+  // walked out of everything sidecar serves. The server would refuse it (safePath) and the page must
+  // not ask.
+  assert.equal(DocLink.route('../../../../other.md', BRIEF), null);
+  assert.equal(DocLink.route('../x.md', 'top.md'), null, 'a document at the root has nowhere above it');
+  assert.deepEqual(DocLink.route('./x.md', 'top.md'), { rel: 'x.md', hash: '' });
+  assert.deepEqual(DocLink.route('../../people/alex.md', BRIEF),
+    { rel: 'vault/people/alex.md', hash: '' }, 'two up and along is still inside');
+});
+
+test('a fragment rides along, and a fragment alone is an anchor in this document', () => {
+  assert.deepEqual(DocLink.route('./market-research.md#the-bet', BRIEF),
+    { rel: 'vault/projects/ccdc-portal/market-research.md', hash: 'the-bet' });
+  assert.equal(DocLink.route('#the-bet', BRIEF), null, 'same document: the browser already does this');
+});
+
+test('a written link is percent-encoded and a path on disk is not', () => {
+  assert.deepEqual(DocLink.route('./market%20research.md', BRIEF),
+    { rel: 'vault/projects/ccdc-portal/market research.md', hash: '' });
+  assert.equal(DocLink.route('./%E0%A4%A.md', BRIEF), null, 'and a malformed escape is left alone');
+});
+
+test('a link to the open document itself still resolves to it', () => {
+  // openDoc no-ops on the document already showing, so the answer here is "yes, that one" rather than
+  // a special case this file has to know about.
+  assert.deepEqual(DocLink.route('./brief.md', BRIEF), { rel: BRIEF, hash: '' });
+});
+
 test('atomic blocks: a flow fence and an HTML island survive an edit elsewhere, byte-for-byte', () => {
   const { doc, blocks, td } = buildDoc(VIS_DOC);
   blockByText(doc, 'Middle paragraph.').querySelector('p').textContent = 'Middle paragraph, edited.';
@@ -3275,6 +3350,27 @@ function pickerDom(html) {
   return new JSDOM('<!doctype html><html><body>' + html + '</body></html>').window.document;
 }
 
+test('an asset reports the link a click would follow, from the element or from its ancestors', () => {
+  // The frame never decides: it says what the href is and public/doclink.js, on the page's side of the
+  // postMessage boundary, decides whether it names a document. An asset's <a href> survives the
+  // sanitize profile unrewritten (only LINK/IMAGE/USE hrefs become /assets references), so what the
+  // page routes is what the author wrote.
+  const doc = pickerDom('<main><a href="./market-research.md"><span id="in">the research</span></a>'
+    + '<a href="https://example.com"><em id="out">a site</em></a><p id="plain">no link</p></main>');
+  assert.equal(Picker.linkHref(doc.querySelector('#in')), './market-research.md',
+    'the link is found from the deepest element, which is what the outline lands on');
+  assert.equal(Picker.linkHref(doc.querySelector('a')), './market-research.md');
+  assert.equal(Picker.linkHref(doc.querySelector('#out')), 'https://example.com',
+    'an outbound link is reported too; the page is what refuses it');
+  assert.equal(Picker.linkHref(doc.querySelector('#plain')), '');
+  assert.equal(Picker.linkHref(null), '');
+  // And the two ends meet: what the frame reports of a sibling citation is what the page follows.
+  assert.deepEqual(DocLink.route(Picker.linkHref(doc.querySelector('#in')), 'vault/projects/ccdc-portal/poster.html'),
+    { rel: 'vault/projects/ccdc-portal/market-research.md', hash: '' });
+  assert.equal(DocLink.route(Picker.linkHref(doc.querySelector('#out')), 'vault/projects/ccdc-portal/poster.html'), null,
+    'and an outbound one stays an ordinary pick');
+});
+
 test('a pick offers its candidates best-first: data-sc, then id, then the structural path', () => {
   const doc = pickerDom('<main><h1 data-sc="hero" id="top">Train your own image gen model</h1>'
     + '<p id="sub">Ten minutes.</p><p>bare</p><p>also bare</p></main>');
@@ -3683,8 +3779,9 @@ test('Alt steps the outline a layer deeper, and the click takes what is outlined
   const hover = () => sent.find(m => m.type === 'sidecar:hover');
 
   move();
-  assert.deepEqual({ ...hover(), type: undefined }, { type: undefined, label: 'scrim', depth: 1, count: 3 },
-    'the top of the stack by default, with the depth the page shows');
+  assert.deepEqual({ ...hover(), type: undefined },
+    { type: undefined, label: 'scrim', depth: 1, count: 3, href: '' },
+    'the top of the stack by default, with the depth the page shows and no link under it');
   assert.equal(scrim.classList.contains('sc-hover'), true);
 
   // The page forwards the key, because a keydown reaches the frame only once the frame has focus.
@@ -3721,5 +3818,40 @@ test('Alt steps the outline a layer deeper, and the click takes what is outlined
   doc.elementsFromPoint = () => [scrim, art, main, doc.body];
   move();
   assert.equal(hover().label, 'scrim', 'and back over the stack, the step is reset');
+  dom.window.close();
+});
+
+test('a citation inside an asset reaches the page as a pick carrying its href', () => {
+  // An asset cites its siblings the way a document does, and following one is the same navigation. The
+  // frame reports the href and nothing else: the rule lives in public/doclink.js on the page's side,
+  // because the frame is given the picker and no way to fetch a second script.
+  const cited = POSTER.replace('<footer>© 2026 spktr</footer>',
+    '<footer><a href="./market-research.md"><span data-sc="cite">the research</span></a></footer>');
+  const { win, doc, sent, dom } = bootFrame(cited);
+  const span = doc.querySelector('[data-sc=cite]'), cta = doc.querySelector('[data-sc=cta]');
+  const from = 'vault/projects/ccdc-portal/poster.html';
+
+  doc.elementsFromPoint = () => [span, doc.querySelector('footer'), doc.body];
+  sent.length = 0;
+  doc.dispatchEvent(new win.MouseEvent('mousemove', { bubbles: true, clientX: 5, clientY: 5 }));
+  const hover = sent.find(m => m.type === 'sidecar:hover');
+  assert.equal(hover.label, 'cite');
+  assert.equal(hover.href, './market-research.md', 'the affordance knows before the click');
+
+  sent.length = 0;
+  span.dispatchEvent(new win.MouseEvent('click', { bubbles: true, cancelable: true, clientX: 5, clientY: 5 }));
+  const pick = sent.find(m => m.type === 'sidecar:pick');
+  assert.equal(pick.href, './market-research.md', 'found from the deepest element, through its ancestors');
+  assert.deepEqual(DocLink.route(pick.href, from),
+    { rel: 'vault/projects/ccdc-portal/market-research.md', hash: '' }, 'and the page opens that document');
+
+  // The poster's own call to action is an absolute path, which is a URL on this origin rather than a
+  // path in the served root — so it stays an ordinary pick and the composer opens on it.
+  doc.elementsFromPoint = () => [cta, doc.querySelector('main'), doc.body];
+  sent.length = 0;
+  cta.dispatchEvent(new win.MouseEvent('click', { bubbles: true, cancelable: true, clientX: 5, clientY: 5 }));
+  const second = sent.find(m => m.type === 'sidecar:pick');
+  assert.equal(second.href, '/start');
+  assert.equal(DocLink.route(second.href, from), null);
   dom.window.close();
 });

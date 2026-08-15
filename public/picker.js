@@ -10,9 +10,9 @@
            pulse { id }          flash one element (the rail's quote was clicked)
            highlight { id }      hover cue (a card is hovered; null clears it)
      out   ready { width, height }        the natural canvas size, so the page can scale to its column
-           hover { label, depth, count }  what the cursor is over and where in the stack, for the
-                                          page's affordance
-           pick { candidates, label, text, rect }   a click on a bare element
+           hover { label, depth, count, href }  what the cursor is over and where in the stack, for the
+                                          page's affordance; href is set when it sits inside a link
+           pick { candidates, label, text, rect, href }   a click on a bare element
            open { id }                    a click on an element that already carries an item
            geometry { rects }             per-item rects, which is what card docking reads
            anchors { anchors }            per-item resolved|missing, which is what orphan display reads
@@ -189,6 +189,15 @@
 
   // ---------- the layer stack: reaching what the paint order buries ----------
 
+  // The link this element sits in, if any. An asset can cite its siblings the same way a markdown
+  // document does, and the page follows one of these when it names another document in the served root
+  // (public/doclink.js decides, on the page's side of the boundary — the frame gets this file and
+  // nothing else, so the rule cannot live in here without becoming a second copy of itself).
+  function linkHref(el) {
+    const a = el && el.closest ? el.closest('a[href]') : null;
+    return a ? (a.getAttribute('href') || '') : '';
+  }
+
   // An element the picker will not take: the page frame itself, and its own injected style.
   function pickable(el) {
     if (!el || el.nodeType !== 1) return null;
@@ -337,7 +346,8 @@
         if (hovered) hovered.classList.add('sc-hover');
       }
       const depth = hovered ? stack.indexOf(hovered) + 1 : 0;
-      const body = { label: hovered ? labelOf(hovered) : null, depth: depth, count: hovered ? stack.length : 0 };
+      const body = { label: hovered ? labelOf(hovered) : null, depth: depth, count: hovered ? stack.length : 0,
+        href: hovered ? linkHref(hovered) : '' };
       const key = JSON.stringify(body);
       if (key === said) return;      // mousemove fires on every pixel; the page hears only real changes
       said = key;
@@ -415,8 +425,12 @@
       const id = itemOn(el);
       if (id) { flash(resolved[id]); return send('open', { id: id }); }
       const candidates = candidatesFor(el);
+      // `href` rides on the pick rather than travelling as a message of its own, so the page makes ONE
+      // decision per click: follow the link if it names a document, and otherwise open the composer on
+      // the element. A separate `nav` message would have to guess here, and a guess that guessed wrong
+      // is a click that does nothing at all.
       send('pick', { candidates: candidates, label: candidates[0].label,
-        text: snippet(textOf(el)), rect: rectOf(el, win) });
+        text: snippet(textOf(el)), rect: rectOf(el, win), href: linkHref(el) });
     }, true);
     doc.addEventListener('dragstart', (e) => e.preventDefault(), true);
 
@@ -453,7 +467,7 @@
   }
 
   const API = { normalizeText, textOf, signature, snippet, synthQuote, selectorFor, pathOf, candidatesFor,
-    bySignature, resolve, pickable, stackAt, stepped, sameStack, rectOf, canvasSize, boot, SIG_CHARS };
+    bySignature, resolve, pickable, stackAt, stepped, sameStack, rectOf, canvasSize, linkHref, boot, SIG_CHARS };
   if (typeof module !== 'undefined' && module.exports) module.exports = API;
   else {
     root.SidecarPicker = API;

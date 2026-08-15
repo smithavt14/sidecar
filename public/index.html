@@ -9,6 +9,7 @@
 <script src="/serialize.js"></script>   <!-- the tight-diff serialize/reindex round-trip; Node tests require the same file -->
 <script src="/flow.js"></script>   <!-- ```flow fences → SVG; pure string in/out, Node tests require the same file -->
 <script src="/navsort.js"></script>   <!-- the directory panel's ordering; pure list in/out, Node tests require the same file -->
+<script src="/doclink.js"></script>   <!-- does a link in the document open IN sidecar; pure string in/out, Node tests require the same file -->
 <script src="/assetframe.js"></script>   <!-- an .html asset → the sandboxed frame's srcdoc; Node tests require the same file -->
 <script src="/lib/marked/marked.min.js"></script>
 <script src="/lib/dompurify/dist/purify.min.js"></script>   <!-- marked v12 has no sanitizer; scrub its HTML before it hits innerHTML (XSS) -->
@@ -285,9 +286,12 @@
   #doc a { color:var(--ink); text-decoration:underline; text-decoration-color:var(--line-strong);
     text-underline-offset:2px; }
   #doc a:hover { text-decoration-color:var(--ink); }
-  /* A link is only *clickable* while Cmd/Ctrl is held (a plain click has to place the caret in a
+  /* An outbound link opens only while Cmd/Ctrl is held (a plain click has to place the caret in a
      contenteditable), so show the pointer exactly then — same convention as an editor's ctrl+click. */
   #doc.mod a[href] { cursor:pointer; text-decoration-color:var(--accent, var(--ink)); }
+  /* A link to another document in this root is the exception: a plain click opens it in place, so it
+     points like a link at all times. Every other link keeps the caret the rest of the surface has. */
+  #doc a.xdoc { cursor:pointer; }
   .block { position:relative; }
   .block > :first-child { margin-top:.4em; } .block > :last-child { margin-bottom:.4em; }
   /* persistent cue: an open item softly underlines its span in the agent's yellow, tappable */
@@ -830,7 +834,12 @@ async function boot() {
   $('doc').contentEditable = 'true';
   // Stamp the entry we arrived on, so a back from a document opened in the panel lands here with a
   // state object rather than on the URL fallback.
-  history.replaceState({ f: FILE }, '', location.href);
+  history.replaceState({ f: FILE, y: 0 }, '', location.href);
+  // Switching documents replaces the page's contents without navigating, so the browser's own scroll
+  // restore has nothing to restore from: it would fire against the outgoing document's height and
+  // land wherever that happened to be. The position rides on the history entry instead (stampScroll),
+  // and openDoc puts it back once the incoming document has a height (restoreScroll).
+  try { history.scrollRestoration = 'manual'; } catch (e) {}
   await reloadFile();
   loadDir(dirOf(FILE));   // not awaited: the document is what was asked for, the folder is context
   const es = new EventSource('/events');
@@ -957,7 +966,14 @@ function renderDoc() {
     if (renderAtomic(el, b)) { doc.appendChild(el); return; }   // sets its own md0; never goes through turndown
     el.innerHTML = renderMd([b.token]);   // sanitized before it hits the DOM; .block wrapper added after, structure intact
     // Surface a link's destination on hover — inside a contenteditable the href is otherwise invisible.
-    el.querySelectorAll('a[href]').forEach(a => { if (!a.title) a.title = a.getAttribute('href'); });
+    // A link to another document in this root is also MARKED, so the cursor says a plain click will
+    // follow it (see the #doc a.xdoc rule and the click handler at the foot of this file). The class is
+    // safe to add: turndown's link rule reads href and title, so nothing about it reaches the file.
+    el.querySelectorAll('a[href]').forEach(a => {
+      const href = a.getAttribute('href') || '';
+      if (!a.title) a.title = href;
+      if (DocLink.route(href, FILE)) a.classList.add('xdoc');
+    });
     el.querySelectorAll('img[src]').forEach(rewriteAssetSrc);
     doc.appendChild(el);
     b.md0 = toMd(el);   // baseline for tight-diff change detection
@@ -1050,6 +1066,9 @@ function sizeFrame() {
   // A transform does not change layout size, so the wrapper carries the scaled height or the page
   // scrolls to the unscaled one and leaves a screen of blank below a tall poster.
   frameEl.parentElement.style.height = Math.ceil(frameNatural.height * frameScale) + 'px';
+  // The line above is where an asset first HAS a height. A back into one restores its scroll position
+  // here rather than in openDoc, where the frame is an empty box and every position clamps to zero.
+  applyPendingScroll();
 }
 
 function sendFrame(name, body) {
@@ -1099,11 +1118,22 @@ window.addEventListener('message', (e) => {
     // saves, so the slot is free and it is already where the eye goes for document state. The depth is
     // the only sign that anything sits under the layer being pointed at, so it shows whenever the stack
     // is deeper than one, along with the key that walks it.
-    case 'hover': setStatus(m.label
-      ? 'comment on ' + m.label + (m.count > 1 ? '  ·  ' + m.depth + '/' + m.count + '  ·  ⌥ steps deeper' : '')
-      : ''); break;
+    case 'hover': {
+      const to = m.label ? DocLink.route(m.href || '', FILE) : null;
+      setStatus(!m.label ? ''
+        : to ? 'open ' + to.rel.split('/').pop()
+        : 'comment on ' + m.label + (m.count > 1 ? '  ·  ' + m.depth + '/' + m.count + '  ·  ⌥ steps deeper' : ''));
+      break;
+    }
     case 'open': openReview(m.id); break;
-    case 'pick': onFramePick(m); break;
+    // A click on a link inside an asset follows it when it names another document in this root, and is
+    // an ordinary pick otherwise. The frame reports the href and the PAGE decides, because the rule is
+    // public/doclink.js and the frame is deliberately given one script and no way to fetch a second.
+    case 'pick': {
+      const to = DocLink.route(m.href || '', FILE);
+      if (to) openDoc(to.rel); else onFramePick(m);
+      break;
+    }
   }
 });
 
@@ -2641,9 +2671,50 @@ function resetDocState() {
   // the outgoing asset's frame is dropped rather than landing on the incoming document.
   frameEl = null; frameNatural = null; frameGeometry = {}; frameAnchors = {}; frameScale = 1;
   pointerInFrame = false;
+  pendingScrollY = null;    // a restore the outgoing document never got tall enough to satisfy
   hideTool(); hidePopover(); hideBanner(); toggleSheet(false); closeNavDrawer();
   lightbox.classList.remove('on');
   setStatus('');
+}
+// ---------- where each document was left ----------
+// Back has to return to the paragraph the reader was on, not to the top of a document they were
+// halfway down. The position lives on the HISTORY ENTRY, which is the only place that survives the
+// entry being left and come back to, forward as well as back.
+//
+// Written on a debounce rather than on every scroll event: replaceState is rate limited (Safari counts
+// them over a rolling window), and one write when the scrolling stops says the same thing as two
+// hundred during it.
+let scrollStampTimer = null;
+function stampScroll() {
+  clearTimeout(scrollStampTimer); scrollStampTimer = null;
+  const y = Math.round(window.scrollY || 0), st = history.state || {};
+  if (st.f === FILE && Math.round(st.y || 0) === y) return;
+  try { history.replaceState({ f: FILE, y: y }, ''); } catch (e) {}
+}
+window.addEventListener('scroll', () => {
+  clearTimeout(scrollStampTimer);
+  scrollStampTimer = setTimeout(stampScroll, 150);
+}, { passive: true });
+
+// The restore, applied as soon as the incoming document is tall enough to hold it. A markdown render is
+// synchronous, so the first attempt usually lands; an asset is a frame that reports its canvas size
+// over postMessage some frames later, which is what sizeFrame's call is for. Every attempt scrolls as
+// far as the document currently allows, so a document that has since been shortened lands at its end
+// rather than staying wherever the previous one was left.
+let pendingScrollY = null;
+function applyPendingScroll() {
+  if (pendingScrollY == null) return;
+  const max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+  window.scrollTo({ top: Math.min(pendingScrollY, max) });
+  if (max >= pendingScrollY - 2) pendingScrollY = null;
+}
+function restoreScroll(y) {
+  pendingScrollY = y > 0 ? Math.round(y) : null;
+  if (pendingScrollY == null) { window.scrollTo({ top: 0 }); return; }
+  applyPendingScroll();
+  requestAnimationFrame(applyPendingScroll);
+  setTimeout(applyPendingScroll, 120);
+  setTimeout(applyPendingScroll, 400);   // images and fonts land late and the height moves with them
 }
 // Load a document into the view we already have. No navigation, so the EventSource, the layout
 // preferences and the page itself survive; `FILE` is a let and every reader of it (the SSE filter, the
@@ -2653,16 +2724,21 @@ async function openDoc(rel, opts) {
   if (!rel) return;
   if (rel === FILE) { closeNavDrawer(); return; }
   await flushSave();          // the outgoing document leaves with its text saved, not with it pending
+  // The outgoing entry keeps where it was left, before the new one is pushed on top of it. On the way
+  // BACK there is nothing to stamp (history has already moved), so a debounced write still in flight is
+  // dropped rather than allowed to land the old position on the entry we just arrived at.
+  if (o.push !== false) stampScroll();
+  else { clearTimeout(scrollStampTimer); scrollStampTimer = null; }
   FILE = rel;
   document.title = 'sidecar · ' + FILE;
   // The URL is the document, still: a reload, a bookmark or a copied address has to land back here.
-  if (o.push !== false) history.pushState({ f: rel }, '', '/?f=' + encodeURIComponent(rel));
+  if (o.push !== false) history.pushState({ f: rel, y: 0 }, '', '/?f=' + encodeURIComponent(rel));
   resetDocState();
   // A row can outlive its file by the second it takes to click it (an agent moving a document mid
   // review). Say so, and carry on to re-read the folder, which is where the truth shows up.
   try { await reloadFile(); }             // applyState → renderPwd, renderDoc (frame or blocks), renderSide
   catch (e) { showBanner('Could not open ' + rel + '. ' + e.message, [{ label: 'OK', fn: () => {} }]); }
-  window.scrollTo({ top: 0 });
+  restoreScroll(Number(o.y) || 0);        // the top, unless this is a back to somewhere
   if (dirOf(rel) !== navDir) await loadDir(dirOf(rel));
   else renderNav();           // same folder: only the current row moved
 }
@@ -2670,7 +2746,7 @@ async function openDoc(rel, opts) {
 // state of ours (boot stamps one), so the URL is the fallback.
 window.addEventListener('popstate', (e) => {
   const rel = (e.state && e.state.f) || new URLSearchParams(location.search).get('f');
-  if (rel && rel !== FILE) openDoc(rel, { push: false });
+  if (rel && rel !== FILE) openDoc(rel, { push: false, y: (e.state && e.state.y) || 0 });
 });
 // A write to any document in the LISTED folder moves the mtime the "last updated" order reads, and
 // creating one adds a row. The fs-watch channel already delivers both, so the panel refreshes off it.
@@ -2913,13 +2989,40 @@ $('doc').addEventListener('click', (e) => {
   const m = e.target.closest && e.target.closest('mark.anchor');
   if (m && m.dataset.id) openReview(m.dataset.id);
 });
-// Cmd/Ctrl+click opens a link. A PLAIN click must keep placing the caret: this is a contenteditable,
-// so hijacking every click would make the text around a link uneditable.
+// A link to another document in this root opens IN sidecar, on a plain click, the way the panel's rows
+// do. Reviewing a folder means following its citations, and the alternative was editing the URL by
+// hand. The reach is deliberately narrow — DocLink refuses anything with a scheme, an absolute path, a
+// bare fragment, an extension sidecar does not review, or a path that climbs out of the served root —
+// so every other link keeps the behaviour it has today, including placing the caret in this
+// contenteditable. The cost is that the text of one of these links is awkward to click into; the class
+// added at render time at least says so with the cursor.
+//
+// Modifiers and non-left buttons bail, same as the panel, so cmd-click still opens a second tab.
+$('doc').addEventListener('click', (e) => {
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+  const a = e.target.closest && e.target.closest('a[href]');
+  if (!a) return;
+  const to = DocLink.route(a.getAttribute('href') || '', FILE);
+  if (!to) return;
+  e.preventDefault();
+  openDoc(to.rel);
+});
+// Cmd/Ctrl+click opens a link in a new tab. A PLAIN click must keep placing the caret: this is a
+// contenteditable, so hijacking every click would make the text around a link uneditable.
 $('doc').addEventListener('click', (e) => {
   if (!(e.metaKey || e.ctrlKey)) return;
   const a = e.target.closest && e.target.closest('a[href]');
   if (!a) return;
   const href = a.getAttribute('href') || '';
+  // A document-relative link has no address the browser could open on its own: `./research.md` off
+  // `/?f=…` resolves to a path this server does not serve. The tab gets the same `/?f=` URL the panel's
+  // rows carry, which is what makes cmd-click mean the same thing in both places.
+  const to = DocLink.route(href, FILE);
+  if (to) {
+    e.preventDefault();
+    window.open('/?f=' + encodeURIComponent(to.rel), '_blank', 'noopener,noreferrer');
+    return;
+  }
   if (!/^https?:\/\//i.test(href)) return;   // outbound http(s) only — never javascript:/file paths
   e.preventDefault();
   window.open(href, '_blank', 'noopener,noreferrer');
