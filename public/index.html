@@ -10,6 +10,7 @@
 <script src="/flow.js"></script>   <!-- ```flow fences → SVG; pure string in/out, Node tests require the same file -->
 <script src="/navsort.js"></script>   <!-- the directory panel's ordering; pure list in/out, Node tests require the same file -->
 <script src="/doclink.js"></script>   <!-- does a link in the document open IN sidecar; pure string in/out, Node tests require the same file -->
+<script src="/stability.js"></script>   <!-- freeze / last known position / orphan grace for the docked rail; Node tests require the same file -->
 <script src="/assetframe.js"></script>   <!-- an .html asset → the sandboxed frame's srcdoc; Node tests require the same file -->
 <script src="/lib/marked/marked.min.js"></script>
 <script src="/lib/dompurify/dist/purify.min.js"></script>   <!-- marked v12 has no sanitizer; scrub its HTML before it hits innerHTML (XSS) -->
@@ -399,6 +400,19 @@
      left/right 0 so they still span the rail's width and measure the same height they did in flow. */
   .side-list.docked { display:block; position:relative; }
   .side-list.docked .card { position:absolute; left:0; right:0; }
+  /* A docked card SLIDES to its new home rather than appearing in it. The move that matters is the
+     one an agent causes: it rewrites the anchored sentence, the anchor stops matching, and a few
+     seconds later `sidecar reanchor` points the card at the new text. Two jumps with a pause between
+     them read as a glitch; one glide reads as the document settling. renderSide rebuilds every card
+     via innerHTML, so a fresh element has no `top` to move FROM — dockCards seeds it with the position
+     the card held before the rebuild, which is what gives this rule something to animate. */
+  .side-list.docked .card { transition:box-shadow .2s ease, background .2s ease, top .22s ease; }
+  /* A card being typed into is pinned where it is; if a neighbour above grows past it, it stays
+     readable rather than being painted under. */
+  .side-list.docked .card.pinned { z-index:1; }
+  @media (prefers-reduced-motion: reduce) {
+    .side-list.docked .card { transition:box-shadow .2s ease, background .2s ease; }
+  }
   /* A tall card would shove every later card far below its own anchor, so unfocused cards are clipped to
      a cap (set inline by dockCards) and carry a fade + toggle. This is what keeps the column honest.
      Only .cbody clips: resolve / reply / send sit OUTSIDE it and stay reachable without expanding. */
@@ -1999,6 +2013,37 @@ const orphanLabel = (it, fromFrame) => it.orphanReason === 'never-matched' ? 'or
   : (fromFrame || it.orphanReason === 'element-changed') ? 'orphaned — element changed'
   : 'orphaned — text changed';
 
+// ---------- anchor stability: the file's opinion, and what the rail actually shows ----------
+// public/stability.js holds the rules and the reasoning; everything below is the page half of it. The
+// instance is per document: resetDocState wipes it, because a remembered position belongs to the
+// document it was measured in and means nothing in the next one.
+const stability = Stability.create();
+// The stored `orphaned` status arrives within milliseconds of an agent's write, and the reanchor that
+// repairs it arrives seconds later. This is the gate between the two: what the FILE says, run through
+// the grace window, so the card can hold still and be right a moment later instead of moving twice.
+// One place, so the card's grey, its badge and the header's count can never disagree.
+function orphanCue(it) {
+  const fromFrame = frameAnchors[it.id] === 'missing';
+  const dead = it.status === 'orphaned' || fromFrame;
+  // The frame is the authority that has a DOM; when IT says the element is gone, that is the element
+  // rule speaking and not a text edit, so it skips the window (stability.js: IMMEDIATE).
+  const reason = fromFrame ? 'element-changed' : it.orphanReason;
+  return { fromFrame, reason, shown: stability.showOrphaned(it.id, dead, reason, Date.now()) };
+}
+// Why an item is being held out of position, for the two placement rules. Only an item the file calls
+// orphaned has a reason; a live one gets null and takes its live mark.
+function orphanReasonOf(it) { return it && it.status === 'orphaned' ? it.orphanReason : null; }
+// Nothing re-renders once the file stops changing, so a grace window that expires between events would
+// leave a card open on a dead anchor forever. One timer, re-armed on every render, same idiom as
+// schedulePresenceExpiry.
+let orphanFlipTimer = null;
+function scheduleOrphanFlip() {
+  clearTimeout(orphanFlipTimer); orphanFlipTimer = null;
+  const ms = stability.nextFlip(Date.now());
+  if (ms == null) return;
+  orphanFlipTimer = setTimeout(renderSide, ms + 60);
+}
+
 // How many replies a suggestion has picked up, as a quiet header badge. A comment needs no such cue,
 // since its body IS the thread and a conversation on one is self-evident. A pending suggestion's body
 // is a diff, and the rail clips a docked card's body at CARD_CAP, so a thread under a long diff can sit
@@ -2011,7 +2056,10 @@ function replyCount(it) {
 // A suggestion that answers a comment (replyTo) renders INSIDE that thread — its own diff + accept/reject,
 // carrying its own data-id so the delegated dispatcher targets the suggestion, not the parent comment.
 function nestedSugHtml(sug) {
-  const orphan = sug.status === 'orphaned' ? ` <span class="badge orphaned">${orphanLabel(sug)}</span>` : '';
+  // Through the same gate as a top-level card, so the two can't disagree. A nested suggestion is never
+  // docked and never ranked, so it has no observation behind it and the gate passes it straight
+  // through: an orphan here shows the moment the file says so, exactly as it always did.
+  const orphan = orphanCue(sug).shown ? ` <span class="badge orphaned">${orphanLabel(sug)}</span>` : '';
   return `<div class="subcard" data-id="${esc(sug.id)}"><span class="who agent">claude</span> <span class="badge suggestion">suggestion</span>${orphan}`
     + diffHtml(sug.anchor.quote, sug.replacement)
     + (sug.note ? `<div class="msg"><span class="t">${proseHtml(sug.note)}</span></div>` : '')
@@ -2028,6 +2076,8 @@ function nestedSugHtml(sug) {
 // stale mid-edit and would silently scramble the order. An anchor that matches nothing (an orphan, or
 // text the human has since rewritten) has no position and gets -1, which floats it to the top of the
 // rail where it's visible, instead of sinking it to the bottom.
+// This is the RAW verdict and not the final order: renderSide runs it through stability.rankFor, which
+// is where a card that HAD a position keeps it rather than taking the -1 (public/stability.js).
 function docRank(items) {
   const rank = new Map();
   // An asset has no rendered text on this side of the frame boundary, so the order comes from the
@@ -2054,6 +2104,15 @@ function docRank(items) {
 const CARD_CAP = 300;   // px an unfocused card is clipped to; a tall one would push its neighbours off their anchors
 const CARD_GAP = 9;
 const expandedCards = new Set();   // survives renderSide's innerHTML rebuild, which is why it lives out here
+// Where every card was left on the LAST dock, whatever put it there. Not the same thing as the position
+// memory in stability.js (which records only the placements a real mark produced): this exists so a card
+// the rebuild has just re-created can be seeded with the position its predecessor held, giving the CSS
+// `top` transition a value to move from. Cleared on a document swap with everything else.
+const lastDockTop = new Map();
+// The effective ranks the last sort used, so freezing a card can pin the ORDER it was in as well as the
+// pixel it was on. Without the rank the card holds its place on screen and then jumps the moment it is
+// released, because the sort had long since moved it.
+let lastRank = new Map();
 function cssId(id) { return window.CSS && CSS.escape ? CSS.escape(id) : id; }
 function dockCards() {
   const list = $('side').querySelector('.side-list');
@@ -2075,6 +2134,19 @@ function dockCards() {
     return;
   }
   const doc = $('doc');
+  // Seed the transition. A card renderSide has just rebuilt is a brand new element with no inline
+  // `top`, and a transition has nothing to run from an unset value, so writing the final position
+  // would land it there instantly, which is the jump this slice exists to remove. Give every returning
+  // card the position it held a moment ago, flush ONE layout, then place them for real below.
+  let seeded = false;
+  for (const card of cards) {
+    if (card.style.top) continue;
+    const was = lastDockTop.get(card.dataset.id);
+    if (was == null) continue;                       // genuinely new: it fades in (.entering) instead
+    card.style.top = was + 'px'; seeded = true;
+  }
+  if (seeded) void list.offsetHeight;                // or both writes coalesce and nothing moves
+  const byId = new Map(state.review.items.map(i => [i.id, i]));
   const listTop = list.getBoundingClientRect().top;
   let cursor = 0;
   for (const card of cards) {
@@ -2107,11 +2179,24 @@ function dockCards() {
       : (doc.querySelector('mark.anchor[data-id="' + cssId(id) + '"]')
         || doc.querySelector('.fl-node.anchored[data-item-id="' + cssId(id) + '"]'));
     const inFrame = isAsset() ? frameRectFor(id) : null;
-    const target = mark ? mark.getBoundingClientRect().top - listTop
-      : inFrame ? inFrame.top - listTop : cursor;
-    const top = Math.max(Math.round(target), cursor);
+    // Where the DOCUMENT puts it right now, or null when its anchor matches nothing.
+    const live = mark ? mark.getBoundingClientRect().top - listTop
+      : inFrame ? inFrame.top - listTop : null;
+    // …and where it actually goes. A pinned card (a reply is being typed into it) sits exactly where it
+    // was pinned and the cursor steps around it rather than over it: a card that moves under the caret
+    // is the whole bug. Everything else takes its live mark, or the last position it successfully held,
+    // or, having never held one, the next free slot at the top of the rail. See public/stability.js.
+    const pin = stability.pinnedTop(id);
+    const reason = orphanReasonOf(byId.get(id));
+    const target = stability.topFor(id, live, reason);
+    const top = pin != null ? Math.round(pin) : Math.max(Math.round(target == null ? cursor : target), cursor);
+    card.classList.toggle('pinned', pin != null);
     card.style.top = top + 'px';
-    cursor = top + card.offsetHeight + CARD_GAP;
+    // Only a placement against a REAL mark is worth remembering: it is the one that says "the card
+    // belongs here", and re-recording an orphan's held position would let it drift on every render.
+    if (live != null && pin == null) stability.noteTop(id, top);
+    lastDockTop.set(id, top);
+    cursor = Math.max(cursor, top + card.offsetHeight + CARD_GAP);
   }
   // "done reviewing" is a static child of a list whose cards are now absolute, so it would collapse to
   // the top of the rail. Place it below the last card, where it still reads as the foot of the column.
@@ -2122,6 +2207,43 @@ function dockCards() {
     cursor += foot.offsetHeight;
   }
   list.style.height = cursor + 'px';   // absolute children don't size the parent; the page needs this to scroll
+  syncFreeze(list);   // …and now that every card has a final position, pin the one being typed into
+}
+// ---------- freeze: a card being typed into does not move ----------
+// A card is frozen while its reply box has the caret OR holds text not yet sent. Read off the DOM
+// rather than tracked through events, because renderSide rebuilds every textarea via innerHTML and
+// restores the draft into a NEW element: a listener attached to the old one would be describing a node
+// that no longer exists. The draft restore runs before dockCards, so by the time this is called the
+// value and the focus are already back where they belong.
+// Pinning captures the pixel the card was just placed on and the rank the last sort gave it, so a
+// release puts it back into the order rather than leaving it stranded at a position the document has
+// since moved past.
+function syncFreeze(list) {
+  const active = document.activeElement;
+  let thawed = false, changed = false;
+  for (const card of list.querySelectorAll(':scope > .card[data-id]')) {
+    const id = card.dataset.id;
+    const ta = card.querySelector('textarea.reply');
+    const hot = !!ta && (ta === active || ta.value.trim() !== '');
+    if (hot && !stability.isPinned(id)) {
+      const top = parseFloat(card.style.top);
+      if (isFinite(top)) { stability.pin(id, top, lastRank.get(id)); card.classList.add('pinned'); changed = true; }
+    } else if (!hot && stability.isPinned(id)) { stability.unpin(id); thawed = true; }
+  }
+  // A release needs the SORT run again, not just a re-dock: the card was held out of an order that may
+  // have moved on without it. renderSide is what sorts, and one frame later so this is not re-entrant.
+  if (thawed) requestAnimationFrame(renderSide);
+  else if (changed) scheduleDock();
+}
+// Focus and an emptied box are both invisible to the render pipeline, so nudge it from the events that
+// carry them. `focusout` fires BEFORE the new focus lands, which is why this steps off the current task
+// rather than reading activeElement mid-transition (it would read <body> and thaw a card the human is
+// still working in).
+for (const ev of ['focusin', 'focusout', 'input']) {
+  $('side').addEventListener(ev, (e) => {
+    if (!e.target.closest || !e.target.closest('textarea.reply')) return;
+    setTimeout(() => { const l = $('side').querySelector('.side-list'); if (l) syncFreeze(l); }, 0);
+  });
 }
 let dockQueued = false;
 function scheduleDock() {
@@ -2159,8 +2281,22 @@ function renderSide() {
   // unrelated motions. Sort is stable, so items sharing a position (and the -1 orphans pinned at the
   // top) keep their creation order. Archived stays chronological: it's a log, and a settled item's
   // anchor may no longer exist in the document at all.
+  // The raw verdict first, then the stable one. docRank says where the document puts each card TODAY;
+  // stability.rankFor says where it goes, which is the same thing except for a card being typed into
+  // (pinned) and a card whose anchor has just stopped matching (holds its last rank instead of taking
+  // the -1). public/stability.js has the reasoning.
   const rank = docRank(activeTop);
-  activeTop.sort((a, b) => rank.get(a.id) - rank.get(b.id));
+  const now = Date.now();
+  for (const it of activeTop) stability.observe(it.id, rank.get(it.id) >= 0, now);
+  stability.keep(activeTop.map(i => i.id));   // a settled or dropped item is never docked again
+  const stable = new Map();
+  for (const it of activeTop) {
+    const r = rank.get(it.id);
+    if (r >= 0 && !stability.isPinned(it.id)) stability.noteRank(it.id, r);
+    stable.set(it.id, stability.rankFor(it.id, r, orphanReasonOf(it)));
+  }
+  lastRank = stable;
+  activeTop.sort((a, b) => stable.get(a.id) - stable.get(b.id));
   $('sheetCount').textContent = activeTop.length || '';   // mobile pull-up pill count = open items
 
   side.innerHTML = '';
@@ -2190,6 +2326,7 @@ function renderSide() {
   renderTurn();    // right cluster: open / orphaned counts
   renderPresence();// center: claude is here ↔ waiting for claude
   noteRailTraffic();// and the collapsed rail's "something arrived" badge
+  scheduleOrphanFlip();// …and the one timer that ends a grace window nothing else would end
   // Put the view back where it was. Twice on purpose: once now, and once after
   // the next frame, because dockCards repositions cards and autogrow resizes
   // textareas — both change layout height after this point, which would
@@ -2228,7 +2365,10 @@ function renderActive(list, top, childSug) {
     // the Node rule, which is textual and abstains on an element it cannot check (a picture has no
     // signature to match). The frame's `anchors` message is the DOM's own answer for the render the
     // human is looking at, and on an asset it is the more informed of the two.
-    const dead = it.status === 'orphaned' || frameAnchors[it.id] === 'missing';
+    // …and orphanCue is the third thing in the room: the grace window, which holds the card in its
+    // normal clothes for a few seconds while an agent's edit and its reanchor finish arguing.
+    const cue = orphanCue(it);
+    const dead = cue.shown;
     el.className = 'card' + (dead ? ' orphaned' : ''); el.dataset.id = it.id;
     // Per-item guard. A throw while building ONE card used to abort the whole loop, so every item after
     // it silently vanished from the rail while the tab count still claimed they were there — the human
@@ -2238,7 +2378,7 @@ function renderActive(list, top, childSug) {
     const label = it.flag ? 'flag' : it.kind;
     let head = `<span class="who ${whoCls(it.by)}">${esc(it.by)}</span> <span class="badge ${label}">${label}</span>`;
     if (it.kind === 'suggestion') head += replyCount(it);
-    if (dead) head += ` <span class="badge orphaned">${orphanLabel(it, frameAnchors[it.id] === 'missing')}</span>`;
+    if (dead) head += ` <span class="badge orphaned">${orphanLabel(it, cue.fromFrame)}</span>`;
     // No interpolated inline handlers: the id lives on the card's data-id (set safely above) and every
     // control carries a static data-action, dispatched by the delegated listeners on #side (see below).
     let body = `<div class="quote" title="click to locate" data-action="locate">${esc(it.anchor.quote)}</div>`;
@@ -2350,8 +2490,11 @@ function threadHtml(thread) {
 function renderTurn() {
   const el = $('turn'); if (!el) return;
   const its = state.review.items;
-  const open = its.filter(i => ['open','pending'].includes(i.status)).length;
-  const orphaned = its.filter(i => i.status === 'orphaned').length;
+  // The card's gate, not the file's status: a header saying "1 orphaned" over a rail showing none is
+  // worse than either state on its own, so both read the grace window through orphanCue. An item still
+  // inside its window counts where it is being SHOWN, which is as an open one.
+  const orphaned = its.filter(i => orphanCue(i).shown).length;
+  const open = its.filter(i => ['open','pending','orphaned'].includes(i.status) && !orphanCue(i).shown).length;
   let html = open ? open + ' open' : (its.length ? 'all clear' : '');
   if (orphaned) html += (html ? ' · ' : '') + `<span class="orphan" data-action="orphans" title="text moved or changed — re-anchor or resolve">${orphaned} orphaned</span>`;
   el.innerHTML = html;
@@ -2811,6 +2954,11 @@ function resetDocState() {
   pendingSel = null; pendingSelBlock = null; pendingSelOffset = null; selRect = null;
   pendingNode = null; pendingElement = null; savedRange = null;
   expandedCards.clear();
+  // Every remembered card position was measured in the OUTGOING document, so it says nothing true
+  // about the incoming one: a card held at "where it used to be" would be held somewhere that belongs
+  // to another file. Freezes, grace clocks and the seed positions go with it.
+  stability.reset(); lastDockTop.clear(); lastRank = new Map();
+  clearTimeout(orphanFlipTimer); orphanFlipTimer = null;
   shownCardIds = null;      // so the incoming cards are a first render, not an arrival
   railSeen = null; railNew = 0;
   sideTab = 'active';

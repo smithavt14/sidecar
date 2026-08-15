@@ -5,7 +5,7 @@ For *driving* sidecar as an agent (reviewing a document with a human), see
 
 ## Shape
 
-No build step. Fourteen files carry the whole tool:
+No build step. Fifteen files carry the whole tool:
 
 | File | What it is |
 |---|---|
@@ -19,6 +19,7 @@ No build step. Fourteen files carry the whole tool:
 | `public/navsort.js` | The directory panel's ordering. Pure list in/out; no DOM, no dependency. |
 | `public/doclink.js` | Does a link in a document open IN sidecar, and which document. Pure string in/out. |
 | `public/anchor.js` | The ONE content-anchor matcher, loaded by both the browser and Node. |
+| `public/stability.js` | What the rail shows while the document is rewritten under it: freeze, last known position, orphan grace. Pure; the clock is passed in. |
 | `public/serialize.js` | The tight-diff serialize/reindex round-trip, shared with the Node tests. |
 | `public/flow.js` | ```flow fences → SVG. Pure string in/out; no DOM, no dependency. |
 | `public/assetframe.js` | An asset's HTML → the sandboxed frame's srcdoc: the sanitize profile, the `/assets` rewriting, the picker inlining. |
@@ -117,6 +118,34 @@ routing document edits through sidecar so they take the same lock; it has not bi
 merging is a second set of bugs, and the two sides must agree byte-for-byte — a matcher that
 normalised differently on each side once made the highlight point at one duplicate while accept
 spliced another.
+
+## The rail holds still while the agent writes
+
+The docked rail places every card at its anchor, which means an agent rewriting a sentence moves the
+card that is about it. Three things then happen inside a few seconds: the anchor stops matching, the
+item is stamped `orphaned` and takes the -1 rank that floats it to the top of the rail, and
+`reanchor` lands and it drops back down. Rendered as they arrive, the middle state is a card
+teleporting out from under a human who was typing into it.
+
+`public/stability.js` is the answer and it changes nothing about the store: the file still says
+`orphaned` the moment it is true, `hq`-side readers and the digest see exactly what they always saw,
+and this is only what the CARD does about it. Three rules, all client-side, all per document.
+
+- **Freeze.** A card whose reply box has the caret or holds unsent text is pinned to where it sat when
+  that started, and moves for nothing until the box is blurred and empty.
+- **Last known position.** A card that docks against a real mark records the rank and the pixel. When
+  its anchor stops matching it holds them, greyed, instead of taking the -1.
+- **Grace.** It does not visibly go orphaned until the anchor has failed for seven seconds, which an
+  edit and its reanchor normally round-trip inside. Same reasoning `lib/element.js` already applies to
+  an element anchor: a false orphan costs the human a rescue, a late one costs nothing.
+
+Two reasons opt out of both, for opposite reasons: `never-matched` was broken from birth and the -1
+exists to make it visible, and `element-changed` is the browser picker's verdict, which has a DOM and
+has already deferred. A cold load has nothing remembered and behaves exactly as it always did.
+
+Auto-migrating an anchor across a diff was considered and refused; `annotateOrphans` documents why
+silent re-anchoring picks the wrong target. Nothing here re-anchors anything. It buys the honest
+answer a few seconds so it can be delivered in place instead of somewhere else.
 
 ## Testing
 

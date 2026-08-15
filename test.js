@@ -2549,6 +2549,179 @@ test('a link to the open document itself still resolves to it', () => {
   assert.deepEqual(DocLink.route('./brief.md', BRIEF), { rel: BRIEF, hash: '' });
 });
 
+// ---------- anchor stability while an agent edits (public/stability.js) ----------
+// The SAME file index.html loads via <script>. Everything here is a pure function of arguments plus
+// recorded state, with the clock passed in, so the whole edit → orphan → reanchor sequence can be run
+// in milliseconds. The scenario throughout: a human is reading a card, an agent rewrites the sentence
+// it is anchored to, and `sidecar reanchor` follows a few seconds later.
+const Stability = require('./public/stability.js');
+const GRACE = Stability.GRACE_MS;
+
+test('a card that was live holds its normal face until the grace window expires', () => {
+  const s = Stability.create();
+  let t = 1000;
+  s.observe('c1', true, t);                                  // the anchor matched on load
+  t += 500;
+  s.observe('c1', false, t);                                 // the agent rewrote the sentence
+  assert.equal(s.showOrphaned('c1', true, 'text-changed', t), false, 'not the instant it breaks');
+  assert.equal(s.showOrphaned('c1', true, 'text-changed', t + GRACE - 1), false, 'nor a millisecond early');
+  assert.equal(s.showOrphaned('c1', true, 'text-changed', t + GRACE), true, 'and then it admits it');
+});
+
+test('a reanchor inside the window means the card never flips at all', () => {
+  const s = Stability.create();
+  let t = 1000;
+  s.observe('c1', true, t);
+  s.observe('c1', false, t + 100);                           // edit lands
+  assert.equal(s.showOrphaned('c1', true, 'text-changed', t + 3000), false);
+  s.observe('c1', true, t + 3500);                           // `sidecar reanchor` lands
+  assert.equal(s.showOrphaned('c1', false, undefined, t + 3600), false, 'and the file agrees');
+  // The clock is reset by the match, so a LATER break gets a full window of its own rather than the
+  // remains of the first one.
+  s.observe('c1', false, t + 4000);
+  assert.equal(s.showOrphaned('c1', true, 'text-changed', t + 4000 + GRACE - 1), false);
+  assert.equal(s.showOrphaned('c1', true, 'text-changed', t + 4000 + GRACE), true);
+});
+
+test('never-matched and element-changed skip the window, for opposite reasons', () => {
+  const s = Stability.create();
+  s.observe('bad', true, 1000);                              // even with a live observation behind it
+  s.observe('bad', false, 1100);
+  // A bad anchor from birth: there is nothing to protect and the whole point of surfacing it is that
+  // somebody has to fix it.
+  assert.equal(s.showOrphaned('bad', true, 'never-matched', 1100), true);
+  // An element anchor: the browser picker has a DOM and has already done its own deferring.
+  assert.equal(s.showOrphaned('bad', true, 'element-changed', 1100), true);
+  assert.deepEqual(Stability.IMMEDIATE, ['never-matched', 'element-changed']);
+});
+
+test('a cold load of an already-orphaned item shows it at once', () => {
+  // Nothing was ever remembered about it, so there is no "last position" to hold it at and no reason to
+  // pretend it is fine. This is the pre-existing behaviour, and it is the default.
+  const s = Stability.create();
+  assert.equal(s.showOrphaned('c1', true, 'text-changed', 1000), true, 'never observed at all');
+  s.observe('c1', false, 1000);                              // observed, and it has never matched
+  assert.equal(s.showOrphaned('c1', true, 'text-changed', 1000), true);
+  assert.equal(s.showOrphaned('c1', true, 'text-changed', 1000 + GRACE * 10), true);
+});
+
+test('the file calling it orphaned while our own matcher still finds it is not a flash', () => {
+  // The two can disagree for a moment in either direction: the review file and the document arrive as
+  // two separate fs events. The card follows what the page can see.
+  const s = Stability.create();
+  s.observe('c1', true, 1000);
+  assert.equal(s.showOrphaned('c1', true, 'text-changed', 1000), false);
+  assert.equal(s.showOrphaned('c1', false, undefined, 1000), false, 'and a live item is never orphaned');
+});
+
+test('one timer ends the window, armed at the earliest card that needs it', () => {
+  // Nothing re-renders once the file stops changing, so without this a grace that expires between
+  // events would leave a card open forever on a dead anchor.
+  const s = Stability.create();
+  assert.equal(s.nextFlip(1000), null, 'nothing pending, no timer');
+  s.observe('a', true, 1000); s.observe('b', true, 1000);
+  s.observe('a', false, 2000);
+  s.observe('b', false, 3000);
+  assert.equal(s.nextFlip(3000), GRACE - 1000, 'the earlier break is the one that decides');
+  s.observe('a', true, 4000);
+  assert.equal(s.nextFlip(4000), GRACE - 1000, 'a repaired anchor drops out of the reckoning');
+  // A window that has already expired is NOT pending. Reporting 0 for one asks for an immediate
+  // render, the record survives it (the anchor is still broken), and the next arm asks again: a card
+  // nobody repairs spins the rail for as long as the tab is open. Live testing found exactly that.
+  assert.equal(s.nextFlip(3000 + GRACE), null, 'a card that has already flipped wants no more timers');
+  s.observe('a', false, 3000 + GRACE);
+  assert.equal(s.nextFlip(3000 + GRACE), GRACE, 'and a fresh break still gets its own');
+});
+
+test('a text-changed orphan keeps the rank and the pixel it last held', () => {
+  const s = Stability.create();
+  s.noteRank('c1', 4200); s.noteTop('c1', 318);              // where it docked while its anchor matched
+  // The anchor stops matching: docRank hands over -1 and dockCards has no mark to measure.
+  assert.equal(s.rankFor('c1', -1, 'text-changed'), 4200, 'it does not float to the top');
+  assert.equal(s.topFor('c1', null, 'text-changed'), 318, 'it does not take the next free slot');
+  // A live mark always wins: the reanchor lands and the card goes where the document says.
+  assert.equal(s.rankFor('c1', 9100, 'text-changed'), 9100);
+  assert.equal(s.topFor('c1', 640, null), 640);
+});
+
+test('a never-matched anchor still floats to the top of the rail', () => {
+  const s = Stability.create();
+  s.noteRank('c1', 4200); s.noteTop('c1', 318);
+  assert.equal(s.rankFor('c1', -1, 'never-matched'), -1);
+  assert.equal(s.topFor('c1', null, 'never-matched'), null, 'null → dockCards gives it the next slot');
+  assert.equal(s.rankFor('c1', -1, 'element-changed'), -1, 'and so does an element that is gone');
+});
+
+test('an item with nothing remembered behaves exactly as it always did', () => {
+  const s = Stability.create();
+  assert.equal(s.rankFor('c1', -1, 'text-changed'), -1);
+  assert.equal(s.topFor('c1', null, 'text-changed'), null);
+  s.noteRank('c1', -1); s.noteTop('c1', null);               // a non-position is not a memory
+  assert.equal(s.rankFor('c1', -1, 'text-changed'), -1);
+  assert.equal(s.topFor('c1', null, 'text-changed'), null);
+});
+
+test('a frozen card outranks the document itself, and releasing hands it back', () => {
+  const s = Stability.create();
+  s.noteRank('c1', 4200); s.noteTop('c1', 318);
+  s.pin('c1', 318, 4200);                                    // the caret entered its reply box
+  assert.equal(s.isPinned('c1'), true);
+  assert.equal(s.pinnedTop('c1'), 318);
+  // Everything the document could say while a reply is being typed: the anchor moved, the anchor died,
+  // the anchor came back somewhere else. The card does not move for any of it.
+  assert.equal(s.topFor('c1', 950, null), 318, 'not even for a live mark somewhere else');
+  assert.equal(s.rankFor('c1', 9100, null), 4200);
+  assert.equal(s.topFor('c1', null, 'text-changed'), 318);
+  assert.equal(s.rankFor('c1', -1, 'never-matched'), 4200, 'nor for the float-to-top rule');
+  // Pinning is idempotent: syncFreeze runs on every dock, and a second pin would re-baseline the card
+  // to wherever it had drifted instead of holding the position the caret arrived on.
+  s.pin('c1', 999, 8888);
+  assert.equal(s.pinnedTop('c1'), 318);
+  s.unpin('c1');
+  assert.equal(s.topFor('c1', 950, null), 950, 'blurred and empty: the document has it back');
+});
+
+test('a pin with no rank behind it falls back to the last one, then to the top', () => {
+  const s = Stability.create();
+  s.noteRank('c1', 77);
+  assert.equal(s.pin('c1', 100).rank, 77);
+  const s2 = Stability.create();
+  assert.equal(s2.pin('fresh', 100).rank, -1, 'a card that has never ranked pins where it is, at the top');
+});
+
+test('the position memory is evicted with the item and cleared with the document', () => {
+  const s = Stability.create();
+  for (const id of ['a', 'b', 'c']) { s.observe(id, true, 1000); s.noteRank(id, 10); s.noteTop(id, 20); }
+  s.keep(['a', 'c']);                                        // b was resolved, so it leaves the rail
+  assert.equal(s.size(), 2);
+  assert.equal(s.rankFor('b', -1, 'text-changed'), -1, 'and takes its remembered position with it');
+  assert.equal(s.rankFor('a', -1, 'text-changed'), 10, 'while the survivors keep theirs');
+  // The document swap. A position measured in one document says nothing true about the next one, which
+  // is why resetDocState calls this.
+  s.reset();
+  assert.equal(s.size(), 0);
+  assert.equal(s.showOrphaned('a', true, 'text-changed', 1000), true, 'a cold rail again');
+});
+
+test('the page loads the stability module from the server, not a copy of it', async () => {
+  // Same contract as the other shared modules: one file, loaded by the browser and required by these
+  // tests, so the rules cannot drift into two versions.
+  const served = await fetchRetry(`${BASE}/`).then(r => r.text());
+  assert.match(served, /<script src="\/stability\.js">/, 'the page asks for it');
+  const js = await fetchRetry(`${BASE}/stability.js`);
+  assert.equal(js.status, 200, 'and the server hands it over');
+  assert.match(await js.text(), /GRACE_MS/);
+});
+
+test('showOrphaned records nothing, so a card that is never docked is never evicted', () => {
+  // A nested reply-suggestion renders inside its parent's thread: it is never ranked and never docked,
+  // so it is never observed. Asking about it must not create a record that keep() would then evict,
+  // which would make the answer depend on how recently the rail happened to render.
+  const s = Stability.create();
+  assert.equal(s.showOrphaned('nested', true, 'text-changed', 1000), true);
+  assert.equal(s.size(), 0);
+});
+
 test('atomic blocks: a flow fence and an HTML island survive an edit elsewhere, byte-for-byte', () => {
   const { doc, blocks, td } = buildDoc(VIS_DOC);
   blockByText(doc, 'Middle paragraph.').querySelector('p').textContent = 'Middle paragraph, edited.';
