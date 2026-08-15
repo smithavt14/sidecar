@@ -139,6 +139,10 @@ hover title in the UI.
 
 - Comments explain *why*, especially where the code looks odd — most of them record a real incident.
   Keep that when you change the surrounding code; delete them when the reason stops being true.
+- Layout preferences (the review rail's width, whether it is collapsed) persist in `localStorage`
+  under an `sc:` prefix, through the wrapped `railStore` — Safari in private mode throws on `setItem`,
+  and nothing about a preference is worth an exception on the path that renders the review. Document
+  and review state never go there; those are files.
 - Safety properties that tests cover and should stay covered: atomic sidecar writes, merge-by-id never
   dropping the other side's work, decided statuses never regressing, path confinement to the served
   root, Host-header allowlisting, DOMPurify on rendered markdown, `git diff` run without a shell

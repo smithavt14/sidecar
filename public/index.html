@@ -45,6 +45,9 @@
        zeta 0.87 — it overshoots by 0.4%, so the "pop" is the curve's shape rather than a bounce. A real
        bounce on a button you hit fifty times in a review would read as slop. */
     --spring-press:linear(0,0.088,0.266,0.457,0.624,0.754,0.849,0.913,0.954,0.979,0.993,1.001,1.004);
+    /* The review rail's width, in one place: the grid track, the drag handle's position and the
+       persisted preference are all this number. JS overwrites it on the root element. */
+    --rail-w:372px;
     color-scheme:light;
   }
   * { box-sizing: border-box; }
@@ -88,7 +91,35 @@
      dispatcher seeing the BUTTON as e.target, never the path inside it. */
   button.iconbtn { padding:7px 6px; line-height:0; }
   button.iconbtn svg { width:16px; height:16px; display:block; pointer-events:none; }
-  main { display:grid; grid-template-columns: minmax(0,1fr) 372px; gap:0; max-width:1280px; margin:0 auto; }
+  main { position:relative; display:grid; grid-template-columns: minmax(0,1fr) var(--rail-w); gap:0;
+    max-width:1280px; margin:0 auto; }
+  /* ---------- the divider between the document and the rail ----------
+     Absolutely placed over the column boundary rather than given a grid track of its own, so the two
+     tracks stay exactly what they were and nothing that measures the document column (sizeFrame,
+     dockCards) sees a third participant. 11px of grab area straddling the aside's hairline; the 1px
+     line it draws on hover is the only thing it adds visually. */
+  #railGrip { position:absolute; top:0; bottom:0; right:calc(var(--rail-w) - 5px); width:11px; z-index:3;
+    cursor:col-resize; touch-action:none; }
+  #railGrip::after { content:''; position:absolute; top:0; bottom:0; left:5px; width:1px;
+    background:var(--ink); opacity:0; transition:opacity .15s ease; }
+  #railGrip:hover::after, #railGrip:focus-visible::after, body.rail-dragging #railGrip::after { opacity:.3; }
+  #railGrip:focus { outline:none; }
+  /* While dragging, the cursor has to hold everywhere (the pointer leaves the 11px strip immediately)
+     and nothing may select. The asset frame is a separate document that would otherwise swallow the
+     pointer the moment the drag crossed it. */
+  body.rail-dragging { cursor:col-resize; user-select:none; }
+  body.rail-dragging iframe { pointer-events:none; }
+  /* Collapsed: the second track is gone, so the document column measures the full width — which is
+     why toggleRail re-runs the same relayout a window resize does. */
+  body.rail-collapsed main { grid-template-columns: minmax(0,1fr); }
+  body.rail-collapsed aside, body.rail-collapsed #railGrip { display:none; }
+  /* The rail's toggle: an icon button in the header chrome. Its badge is the agent's yellow, because
+     what it counts is the agent's notes arriving while the panel was shut. */
+  #railToggle { position:relative; }
+  #railToggle .n { position:absolute; top:1px; right:-2px; min-width:14px; height:14px; padding:0 3px;
+    border-radius:99px; background:var(--yellow); color:var(--chip-fg); box-shadow:0 0 0 1.5px var(--bg);
+    font:600 10px/14px 'Geist', ui-sans-serif, sans-serif; text-align:center; }
+  #railToggle .n:empty { display:none; }
   /* The document itself is the editor: edit rich text in place, no mode switch, no chrome. */
   /* pwd — the document's path as a terminal breadcrumb, sitting above the doc title */
   #pwd { padding:34px 44px 0; min-width:0; font-family:'Geist Mono', ui-monospace,SFMono-Regular,Menlo,monospace;
@@ -432,6 +463,13 @@
   #sheetToggle, #sheetBackdrop { display:none; }
   @media (max-width: 780px) {
     main { grid-template-columns: minmax(0,1fr); }   /* minmax(0,…) so a code block can't force overflow */
+    /* The rail is a fixed overlay down here, so there are no two columns to divide and nothing for a
+       drag to resize: the handle is removed rather than left half-working, and hiding the panel is
+       already the sheet's job, so the header toggle goes with it. A collapsed state carried down from
+       a wide window must not take the sheet with it — hence the display:flex, which wins on source
+       order against the same-specificity rule above. */
+    #railGrip, #railToggle { display:none; }
+    body.rail-collapsed aside { display:flex; }
     #doc pre { max-width:100%; }
     #pwd { padding:16px 18px 0; font-size:12px; }
     #doc { padding: 8px 18px 42vh; font-size: 16px; line-height:1.62; }
@@ -499,6 +537,11 @@
     <div class="spacer"></div>
     <div id="turn" class="turn"></div>
     <a class="doclink" href="https://github.com/smithavt14/sidecar" target="_blank" rel="noopener">docs</a>
+    <button id="railToggle" class="ghost iconbtn" onclick="toggleRail()" aria-controls="side" aria-expanded="true"
+      title="Hide review panel" aria-label="Hide review panel"><svg viewBox="0 0 20 20" fill="none"
+      stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="2.5" y="3.75" width="15" height="12.5" rx="2.5"/><path d="M12.9 3.75v12.5"/></svg><span
+      class="n" id="railCount"></span></button>
     <div id="status">saved</div>
   </div>
 </header>
@@ -507,6 +550,9 @@
     <div id="pwd"></div>
     <div id="doc"></div>
   </div>
+  <!-- The drag handle, between the two columns in reading order and placed over their boundary by CSS.
+       role=separator + tabindex so it is operable without a pointer (see the keydown handler). -->
+  <div id="railGrip" role="separator" aria-orientation="vertical" aria-label="Resize review panel" tabindex="0"></div>
   <aside id="side"></aside>
 </main>
 <div id="filelist" style="display:none"></div>
@@ -1845,6 +1891,7 @@ function renderSide() {
   dockCards();     // …then place each card level with the mark markAnchors just laid down (order matters)
   renderTurn();    // right cluster: open / orphaned counts
   renderPresence();// center: claude is here ↔ waiting for claude
+  noteRailTraffic();// and the collapsed rail's "something arrived" badge
   // Put the view back where it was. Twice on purpose: once now, and once after
   // the next frame, because dockCards repositions cards and autogrow resizes
   // textareas — both change layout height after this point, which would
@@ -2145,6 +2192,129 @@ for (const type of ['paste', 'dragover', 'dragleave', 'drop']) {
   });
 }
 
+// ---------- the review rail: resizable, collapsible, remembered ----------
+// This is the first piece of UI state sidecar persists, so it sets the pattern: an `sc:` prefix per
+// key, primitive values, and every access wrapped. Safari in private mode throws on setItem, and no
+// layout preference is worth an exception on the path that also renders the review.
+const railStore = {
+  get(k, fallback) { try { const v = localStorage.getItem('sc:' + k); return v === null ? fallback : v; } catch { return fallback; } },
+  set(k, v) { try { localStorage.setItem('sc:' + k, String(v)); } catch {} },
+};
+const RAIL_MIN = 280;        // below this a card's diff and its buttons stop fitting side by side
+const RAIL_MAX_FRAC = 0.6;   // and past this the document is the sidebar
+const DOC_MIN = 360;         // main is capped at 1280, so a viewport bound alone can still starve the doc
+function railMax() {
+  const mainW = $('main').getBoundingClientRect().width || window.innerWidth;
+  return Math.max(RAIL_MIN, Math.min(Math.round(window.innerWidth * RAIL_MAX_FRAC), Math.round(mainW - DOC_MIN)));
+}
+const clampRail = (w) => Math.min(railMax(), Math.max(RAIL_MIN, Math.round(w)));
+// Desktop only. Below the breakpoint the rail is a fixed bottom sheet with no column to divide, so the
+// handle is hidden in CSS and this says no as well — a drag that moved a variable nothing reads would
+// look broken rather than absent.
+const railResizable = () => window.matchMedia('(min-width: 781px)').matches;
+
+// `railWidth` tracks the pointer and so runs past the bounds mid-drag; what gets STORED is the width
+// actually on screen, because a preference nobody has ever seen applied is not a preference. A window
+// narrow enough to clamp the rail does not overwrite it, though — see the resize listener, which
+// re-applies without persisting, so a rail dragged wide on a large display comes back wide there.
+let railWidth = Math.max(RAIL_MIN, Math.round(Number(railStore.get('railWidth', 372)) || 372));
+function applyRailWidth(w, persist) {
+  railWidth = Math.max(RAIL_MIN, Math.round(w));
+  const applied = clampRail(railWidth);
+  document.documentElement.style.setProperty('--rail-w', applied + 'px');
+  const grip = $('railGrip');
+  if (grip) {
+    grip.setAttribute('aria-valuenow', String(applied));
+    grip.setAttribute('aria-valuemin', String(RAIL_MIN));
+    grip.setAttribute('aria-valuemax', String(railMax()));
+  }
+  if (persist) railStore.set('railWidth', applied);
+}
+// The document column just changed width: an asset re-scales to it, and every docked card re-measures
+// against its anchor. The same two calls the window resize listener makes, for the same reason.
+function relayoutDoc() { if (isAsset()) sizeFrame(); scheduleDock(); }
+const railCollapsed = () => document.body.classList.contains('rail-collapsed');
+function toggleRail(force) {
+  const collapse = force === undefined ? !railCollapsed() : !!force;
+  document.body.classList.toggle('rail-collapsed', collapse);
+  railStore.set('railCollapsed', collapse ? '1' : '');
+  if (!collapse) { railSeen = railMsgTotal(); railNew = 0; }   // opening it IS reading it
+  paintRailToggle();
+  relayoutDoc();
+}
+// A message is a top-level item or a reply on one. Comparing the total against what was on screen the
+// last time the panel was open is enough for the badge: the point is "something arrived while this was
+// shut". Clamped at zero, or a deleted thread would read as -1 new.
+function railMsgTotal() {
+  const items = (state && state.review && state.review.items) || [];
+  return items.reduce((n, i) => n + 1 + ((i.thread || []).length), 0);
+}
+let railSeen = null, railNew = 0;
+// Called from renderSide, which is what a live update runs. A collapsed panel is NEVER auto-expanded
+// by traffic — the human closed it on purpose, and a panel that reopens itself mid-sentence is worse
+// than a missed comment.
+function noteRailTraffic() {
+  const total = railMsgTotal();
+  if (railSeen === null) railSeen = total;        // first render is the baseline, not a pile of "new"
+  else if (railCollapsed()) railNew = Math.max(0, total - railSeen);
+  else { railSeen = total; railNew = 0; }
+  paintRailToggle();
+}
+function paintRailToggle() {
+  const btn = $('railToggle');
+  if (!btn) return;
+  const shut = railCollapsed();
+  const label = (shut ? 'Show review panel' : 'Hide review panel') + (shut && railNew ? ` (${railNew} new)` : '');
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+  btn.setAttribute('aria-expanded', shut ? 'false' : 'true');
+  $('railCount').textContent = shut && railNew ? (railNew > 9 ? '9+' : String(railNew)) : '';
+}
+(function railDrag() {
+  const grip = $('railGrip');
+  let dragId = null;
+  grip.addEventListener('pointerdown', (e) => {
+    if (!railResizable() || railCollapsed()) return;
+    dragId = e.pointerId;
+    grip.setPointerCapture(dragId);
+    document.body.classList.add('rail-dragging');
+    e.preventDefault();
+  });
+  grip.addEventListener('pointermove', (e) => {
+    if (dragId === null) return;
+    // The rail's right edge IS main's right edge, so the width is the distance from the pointer to it.
+    // No grab offset to carry, and dragging past a bound just pins there and un-pins on the way back.
+    applyRailWidth($('main').getBoundingClientRect().right - e.clientX, false);
+    relayoutDoc();
+  });
+  const endDrag = () => {
+    if (dragId === null) return;
+    try { grip.releasePointerCapture(dragId); } catch {}
+    dragId = null;
+    document.body.classList.remove('rail-dragging');
+    applyRailWidth(railWidth, true);   // one write at the end, not one per pointermove
+    relayoutDoc();
+  };
+  grip.addEventListener('pointerup', endDrag);
+  grip.addEventListener('pointercancel', endDrag);
+  // A focusable separator has to be operable from the keyboard. Left widens the rail because left is
+  // the direction its edge travels. Nudge from the APPLIED width, so arrows still move a preference
+  // that the current viewport is clamping.
+  grip.addEventListener('keydown', (e) => {
+    if (!railResizable() || railCollapsed()) return;
+    const step = e.shiftKey ? 48 : 12;
+    if (e.key === 'ArrowLeft') applyRailWidth(clampRail(railWidth) + step, true);
+    else if (e.key === 'ArrowRight') applyRailWidth(clampRail(railWidth) - step, true);
+    else return;
+    e.preventDefault();
+    relayoutDoc();
+  });
+})();
+// Restore before the first render so the rail never flashes at the default width and then jumps.
+if (railStore.get('railCollapsed', '')) document.body.classList.add('rail-collapsed');
+applyRailWidth(railWidth, false);
+paintRailToggle();
+
 // ---------- mobile bottom sheet ----------
 function toggleSheet(force) {
   const open = force === undefined ? !document.body.classList.contains('sheet-open') : force;
@@ -2299,7 +2469,9 @@ window.addEventListener('blur', () => setModHeld(false));
 // Resize changes both the text reflow and the desktop/mobile cutoff, so the docked layout is recomputed
 // (or torn down, below 781px) on every resize. An asset frame also re-scales: its canvas is fixed, the
 // column it has to fit into is not.
-window.addEventListener('resize', () => { if (isAsset()) sizeFrame(); scheduleDock(); });
+// The rail's bounds are viewport-relative, so a resize also re-clamps it — without persisting, since
+// narrowing the window is not the human changing their mind about how wide the rail should be.
+window.addEventListener('resize', () => { applyRailWidth(railWidth, false); if (isAsset()) sizeFrame(); scheduleDock(); });
 // Everything in the document that stands for this item: its prose highlights, or the diagram node
 // standing in for them. One helper so jumping, flashing and docking can never disagree about where an
 // item lives — they did, and a node comment flashed nothing while its card docked next to a paragraph.
