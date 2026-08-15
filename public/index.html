@@ -36,6 +36,14 @@
     --line:rgba(20,20,15,.08);      /* hairline */
     --line-2:rgba(20,20,15,.14);    /* quote rule, table cell */
     --line-strong:rgba(20,20,15,.16); /* button outline, input */
+    /* The application frame. The folder panel is a SURFACE rather than a margin of the page, so it
+       needs a ground of its own — grey text floating on the document's own white is the thing that
+       made the panel read as a stray column. Warm, one step off --bg, with its own row states: hover
+       and open are separated (Grant Developer's rail gives both the same tint and leans on weight
+       alone, which is a step too quiet once every row is a filename rather than a destination). */
+    --shell:#f6f5ef;         /* the panel's ground */
+    --shell-row:rgba(20,20,15,.05);    /* a row under the pointer */
+    --shell-on:rgba(20,20,15,.095);    /* the open document */
     --yellow:#ffeb00;        /* THE AGENT — nothing else */
     --yellow-ring:rgba(190,172,0,.65);
     --chip:#fffce0;          /* claude chip tint */
@@ -62,16 +70,33 @@
   body { margin:0; font:15px/1.6 'Geist', ui-sans-serif, system-ui, sans-serif; background:var(--bg);
     color:var(--fg); -webkit-font-smoothing:antialiased; }
   ::selection { background:var(--yellow); color:var(--chip-fg); }
-  /* header — white chrome, lowercase wordmark, hairline rule */
+  /* The shell: the folder panel is a fixed column down the left of the WINDOW and everything else is
+     inset past it. The panel used to be the grid's first track, which meant it started wherever main's
+     centred cap happened to put it and ended wherever the tallest document did — a panel floating in
+     the page rather than the frame the page sits in. Fixed and full height, it is the frame; the
+     header and the document are its contents. The inset is one declaration on the body, so the page
+     header, the document, the rail and the whole-tree picker all follow it without knowing about it. */
+  @media (min-width: 781px) { body { padding-left:var(--nav-track); } }
+  /* No open document means no folder to be in: the panel is not rendered (main is hidden with it), so
+     the inset it reserves has to come off too. See boot's no-FILE branch. */
+  body.no-nav { padding-left:0; }
+  /* The content area's header, to the RIGHT of the panel and never over it. 52px, the same as the
+     panel's own brand row, so one hairline runs unbroken across the top of the application — the
+     measurement borrowed straight from Grant Developer's shell, where a two-pixel step between the
+     rail's rule and the header's was the bug that made the two read as separate bars. */
   header { position:sticky; top:0; z-index:20; background:var(--bg); border-bottom:1px solid var(--line); }
-  .hwrap { position:relative; display:flex; align-items:center; gap:13px; max-width:1280px; margin:0 auto; padding:14px 40px; }
-  header h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:-.02em; display:flex; align-items:center; min-width:0; }
-  header h1 .home { display:flex; align-items:center; gap:9px; min-width:0; text-decoration:none; color:inherit;
-    border-radius:8px; padding:2px 4px; margin:-2px -4px; transition:background .15s ease; }
-  header h1 .home:hover { background:var(--fill); }
-  header h1 .mark { height:22px; width:auto; flex:none; display:block; }
-  header h1 .wm { color:var(--ink); font-weight:600; }
-  header h1 #fname { color:var(--muted); font-weight:400; letter-spacing:0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* 51px + the 1px rule = the same 52px band the panel's brand row is, rule included. Both are
+     border-box, so the two hairlines land on the same pixel row and read as one line across the app. */
+  .hwrap { position:relative; display:flex; align-items:center; gap:12px; height:51px; padding:0 20px; }
+  /* The title group, bounded so it can never run under the presence readout. That readout is
+     absolutely centred, so it exerts no pressure on the flow and a long path simply slid beneath it:
+     an asset's `read-only` tag and the word `claude` printed on top of each other at 1440. Half the
+     bar, less the widest half a readout gets, is where the title has to stop. */
+  .htitle { display:flex; align-items:center; gap:10px; min-width:0; max-width:calc(50% - 92px); }
+  .hbrand { display:none; align-items:center; gap:8px; text-decoration:none; color:inherit; }
+  body.no-nav .hbrand { display:flex; }
+  .hbrand .mark, .nav-brand .mark { height:20px; width:auto; flex:none; display:block; }
+  .hbrand .wm, .nav-brand .wm { color:var(--ink); font:600 15px 'Geist', ui-sans-serif, sans-serif; letter-spacing:-.02em; }
   .spacer { flex:1; }
   #status { font-size:12.5px; color:var(--faint); min-width:64px; text-align:right; }
   /* buttons — ink primary, thin-outline secondary, text ghost. Depth, not weight. */
@@ -99,12 +124,12 @@
      dispatcher seeing the BUTTON as e.target, never the path inside it. */
   button.iconbtn { padding:7px 6px; line-height:0; }
   button.iconbtn svg { width:16px; height:16px; display:block; pointer-events:none; }
-  /* Three columns: the folder, the document, the review. The cap grows by the panel's track instead
-     of staying at 1280, so adding the panel takes width from the WINDOW where there is some and only
-     narrows the document once there is not — otherwise every existing document lost 248px of measure
-     the day the panel arrived. */
-  main { position:relative; display:grid; grid-template-columns: var(--nav-track) minmax(0,1fr) var(--rail-w);
-    gap:0; max-width:calc(1280px + var(--nav-track)); margin:0 auto; }
+  /* Two columns: the document and the review. It FILLS the frame rather than being capped and centred
+     inside it. The 1280 cap used to be here, and on a wide window it cost twice over: a dead band of
+     nothing to the right of the cards, and cards squeezed to 372px while that band sat beside them.
+     The measure the cap was protecting belongs to the DOCUMENT, so it is on the document (below), and
+     what the document does not want goes to the rail (see autoRailWidth). */
+  main { position:relative; display:grid; grid-template-columns: minmax(0,1fr) var(--rail-w); gap:0; }
   /* ---------- the divider between the document and the rail ----------
      Absolutely placed over the column boundary rather than given a grid track of its own, so the two
      tracks stay exactly what they were and nothing that measures the document column (sizeFrame,
@@ -124,7 +149,7 @@
   /* Collapsed: the rail's track is gone, so the document column measures wider — which is why
      toggleRail re-runs the same relayout a window resize does. The panel's track stays; collapsing
      the two panels is two independent decisions. */
-  body.rail-collapsed main { grid-template-columns: var(--nav-track) minmax(0,1fr); }
+  body.rail-collapsed main { grid-template-columns: minmax(0,1fr); }
   body.rail-collapsed aside, body.rail-collapsed #railGrip { display:none; }
   /* The rail's toggle: an icon button in the header chrome. Its badge is the agent's yellow, because
      what it counts is the agent's notes arriving while the panel was shut. */
@@ -134,43 +159,72 @@
     font:600 10px/14px 'Geist', ui-sans-serif, sans-serif; text-align:center; }
   #railToggle .n:empty { display:none; }
   /* ---------- the directory panel ----------
-     The folder the open document lives in, listed. Unlike the rail it scrolls in its own box: nothing
-     in here has to stay level with the text, and a folder of sixty documents would otherwise run the
-     page's scroll height off the bottom of a short one. */
-  #nav { position:sticky; top:51px; align-self:start; max-height:calc(100vh - 51px); overflow-y:auto;
-    display:flex; flex-direction:column; gap:8px; min-width:0;
-    padding:0 8px 28px; border-right:1px solid var(--line); background:var(--bg); }
-  /* The shell's header row. It stays put while the list scrolls under it — a sixty-document folder
-     otherwise scrolls its own controls away, and the panel scrolls itself to the open document on
-     load. Opaque, and it carries the panel's top padding, so nothing shows through above it. The
-     hairline is what makes the panel read as a region of the application rather than a column of
-     links: header, then contents. */
-  .nav-head { position:sticky; top:0; z-index:4; background:var(--bg); padding:14px 0 7px;
-    display:flex; flex-direction:column; gap:7px; border-bottom:1px solid var(--line); }
-  .nav-bar { display:flex; align-items:flex-start; gap:4px; }
-  .nav-bar #navCrumb { flex:1; min-width:0; }
-  #navCollapse, #navExpand { flex:none; color:var(--fainter); }
-  #navCollapse:hover, #navExpand:hover { color:var(--fg); background:var(--fill); }
+     The folder the open document lives in, listed — and the application's frame. Fixed to the window
+     rather than sitting in main's grid: full height, its own ground, one hairline down its right
+     edge. It scrolls in its own box, because nothing in here has to stay level with the text and a
+     folder of sixty documents would otherwise run the page's scroll height off the bottom of a short
+     one. */
+  #nav { position:fixed; top:0; left:0; bottom:0; width:var(--nav-track); z-index:32; overflow-y:auto;
+    display:flex; flex-direction:column; min-width:0;
+    padding:0 0 28px; border-right:1px solid var(--line); background:var(--shell); }
+  /* The panel's chrome, sticky over its own list: a sixty-document folder otherwise scrolls its own
+     controls away, and the panel scrolls itself to the open document on load. Opaque, so nothing
+     shows through above it. */
+  .nav-head { position:sticky; top:0; z-index:4; background:var(--shell);
+    display:flex; flex-direction:column; }
+  /* The brand row. The wordmark and the control that minimizes the panel sit together at the top of
+     the frame, which is where Grant Developer puts its own wordmark and rail trigger — and it is what
+     turns the panel from a column hung off the left edge into the application's first region. 52px and
+     a hairline, matching the content header's to the pixel so the two rules meet as one line. */
+  .nav-brand { display:flex; align-items:center; gap:8px; height:52px; flex:none; padding:0 10px 0 14px;
+    border-bottom:1px solid var(--line); }
+  .nav-brand .home { display:flex; align-items:center; gap:8px; min-width:0; text-decoration:none;
+    color:inherit; border-radius:8px; padding:3px 5px; margin-left:-5px; transition:background .15s ease; }
+  .nav-brand .home:hover { background:var(--shell-row); }
+  /* 28px square, the trigger's size in GD's shell, and the same quiet ink so it reads as chrome. */
+  #navCollapse, #navExpand { flex:none; margin-left:auto; width:28px; height:28px; padding:0;
+    display:flex; align-items:center; justify-content:center; color:var(--faint); border-radius:7px; }
+  #navCollapse:hover, #navExpand:hover { color:var(--ink); background:var(--shell-row); }
+  /* Everything under the brand row that is still chrome: the path, then the list's label and its
+     ordering control. Gone when the panel is a strip. */
+  .nav-nav { display:flex; flex-direction:column; gap:2px; padding:11px 8px 4px; }
   /* The breadcrumb is the OPEN DOCUMENT's path, not a trail of where you have clicked, and every
      segment is live. Stepping up a level is clicking a shallower one; coming back down is clicking a
      deeper one, which is the half a one-way "up" button loses — a folder above a project usually
-     holds no documents at all, so up with no way back is a dead end. */
-  #navCrumb { display:flex; flex-wrap:wrap; align-items:center; gap:0 1px; padding:0 4px;
-    font-family:'Geist Mono', ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; line-height:1.6; }
-  #navCrumb button { border:none; background:none; box-shadow:none; padding:1px 3px; border-radius:5px;
-    font:inherit; color:var(--faint); max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  #navCrumb button:hover { background:var(--fill); color:var(--fg); transform:none; }
+     holds no documents at all, so up with no way back is a dead end.
+     ONE LINE. It wrapped into a three-line stack at 248px, which read as a paragraph of grey rather
+     than as a path. Every segment keeps its whole name and the row overflows to the LEFT instead —
+     pushed right, clipped, and faded out where it is cut. Ellipsising each segment in turn was worse
+     at the width this actually runs at: four stubs reading `h… / vau… / projec… / ccdc-portal` is a
+     path nobody can read, and the deep end, the folder the list below belongs to, is the end that has
+     to survive. The fade is what says there is more to the left rather than leaving a hard cut. */
+  #navCrumb { display:flex; flex-wrap:nowrap; align-items:center; justify-content:flex-end;
+    gap:0 1px; padding:0 5px; min-width:0; overflow:hidden;
+    -webkit-mask-image:linear-gradient(90deg, transparent 0, #000 22px);
+    mask-image:linear-gradient(90deg, transparent 0, #000 22px);
+    font-family:'Geist Mono', ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10.5px; line-height:1.6; }
+  #navCrumb button { flex:none; border:none; background:none; box-shadow:none;
+    padding:1px 3px; border-radius:5px; font:inherit; color:var(--faint); white-space:nowrap; }
+  #navCrumb button:hover { background:var(--shell-row); color:var(--fg); transform:none; }
   #navCrumb button.here { color:#57574f; font-weight:600; }
-  #navCrumb .sep { color:var(--fainter); }
+  #navCrumb .sep { flex:none; color:var(--fainter); }
+  /* The list's own label, and its ordering control, on one row. The uppercase micro-label is GD's
+     section label (9.5px/700 at .15em, its rail's WORK and ORGANIZATION) — structure stated once,
+     quietly, so the filenames below it are the only thing competing for the eye. */
+  .nav-sect { display:flex; align-items:center; gap:8px; padding:9px 5px 3px; }
+  .nav-label { flex:1; min-width:0; font:700 9.5px 'Geist', ui-sans-serif, sans-serif;
+    letter-spacing:.15em; text-transform:uppercase; color:var(--muted); }
   /* the sort switcher — a menu, not three tabs: at 248px three labels have nowhere to sit, and the
-     one that is chosen is the one worth reading */
-  #navSort { position:relative; padding:0 2px; }
-  #navSort .sortbtn { display:flex; align-items:center; gap:6px; width:100%; border:none; background:none;
-    box-shadow:none; color:var(--muted); font:600 12px 'Geist', ui-sans-serif, sans-serif;
-    padding:5px 7px; border-radius:8px; }
-  #navSort .sortbtn:hover { background:var(--fill); color:var(--fg); transform:none; }
-  #navSort .sortbtn .car { margin-left:auto; font-size:9px; opacity:.55; }
-  #navSort .menu { position:absolute; top:calc(100% + 4px); left:2px; right:2px; z-index:6;
+     one that is chosen is the one worth reading. It is drawn as a CONTROL: an outlined chip with a
+     caret, which is what a bare lowercase word sitting on the panel's ground could never say. */
+  #navSort { position:relative; flex:none; }
+  #navSort .sortbtn { display:flex; align-items:center; gap:5px; max-width:112px;
+    border:1px solid var(--line-2); background:var(--bg); box-shadow:none;
+    color:var(--fg); font:500 11.5px 'Geist', ui-sans-serif, sans-serif; padding:2px 6px; border-radius:7px; }
+  #navSort .sortbtn:hover { background:var(--fill); border-color:var(--line-strong); color:var(--ink); transform:none; }
+  #navSort .sortbtn #navSortLabel { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #navSort .sortbtn .car { flex:none; font-size:8px; opacity:.5; }
+  #navSort .menu { position:absolute; top:calc(100% + 5px); right:0; left:auto; min-width:132px; z-index:6;
     background:var(--bg); border:1px solid var(--line-2); border-radius:10px; box-shadow:var(--shadow);
     padding:4px; display:flex; flex-direction:column; gap:1px; }
   #navSort .menu[hidden] { display:none; }
@@ -179,23 +233,31 @@
     font:500 12.5px 'Geist', ui-sans-serif, sans-serif; }
   #navSort .menu button:hover { background:var(--fill); transform:none; }
   #navSort .menu button[aria-checked="true"] { font-weight:600; color:var(--ink); background:var(--fill); }
-  .nav-list { display:flex; flex-direction:column; gap:1px; }
-  .nav-list a { display:flex; align-items:center; gap:7px; min-width:0; padding:7px 9px; border-radius:9px;
+  .nav-list { display:flex; flex-direction:column; gap:1px; padding:0 8px; }
+  /* An icon-led row, GD's rail item measured across: 13.5px label, a 16px glyph, 2.5px of horizontal
+     padding on a 6px radius. Its 7px of vertical padding lands a 30px row, compact enough that a
+     project folder is one glance. */
+  .nav-list a { display:flex; align-items:center; gap:8px; min-width:0; padding:6px 9px; border-radius:7px;
     text-decoration:none; color:var(--fg); font-size:13.5px; line-height:1.35; }
-  .nav-list a:hover { background:var(--fill); }
+  .nav-list a .ic { flex:none; width:15px; height:15px; display:block; color:var(--faint); }
+  .nav-list a:hover { background:var(--shell-row); color:var(--ink); }
+  .nav-list a:hover .ic { color:var(--muted); }
   /* the open document: filled and inked, no accent bar. The panel is chrome and stays monochrome —
      yellow belongs to the agent. */
-  .nav-list a.on { background:var(--fill); color:var(--ink); font-weight:600; }
+  .nav-list a.on { background:var(--shell-on); color:var(--ink); font-weight:600; }
+  .nav-list a.on .ic { color:var(--ink); }
   .nav-list a .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .nav-list a .ext { flex:none; font-family:'Geist Mono', ui-monospace, monospace; font-size:10px;
-    color:var(--fainter); }
-  .nav-list a .ago { flex:none; margin-left:auto; font-family:'Geist Mono', ui-monospace, monospace;
-    font-size:10.5px; color:var(--faint); }
+  /* The row's right edge, kept as a slot rather than as whatever happens to be there: the sort's
+     timestamp today, the your-turn badge next. GD's rail counts sit in exactly this position. */
+  .nav-list a .meta { flex:none; margin-left:auto; display:flex; align-items:center; gap:6px;
+    font-family:'Geist Mono', ui-monospace, monospace; font-size:10.5px; font-weight:400; color:var(--faint); }
+  .nav-list a .meta:empty { display:none; }
   .nav-list a .ini { display:none; }
-  .nav-empty { padding:14px 10px; color:var(--muted); font-size:12.5px; line-height:1.5; }
+  .nav-empty { padding:10px; margin:0 8px; color:var(--muted); font-size:12.5px; line-height:1.5; }
   /* the handle between the panel and the document — the rail's grip mirrored, same 11px of grab area
-     straddling the hairline, same reason it is placed over the boundary rather than given a track */
-  #navGrip { position:absolute; top:0; bottom:0; left:calc(var(--nav-track) - 6px); width:11px; z-index:3;
+     straddling the hairline, same reason it is placed over the boundary rather than given a track.
+     Fixed now, because the boundary it straddles belongs to the window rather than to main. */
+  #navGrip { position:fixed; top:0; bottom:0; left:calc(var(--nav-track) - 6px); width:11px; z-index:33;
     cursor:col-resize; touch-action:none; }
   #navGrip::after { content:''; position:absolute; top:0; bottom:0; right:5px; width:1px;
     background:var(--ink); opacity:0; transition:opacity .15s ease; }
@@ -208,26 +270,41 @@
      is a fixed overlay with no track to shrink, so these rules are scoped rather than undone one by
      one below — the rail learned that lesson the expensive way. */
   @media (min-width: 781px) {
-    body.nav-collapsed { --nav-track:56px; }
-    body.nav-collapsed #nav { padding:14px 6px 28px; align-items:center; gap:10px; }
-    body.nav-collapsed .nav-head, body.nav-collapsed #navGrip { display:none; }
-    body.nav-collapsed #navExpand { display:block; }
+    /* 48px, GD's icon rail exactly (3rem). The brand row SURVIVES the collapse — its wordmark goes and
+       its trigger stays, centred — so the way back out is at the top of the strip, where an IDE's
+       activity bar puts it, and the rule under it still lines up with the header's. */
+    body.nav-collapsed { --nav-track:48px; }
+    body.nav-collapsed #navGrip, body.nav-collapsed .nav-nav { display:none; }
+    body.nav-collapsed .nav-brand { padding:0; justify-content:center; }
+    body.nav-collapsed .nav-brand .home { display:none; }
+    body.nav-collapsed #navCollapse { display:none; }
+    body.nav-collapsed #navExpand { display:flex; margin-left:0; }
+    body.nav-collapsed .nav-list { padding:8px 0 0; align-items:center; gap:2px; }
     /* Each document keeps its click target, as its initial. A strip of blank squares would be a
        decoration; this one still switches documents, and the title carries the name. */
-    body.nav-collapsed .nav-list a { justify-content:center; width:36px; height:34px; padding:0; }
-    body.nav-collapsed .nav-list a .nm, body.nav-collapsed .nav-list a .ext,
-    body.nav-collapsed .nav-list a .ago { display:none; }
-    body.nav-collapsed .nav-list a .ini { display:block; font-size:13px; text-transform:uppercase; }
+    body.nav-collapsed .nav-list a { justify-content:center; width:32px; height:32px; padding:0; gap:0; }
+    body.nav-collapsed .nav-list a .nm, body.nav-collapsed .nav-list a .ic,
+    body.nav-collapsed .nav-list a .meta { display:none; }
+    body.nav-collapsed .nav-list a .ini { display:block; font-size:12.5px; text-transform:uppercase; }
     body.nav-collapsed .nav-empty { display:none; }
   }
   /* The document itself is the editor: edit rich text in place, no mode switch, no chrome. */
-  /* pwd — the document's path as a terminal breadcrumb, sitting above the doc title */
-  #pwd { padding:34px 44px 0; min-width:0; font-family:'Geist Mono', ui-monospace,SFMono-Regular,Menlo,monospace;
-    font-size:12.5px; letter-spacing:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  #pwd .dir { color:var(--faint); }
-  #pwd .file { color:#57574f; font-weight:500; }
+  /* pwd — the document's path, and the content header's title. It sits IN the header now rather than
+     floating above the prose, which is what the shell asks for: the panel says which folder, the
+     header says which document. The FOLDERS are what give way when the row is tight, the filename
+     never — a path ellipsised from the right hides the one word that names what is open. */
+  #pwd { display:flex; align-items:baseline; min-width:0; flex:0 1 auto;
+    font-family:'Geist Mono', ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; letter-spacing:0; }
+  #pwd .dir { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--faint); }
+  #pwd .file { flex:none; color:var(--ink); font-weight:600; }
   #pwd:empty { display:none; }
-  #doc { padding:8px 44px 40vh; min-width:0; outline:none; caret-color:var(--ink); color:var(--fg); }
+  /* The document's own measure, and the only place a measure is now capped. 908px is 820 of text
+     between 44px margins, which is exactly what the shell's old 1280 cap left the document once the
+     rail had taken its 372 — so prose is the width it has always been, and the space beyond it is the
+     rail's to take rather than a gutter. Centred in its column, because once the rail has stopped
+     growing the slack is symmetric margin around the text and never a band on one side of it. */
+  #doc { max-width:908px; margin:0 auto; padding:30px 44px 40vh; min-width:0; outline:none;
+    caret-color:var(--ink); color:var(--fg); }
   #doc:focus, #doc *:focus { outline:none; }
   #doc h1 { font-size:31px; font-weight:600; letter-spacing:-.03em; color:var(--ink); margin:.2em 0 .55em; }
   #doc h2 { font-size:20px; font-weight:600; letter-spacing:-.02em; color:var(--ink);
@@ -304,10 +381,10 @@
      height + overflow, since there it really is a separate scrolling surface. */
   aside { border-left:1px solid var(--line); padding:22px 20px; display:flex; flex-direction:column; gap:0;
     background:var(--bg); }
-  /* review-rail tabs: active threads ↔ archived threads. Sticky to the PAGE now (under the 51px header),
+  /* review-rail tabs: active threads ↔ archived threads. Sticky to the PAGE now (under the 52px header),
      so the tabs and their counts stay reachable however far down the document you are.
      The padding is an OPAQUE buffer (no transparent margin/gap) so scrolling cards can't crowd under it. */
-  .tabs { position:sticky; top:51px; z-index:2; display:flex; gap:2px; margin:0 -2px;
+  .tabs { position:sticky; top:52px; z-index:2; display:flex; gap:2px; margin:0 -2px;
     padding:10px 2px 14px; background:var(--bg); }
   .tab { font:600 13px 'Geist', ui-sans-serif, sans-serif; border:none; background:none; color:var(--muted);
     padding:7px 11px; border-radius:8px; display:inline-flex; align-items:center; gap:6px; box-shadow:none; }
@@ -566,6 +643,8 @@
   #sheetToggle, #sheetBackdrop, #navBackdrop { display:none; }
   @media (max-width: 780px) {
     main, body.rail-collapsed main { grid-template-columns: minmax(0,1fr); }   /* minmax(0,…) so a code block can't force overflow */
+    /* The frame is a drawer down here, so nothing is inset past it. The desktop rule is scoped to the
+       breakpoint rather than undone, same as the collapsed rules below it. */
     /* The rail is a fixed overlay down here, so there are no two columns to divide and nothing for a
        drag to resize: the handle is removed rather than left half-working, and hiding the panel is
        already the sheet's job, so the header toggle goes with it. A collapsed state carried down from
@@ -582,14 +661,13 @@
        nothing down here, so the in-panel control goes. */
     #navToggle { display:block; }
     #navCollapse { display:none; }
-    /* align-self is reset explicitly: the panel is still a child of the grid, and the `start` the
-       desktop rule needs for its sticky column leaves the fixed drawer at the height of its own
-       content — a half-height sheet floating over the document. */
-    #nav { position:fixed; top:0; bottom:0; left:0; width:min(300px, 84vw); max-height:none;
-      align-self:stretch; z-index:47; overflow-y:auto;
-      border-right:1px solid var(--line); transform:translateX(-102%); transition:transform .26s ease-out;
-      padding:0 10px calc(env(safe-area-inset-bottom) + 20px); }
-    .nav-head { padding-top:calc(14px + env(safe-area-inset-top)); }   /* clear the notch */
+    /* Already fixed on desktop; down here it is the same surface slid off screen and given a width of
+       its own — 288px, GD's mobile sheet, capped against a small phone. */
+    #nav { width:min(288px, 84vw); z-index:47;
+      transform:translateX(-102%); transition:transform .26s ease-out;
+      padding:0 0 calc(env(safe-area-inset-bottom) + 20px); }
+    .nav-brand { height:calc(52px + env(safe-area-inset-top));   /* clear the notch */
+      padding-top:env(safe-area-inset-top); }
     /* The shadow arrives with the drawer. Left on permanently it reaches back across the 2% of travel
        the closed panel keeps off screen and paints a grey seam down the edge of every document. */
     body.nav-open #nav { transform:translateX(0); box-shadow:12px 0 40px rgba(20,20,15,.18); }
@@ -597,14 +675,17 @@
       opacity:0; pointer-events:none; transition:opacity .26s; }
     body.nav-open #navBackdrop { opacity:1; pointer-events:auto; }
     #doc pre { max-width:100%; }
-    #pwd { padding:16px 18px 0; font-size:12px; }
-    #doc { padding: 8px 18px 42vh; font-size: 16px; line-height:1.62; }
+    #pwd { font-size:11.5px; }
+    #doc { padding: 20px 18px 42vh; font-size: 16px; line-height:1.62; }
     #doc h1 { font-size:25px; } #doc h2 { font-size:18px; }
     /* clear the notch/status bar: pad the top by the safe-area inset so the bar isn't cramped or hidden */
-    .hwrap { padding:14px 18px; padding-top:calc(14px + env(safe-area-inset-top)); gap:10px; }
-    header h1 { font-size:15px; max-width:56vw; }
-    header h1 .mark { height:20px; }
+    .hwrap { padding:0 12px; height:calc(51px + env(safe-area-inset-top));
+      padding-top:env(safe-area-inset-top); gap:8px; }
     #status { min-width:0; }
+    /* The readout is in the flow down here (see .presence below), so it pushes the title rather than
+       sitting on top of it, and the desktop bound would only starve a path that is already tight. */
+    .htitle { max-width:none; }
+    .doclink { display:none; }   /* 375px is title + status + the presence dot, and nothing else fits */
     /* the absolute-center readout collides with the cramped mobile header, so drop it into the flow
        as a compact dot-only chip beside the title — the dot's color/pulse still carries the state
        (yellow=here, outline=away, filled=sent, pulsing=working); the label is hidden to save width. */
@@ -658,13 +739,18 @@
       title="Show the folder" aria-label="Show the folder"><svg viewBox="0 0 20 20" fill="none"
       stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
       <rect x="2.5" y="3.75" width="15" height="12.5" rx="2.5"/><path d="M7.1 3.75v12.5"/></svg></button>
-    <h1 class="brand">
-      <a href="/" class="home" title="all documents">
-        <img class="mark" src="/mark.svg" alt="" aria-hidden="true">
-        <span class="wm">sidecar</span>
-      </a>
-    </h1>
-    <div id="kind" class="kindtag"></div>
+    <!-- The whole-tree picker has no open document, so it has no folder and no panel — and the frame's
+         identity would go with it. The wordmark comes back into the header for exactly that screen. -->
+    <a href="/" class="hbrand" title="all documents">
+      <img class="mark" src="/mark.svg" alt="" aria-hidden="true">
+      <span class="wm">sidecar</span>
+    </a>
+    <!-- The content area's title: which document is open, and what kind it is. The wordmark it used to
+         sit beside now lives at the top of the panel, where the frame's identity belongs. -->
+    <div class="htitle">
+      <div id="pwd"></div>
+      <div id="kind" class="kindtag"></div>
+    </div>
     <div id="presence" class="presence away"></div>
     <div class="spacer"></div>
     <div id="turn" class="turn"></div>
@@ -680,27 +766,39 @@
 <main id="main">
   <!-- The folder the open document lives in. Painted by renderNav; empty until the first /api/dir. -->
   <nav id="nav" aria-label="documents in this folder">
-    <!-- The strip's way back out, at the top of the icon column where the shell's header row was. -->
-    <button id="navExpand" class="ghost iconbtn" onclick="toggleNav(true)" aria-controls="nav"
-      title="Expand the folder" aria-label="Expand the folder"><svg viewBox="0 0 20 20" fill="none"
-      stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <rect x="2.5" y="3.75" width="15" height="12.5" rx="2.5"/><path d="M7.1 3.75v12.5"/>
-      <path d="M11.4 7.9 13.5 10l-2.1 2.1"/></svg></button>
-    <!-- The shell's header row: where you are, how it is ordered, and the control that minimizes it.
-         The control belongs to the panel, the way an IDE's explorer owns its own chrome. -->
+    <!-- The panel's own chrome, sticky over its list. `.nav-head` is one sticky block on purpose:
+         revealOpenDoc measures it to know how much of the scrollport is covered, and two independent
+         sticky rows would have it measuring half of what is actually in the way. -->
     <div class="nav-head">
-      <div class="nav-bar">
-        <div id="navCrumb"></div>
+      <!-- The brand row. The wordmark, and the control that minimizes the panel, at the top of the
+           frame — the way an IDE's explorer owns its own chrome. Collapsed, the wordmark goes and the
+           trigger stays: the way back out sits at the top of the strip. -->
+      <div class="nav-brand brand">
+        <a href="/" class="home" title="all documents">
+          <img class="mark" src="/mark.svg" alt="" aria-hidden="true">
+          <span class="wm">sidecar</span>
+        </a>
         <button id="navCollapse" class="ghost iconbtn" onclick="toggleNav(false)" aria-controls="nav"
           title="Minimize the folder" aria-label="Minimize the folder"><svg viewBox="0 0 20 20" fill="none"
           stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <rect x="2.5" y="3.75" width="15" height="12.5" rx="2.5"/><path d="M7.1 3.75v12.5"/>
           <path d="M13.5 7.9 11.4 10l2.1 2.1"/></svg></button>
+        <button id="navExpand" class="ghost iconbtn" onclick="toggleNav(true)" aria-controls="nav"
+          title="Expand the folder" aria-label="Expand the folder"><svg viewBox="0 0 20 20" fill="none"
+          stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="2.5" y="3.75" width="15" height="12.5" rx="2.5"/><path d="M7.1 3.75v12.5"/>
+          <path d="M11.4 7.9 13.5 10l-2.1 2.1"/></svg></button>
       </div>
-      <div id="navSort">
-        <button class="sortbtn" onclick="toggleSortMenu()" aria-haspopup="true" aria-expanded="false"
-          title="Sort the folder"><span id="navSortLabel">spine</span><span class="car">▾</span></button>
-        <div class="menu" id="navSortMenu" role="menu" hidden></div>
+      <div class="nav-nav">
+        <div id="navCrumb"></div>
+        <div class="nav-sect">
+          <span class="nav-label">documents</span>
+          <div id="navSort">
+            <button class="sortbtn" onclick="toggleSortMenu()" aria-haspopup="true" aria-expanded="false"
+              title="Sort the folder"><span id="navSortLabel">spine</span><span class="car">▾</span></button>
+            <div class="menu" id="navSortMenu" role="menu" hidden></div>
+          </div>
+        </div>
       </div>
     </div>
     <div id="navList" class="nav-list"></div>
@@ -708,7 +806,6 @@
   <!-- The panel's drag handle. Same contract as #railGrip: over the boundary, not a track of its own. -->
   <div id="navGrip" role="separator" aria-orientation="vertical" aria-label="Resize the folder panel" tabindex="0"></div>
   <div>
-    <div id="pwd"></div>
     <div id="doc"></div>
   </div>
   <!-- The drag handle, between the two columns in reading order and placed over their boundary by CSS.
@@ -822,6 +919,7 @@ async function boot() {
     // open document yet, so there is no folder to be in. Its toggle goes with it.
     $('main').style.display = 'none'; $('filelist').style.display = 'block';
     $('navToggle').style.display = 'none';
+    document.body.classList.add('no-nav');   // and the inset the frame reserves comes off with it
     const ext = (p) => { const b = p.split('/').pop(); const i = b.lastIndexOf('.'); return i > 0 ? b.slice(i + 1) : ''; };
     $('filelist').innerHTML = '<div class="h">pick a file</div><div class="sub">documents, most recently reviewed first.</div>' + files.map(f =>
       `<a href="/?f=${encodeURIComponent(f.rel)}"><span class="ext">${esc(ext(f.rel))}</span>` +
@@ -2404,13 +2502,25 @@ const uiStore = {
 // ---------- the review rail: resizable, collapsible, remembered ----------
 const RAIL_MIN = 280;        // below this a card's diff and its buttons stop fitting side by side
 const RAIL_MAX_FRAC = 0.6;   // and past this the document is the sidebar
-const DOC_MIN = 360;         // main is capped, so a viewport bound alone can still starve the doc
+const DOC_MIN = 360;         // the width the document keeps whatever either panel is dragged to
+const RAIL_DEFAULT = 372;    // its resting width, and the floor the fill below never goes under
+// The rail FILLS what the document does not want, up to here. Past this a card stops being a note and
+// becomes a paragraph: 520 of rail is 480 of card inside the aside's padding and ~450 of text, which
+// is about 68 characters at the card's 13.5px — the top of a comfortable measure. A DRAG can still go
+// wider (railMax); this is only what the rail rests at when nobody has said otherwise.
+const RAIL_AUTO_MAX = 520;
+const DOC_MEASURE = 908;     // #doc's cap, its 44px margins included. Kept in step with the CSS.
 // What the two side panels may take between them: main, less the width the document keeps whatever
 // happens. Each panel's own max reads this minus whatever the OTHER one is currently occupying, so
 // dragging one wide is bounded by the other rather than by a number that pretends it is alone.
+//
+// The panel is FIXED to the window now rather than being main's first track, so main no longer
+// contains it and its width has to be added back: the budget is what the two panels may take
+// BETWEEN THEM, and the folder is still one of the two. Reading main's own width alone would count
+// the folder's track as already spent and then subtract it a second time below.
 function colBudget() {
   const mainW = $('main').getBoundingClientRect().width || window.innerWidth;
-  return Math.round(mainW - DOC_MIN);
+  return Math.round(mainW + trackWidth($('nav'), false) - DOC_MIN);
 }
 // A panel's rendered track width, or 0 when it is not in the grid at all (collapsed rail, or either
 // panel below the breakpoint, where the nav is a fixed drawer and the rail a fixed sheet).
@@ -2428,11 +2538,31 @@ const clampRail = (w) => Math.min(railMax(), Math.max(RAIL_MIN, Math.round(w)));
 // look broken rather than absent.
 const railResizable = () => window.matchMedia('(min-width: 781px)').matches;
 
+// What the rail rests at with no preference on file: the leftover between the document's measure and
+// the right edge of the window, so the cards sit against that edge instead of leaving a band of
+// nothing beyond them. Below about a 1550px window the leftover is under RAIL_DEFAULT and this
+// returns the resting width unchanged, which is why nothing moves at the sizes sidecar mostly runs at.
+function autoRailWidth() {
+  const content = window.innerWidth - trackWidth($('nav'), false);
+  return Math.max(RAIL_DEFAULT, Math.min(RAIL_AUTO_MAX, Math.round(content - DOC_MEASURE)));
+}
+// A width the human DRAGGED to wins over the fill, at every window size and from then on — that is
+// what makes it a preference rather than a suggestion.
+//
+// `sc:railPinned` is what says one was ever set, and the presence of `sc:railWidth` is not, because
+// every session that ran before the fill existed has a width on file already: a stored 372 written
+// against the old fixed default is indistinguishable from a deliberate 372, and reading it as a
+// preference would mean nobody who has used sidecar before ever sees the fill. The pin is written by
+// the same drag that writes the width, so from here on the two arrive together.
+let railAuto = !uiStore.get('railPinned', '');
 // `railWidth` tracks the pointer and so runs past the bounds mid-drag; what gets STORED is the width
 // actually on screen, because a preference nobody has ever seen applied is not a preference. A window
 // narrow enough to clamp the rail does not overwrite it, though — see the resize listener, which
 // re-applies without persisting, so a rail dragged wide on a large display comes back wide there.
-let railWidth = Math.max(RAIL_MIN, Math.round(Number(uiStore.get('railWidth', 372)) || 372));
+let railWidth = railAuto ? RAIL_DEFAULT
+  : Math.max(RAIL_MIN, Math.round(Number(uiStore.get('railWidth', RAIL_DEFAULT)) || RAIL_DEFAULT));
+// What to re-apply on a relayout: the fill recomputed against the new window, or the preference.
+const restRail = () => (railAuto ? autoRailWidth() : railWidth);
 function applyRailWidth(w, persist) {
   railWidth = Math.max(RAIL_MIN, Math.round(w));
   const applied = clampRail(railWidth);
@@ -2443,7 +2573,8 @@ function applyRailWidth(w, persist) {
     grip.setAttribute('aria-valuemin', String(RAIL_MIN));
     grip.setAttribute('aria-valuemax', String(railMax()));
   }
-  if (persist) uiStore.set('railWidth', applied);
+  // A drag ends the fill, here and on every later load.
+  if (persist) { railAuto = false; uiStore.set('railWidth', applied); uiStore.set('railPinned', '1'); }
 }
 // The document column just changed width: an asset re-scales to it, and every docked card re-measures
 // against its anchor. The same two calls the window resize listener makes, for the same reason.
@@ -2527,7 +2658,7 @@ function paintRailToggle() {
 })();
 // Restore before the first render so the rail never flashes at the default width and then jumps.
 if (uiStore.get('railCollapsed', '')) document.body.classList.add('rail-collapsed');
-applyRailWidth(railWidth, false);
+applyRailWidth(restRail(), false);
 paintRailToggle();
 
 // ---------- the directory panel: the folder the open document lives in ----------
@@ -2577,6 +2708,20 @@ function renderCrumb() {
   $('navCrumb').innerHTML = parts.map((p, i) => (i ? '<span class="sep">/</span>' : '') +
     `<button data-dir="${esc(p.dir)}" class="${p.dir === navDir ? 'here' : ''}" title="${esc(p.dir || p.label)}">${esc(p.label)}</button>`).join('');
 }
+// A row's glyph. It carries the one distinction the panel can make without opening anything: a
+// markdown document you can edit, or an asset you can only look at. The extension used to say that as
+// a superscript tag after every name — four rows of "md" saying the same thing about all four. Drawn
+// as strokes on currentColor, like every other icon in the tool, so the row's own state colours it.
+function navIcon(name) {
+  const asset = /\.html?$/i.test(name);
+  const body = asset
+    ? '<rect x="2.9" y="3.2" width="12.2" height="11.6" rx="2.2"/><circle cx="6.7" cy="7.1" r="1.1"/>' +
+      '<path d="M15.1 11.5 11.7 8.3 3.6 14.8"/>'
+    : '<path d="M10 2.4H5.4a1.6 1.6 0 0 0-1.6 1.6v10a1.6 1.6 0 0 0 1.6 1.6h7.2a1.6 1.6 0 0 0 1.6-1.6V6.4z"/>' +
+      '<path d="M10 2.4v4h4.2"/><path d="M6.6 9.9h4.8M6.6 12.4h3.2"/>';
+  return `<svg class="ic" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4"` +
+    ` stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+}
 function renderNav() {
   if (!navData) return;
   renderCrumb();
@@ -2586,14 +2731,16 @@ function renderNav() {
   const docs = Nav.sort(navData.docs, navSort);
   $('navList').innerHTML = docs.length ? docs.map(d => {
     const i = d.name.lastIndexOf('.');
-    const stem = i > 0 ? d.name.slice(0, i) : d.name, ext = i > 0 ? d.name.slice(i + 1) : '';
+    const stem = i > 0 ? d.name.slice(0, i) : d.name;
     // The timestamp shows in the order that is ABOUT it. In spine order it would be three columns of
-    // noise in a 248px panel next to names that are already the point.
-    const ago = navSort === 'updated' ? `<span class="ago">${esc(timeAgo(d.mtime))}</span>` : '';
+    // noise in a 248px panel next to names that are already the point. It rides in `.meta`, the row's
+    // right-hand slot, which is where a your-turn count goes next.
+    const ago = navSort === 'updated' ? esc(timeAgo(d.mtime)) : '';
     return `<a href="/?f=${encodeURIComponent(d.rel)}" data-rel="${esc(d.rel)}"` +
       `${d.rel === FILE ? ' class="on" aria-current="page"' : ''} title="${esc(d.name)}">` +
+      navIcon(d.name) +
       `<span class="ini">${esc(stem.slice(0, 1))}</span><span class="nm">${esc(stem)}</span>` +
-      `<span class="ext">${esc(ext)}</span>${ago}</a>`;
+      `<span class="meta">${ago}</span></a>`;
   }).join('') : '<div class="nav-empty">No documents in this folder. The path above is live, in both directions.</div>';
   revealOpenDoc();
 }
@@ -2791,7 +2938,7 @@ function toggleNav(show) {
     const collapse = show === undefined ? !navCollapsed() : !show;
     document.body.classList.toggle('nav-collapsed', collapse);
     uiStore.set('navCollapsed', collapse ? '1' : '');
-    applyRailWidth(railWidth, false);   // the rail's ceiling moved with the panel's track
+    applyRailWidth(restRail(), false);   // the rail's ceiling moved with the panel's track
     relayoutDoc();
   }
   paintNavToggle();
@@ -2824,8 +2971,15 @@ function paintNavToggle() {
   });
   grip.addEventListener('pointermove', (e) => {
     if (dragId === null) return;
-    // The panel's left edge IS main's left edge, so the width is the distance from it to the pointer.
-    applyNavWidth(e.clientX - $('main').getBoundingClientRect().left, false);
+    // The panel's left edge is the WINDOW's, so the width is just the pointer's x.
+    //
+    // It used to read main's left edge, which was the same pixel back when the panel was main's first
+    // grid track. It is not any more: main starts AFTER the panel now, so this measured the pointer
+    // against the panel's own right edge and every drag computed a width near zero, pinned to NAV_MIN,
+    // and then fed the smaller track back into the next move. The panel snapped to its minimum and
+    // stayed there, which is what a resize that "does not work" looked like.
+    applyNavWidth(e.clientX, false);
+    applyRailWidth(restRail(), false);   // the fill is measured against what the panel leaves
     relayoutDoc();
   });
   const endDrag = () => {
@@ -2847,6 +3001,7 @@ function paintNavToggle() {
     else if (e.key === 'ArrowLeft') applyNavWidth(clampNav(navWidth) - step, true);
     else return;
     e.preventDefault();
+    applyRailWidth(restRail(), false);
     relayoutDoc();
   });
 })();
@@ -2854,6 +3009,10 @@ function paintNavToggle() {
 if (uiStore.get('navCollapsed', '')) document.body.classList.add('nav-collapsed');
 applyNavWidth(navWidth, false);
 paintNavToggle();
+// The rail's fill is measured against what the panel left of the window, and the panel's own width
+// only just landed — the rail applied itself against the stylesheet's 248px default further up this
+// file. Re-apply now that the two are in the order they will be in for the rest of the session.
+applyRailWidth(restRail(), false);
 
 // ---------- mobile bottom sheet ----------
 function toggleSheet(force) {
@@ -3043,7 +3202,7 @@ window.addEventListener('blur', () => setModHeld(false));
 window.addEventListener('resize', () => {
   if (!navIsDrawer() && navDrawerOpen()) document.body.classList.remove('nav-open');
   applyNavWidth(navWidth, false);
-  applyRailWidth(railWidth, false);
+  applyRailWidth(restRail(), false);
   paintNavToggle();          // the button means "collapse" above the breakpoint and "open" below it
   if (isAsset()) sizeFrame();
   scheduleDock();

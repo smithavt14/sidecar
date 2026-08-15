@@ -141,8 +141,9 @@ hover title in the UI.
 
 - Comments explain *why*, especially where the code looks odd — most of them record a real incident.
   Keep that when you change the surrounding code; delete them when the reason stops being true.
-- Layout preferences (each panel's width, whether it is collapsed, and the directory panel's sort, one
-  key per folder) persist in `localStorage` under an `sc:` prefix, through the wrapped `uiStore` —
+- Layout preferences (each panel's width, whether it is collapsed, whether the review rail's width was
+  set by hand rather than filled, and the directory panel's sort, one key per folder) persist in
+  `localStorage` under an `sc:` prefix, through the wrapped `uiStore` —
   Safari in private mode throws on `setItem`, and nothing about a preference is worth an exception on
   the path that renders the review. Document and review state never go there; those are files.
 - A history entry carries `{ f, y }`: which document, and where the reader left it. The browser's own
