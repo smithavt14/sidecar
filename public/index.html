@@ -139,11 +139,17 @@
   #nav { position:sticky; top:51px; align-self:start; max-height:calc(100vh - 51px); overflow-y:auto;
     display:flex; flex-direction:column; gap:8px; min-width:0;
     padding:0 8px 28px; border-right:1px solid var(--line); background:var(--bg); }
-  /* The path and the switcher stay put while the list scrolls under them — a sixty-document folder
+  /* The shell's header row. It stays put while the list scrolls under it — a sixty-document folder
      otherwise scrolls its own controls away, and the panel scrolls itself to the open document on
-     load. Opaque, and it carries the panel's top padding, so nothing shows through above it. */
-  .nav-head { position:sticky; top:0; z-index:4; background:var(--bg); padding:14px 0 8px;
-    display:flex; flex-direction:column; gap:8px; }
+     load. Opaque, and it carries the panel's top padding, so nothing shows through above it. The
+     hairline is what makes the panel read as a region of the application rather than a column of
+     links: header, then contents. */
+  .nav-head { position:sticky; top:0; z-index:4; background:var(--bg); padding:14px 0 7px;
+    display:flex; flex-direction:column; gap:7px; border-bottom:1px solid var(--line); }
+  .nav-bar { display:flex; align-items:flex-start; gap:4px; }
+  .nav-bar #navCrumb { flex:1; min-width:0; }
+  #navCollapse, #navExpand { flex:none; color:var(--fainter); }
+  #navCollapse:hover, #navExpand:hover { color:var(--fg); background:var(--fill); }
   /* The breadcrumb is the OPEN DOCUMENT's path, not a trail of where you have clicked, and every
      segment is live. Stepping up a level is clicking a shallower one; coming back down is clicking a
      deeper one, which is the half a one-way "up" button loses — a folder above a project usually
@@ -194,14 +200,17 @@
     background:var(--ink); opacity:0; transition:opacity .15s ease; }
   #navGrip:hover::after, #navGrip:focus-visible::after, body.nav-dragging #navGrip::after { opacity:.3; }
   #navGrip:focus { outline:none; }
-  #navToggle { position:relative; }
+  /* The panel's own control lives in its header, so the page header carries one only where the panel
+     is a drawer and its header is off screen with it. */
+  #navToggle, #navExpand { display:none; }
   /* Collapsed is an icon strip and only ever a DESKTOP state: down at the drawer breakpoint the panel
      is a fixed overlay with no track to shrink, so these rules are scoped rather than undone one by
      one below — the rail learned that lesson the expensive way. */
   @media (min-width: 781px) {
     body.nav-collapsed { --nav-track:56px; }
-    body.nav-collapsed #nav { padding:14px 6px 28px; align-items:center; }
+    body.nav-collapsed #nav { padding:14px 6px 28px; align-items:center; gap:10px; }
     body.nav-collapsed .nav-head, body.nav-collapsed #navGrip { display:none; }
+    body.nav-collapsed #navExpand { display:block; }
     /* Each document keeps its click target, as its initial. A strip of blank squares would be a
        decoration; this one still switches documents, and the title carries the name. */
     body.nav-collapsed .nav-list a { justify-content:center; width:36px; height:34px; padding:0; }
@@ -564,6 +573,11 @@
        and nothing to divide, so the grip goes rather than half-working. Its header button stays,
        because unlike the rail's sheet the drawer has no other way in. */
     #navGrip { display:none; }
+    /* The drawer's own header is off screen with it, so opening it is the one control that has to sit
+       outside: the page header, where the rail's floating pill is its equivalent. Minimizing means
+       nothing down here, so the in-panel control goes. */
+    #navToggle { display:block; }
+    #navCollapse { display:none; }
     /* align-self is reset explicitly: the panel is still a child of the grid, and the `start` the
        desktop rule needs for its sticky column leaves the fixed drawer at the height of its own
        content — a half-height sheet floating over the document. */
@@ -634,8 +648,10 @@
 <body>
 <header>
   <div class="hwrap">
+    <!-- The drawer's way in, below the 780px breakpoint only. Above it the shell owns its own control
+         (see #navCollapse) and this is display:none. -->
     <button id="navToggle" class="ghost iconbtn" onclick="toggleNav()" aria-controls="nav" aria-expanded="true"
-      title="Hide the folder" aria-label="Hide the folder"><svg viewBox="0 0 20 20" fill="none"
+      title="Show the folder" aria-label="Show the folder"><svg viewBox="0 0 20 20" fill="none"
       stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
       <rect x="2.5" y="3.75" width="15" height="12.5" rx="2.5"/><path d="M7.1 3.75v12.5"/></svg></button>
     <h1 class="brand">
@@ -660,8 +676,23 @@
 <main id="main">
   <!-- The folder the open document lives in. Painted by renderNav; empty until the first /api/dir. -->
   <nav id="nav" aria-label="documents in this folder">
+    <!-- The strip's way back out, at the top of the icon column where the shell's header row was. -->
+    <button id="navExpand" class="ghost iconbtn" onclick="toggleNav(true)" aria-controls="nav"
+      title="Expand the folder" aria-label="Expand the folder"><svg viewBox="0 0 20 20" fill="none"
+      stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="2.5" y="3.75" width="15" height="12.5" rx="2.5"/><path d="M7.1 3.75v12.5"/>
+      <path d="M11.4 7.9 13.5 10l-2.1 2.1"/></svg></button>
+    <!-- The shell's header row: where you are, how it is ordered, and the control that minimizes it.
+         The control belongs to the panel, the way an IDE's explorer owns its own chrome. -->
     <div class="nav-head">
-      <div id="navCrumb"></div>
+      <div class="nav-bar">
+        <div id="navCrumb"></div>
+        <button id="navCollapse" class="ghost iconbtn" onclick="toggleNav(false)" aria-controls="nav"
+          title="Minimize the folder" aria-label="Minimize the folder"><svg viewBox="0 0 20 20" fill="none"
+          stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="2.5" y="3.75" width="15" height="12.5" rx="2.5"/><path d="M7.1 3.75v12.5"/>
+          <path d="M13.5 7.9 11.4 10l2.1 2.1"/></svg></button>
+      </div>
       <div id="navSort">
         <button class="sortbtn" onclick="toggleSortMenu()" aria-haspopup="true" aria-expanded="false"
           title="Sort the folder"><span id="navSortLabel">spine</span><span class="car">▾</span></button>
@@ -2690,14 +2721,20 @@ function toggleNav(show) {
   paintNavToggle();
 }
 function closeNavDrawer() { document.body.classList.remove('nav-open'); paintNavToggle(); }
+// Three controls, one state. The shell's own (in its header, and in the strip it collapses to) and the
+// page header's, which exists only where the drawer's header is off screen with the drawer.
 function paintNavToggle() {
-  const btn = $('navToggle');
-  if (!btn) return;
   const shown = navIsDrawer() ? navDrawerOpen() : !navCollapsed();
-  const label = shown ? 'Hide the folder' : 'Show the folder';
-  btn.title = label;
-  btn.setAttribute('aria-label', label);
-  btn.setAttribute('aria-expanded', shown ? 'true' : 'false');
+  const btn = $('navToggle');
+  if (btn) {
+    const label = shown ? 'Hide the folder' : 'Show the folder';
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+  }
+  for (const id of ['navToggle', 'navCollapse', 'navExpand']) {
+    const el = $(id);
+    if (el) el.setAttribute('aria-expanded', shown ? 'true' : 'false');
+  }
 }
 (function navDrag() {
   const grip = $('navGrip');
