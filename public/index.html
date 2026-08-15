@@ -1238,6 +1238,11 @@ function buildAssetFrame() {
   pointerInFrame = false;
   frameEl.addEventListener('mouseenter', () => { pointerInFrame = true; });
   frameEl.addEventListener('mouseleave', () => { pointerInFrame = false; });
+  // Before the first `ready`, the frame has the browser-default 300px viewport, and that is the width
+  // the picker MEASURES a responsive document at (a fixed-size poster reports its own width either
+  // way). Lay the frame out at the column width first, so a responsive asset is measured at the width
+  // it will actually be read at; sizeFrame then pins the measured width explicitly.
+  frameEl.style.width = '100%';
   wrap.appendChild(frameEl);
   return wrap;
 }
