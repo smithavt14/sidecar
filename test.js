@@ -2387,6 +2387,18 @@ test('flow render: labels are escaped and data-node carries an index, never flow
   assert.ok(!/data-\w+="[^"]*--&gt;/.test(svg) && !/data-\w+="[^"]*-->/.test(svg), 'no attribute carries an arrow');
 });
 
+test('flow render: the canvas states its own width, which is what the page sizes it by', () => {
+  // index.html's sizeFlow sets a min-width from this, so the diagram stops shrinking before its labels
+  // stop being readable and the box scrolls instead (.fl-scroll). It reads the width attribute and
+  // falls back to the viewBox, so both have to be there and both have to say the same thing.
+  const { svg } = Flow.render('LR\nSign up --> Verify email --> Pick a plan --> Start the trial');
+  const w = Number((svg.match(/<svg[^>]*\swidth="(\d+(?:\.\d+)?)"/) || [])[1]);
+  const vb = (svg.match(/viewBox="0 0 (\d+(?:\.\d+)?) (\d+(?:\.\d+)?)"/) || []).slice(1).map(Number);
+  assert.ok(w > 0, 'a numeric width');
+  assert.equal(vb[0], w, 'and the viewBox agrees with it');
+  assert.ok(w > 500, 'a four-node chain across is wider than a phone, which is the case this exists for');
+});
+
 // ---------- the directory panel's ordering (public/navsort.js) ----------
 // The SAME file index.html loads via <script>, so what the panel draws is what these assert.
 const Nav = require('./public/navsort.js');
@@ -2450,8 +2462,8 @@ test('updated sort: a document with no mtime sorts last rather than throwing', (
 
 test('waiting-on-you sort: turn counts descending, and with none it IS spine order', () => {
   const plain = docsOf(['zeta.md', 'brief.md', 'summary.md']);
-  // Nothing computes `turn` yet (the badges are their own slice), so every count is absent. The mode
-  // has to resolve to the spine order rather than to whatever readdir returned.
+  // A folder where nothing is open (or where no document has a sidecar at all) carries no counts, and
+  // the mode has to resolve to the spine order rather than to whatever readdir returned.
   assert.deepEqual(namesOf(Nav.sort(plain, 'turn')), namesOf(Nav.sort(plain, 'spine')));
   const counted = [
     { rel: 'p/summary.md', name: 'summary.md', turn: 0 },
@@ -2472,6 +2484,151 @@ test('every sort mode the panel offers is one the sorter answers to', () => {
   // The switcher renders straight off MODES/LABELS, so a mode with no label would draw as `undefined`.
   for (const m of Nav.MODES) assert.equal(typeof Nav.LABELS[m], 'string', `${m} has a label`);
   assert.deepEqual(Nav.MODES, ['spine', 'updated', 'turn']);
+});
+
+// ---------- whose turn is it: the panel's badges and the inbox (public/turn.js) ----------
+// The SAME file index.html loads via <script> AND server.js requires — the badge the panel draws and
+// the count /api/dir computes are this function, once. Every case below is therefore a case both
+// sides answer identically, which is the whole reason it is one module.
+const Turn = require('./public/turn.js');
+const AGENT = 'claude', HUMAN = 'alex';
+let seq = 0;
+const msg = (by, text) => ({ by, at: new Date(Date.UTC(2026, 7, 15, 12, 0, seq++)).toISOString(), text });
+const comment = (id, status, ...thread) =>
+  ({ id, kind: 'comment', by: thread[0] ? thread[0].by : AGENT, anchor: { quote: 'the ' + id + ' span' }, status, thread });
+const sug = (id, status) => ({ id, kind: 'suggestion', by: AGENT, anchor: { quote: 'the ' + id + ' span' }, replacement: 'x', status });
+
+test('a doc with two agent-last threads and one pending suggestion badges 3', () => {
+  // The acceptance case from the plan, stated as arithmetic.
+  const review = { schema: 1, items: [
+    comment('c1', 'open', msg(HUMAN, 'what about this'), msg(AGENT, 'here is why')),
+    comment('c2', 'open', msg(AGENT, 'this paragraph contradicts the one above')),
+    sug('s1', 'pending'),
+    comment('c3', 'open', msg(AGENT, 'a question'), msg(HUMAN, 'answered')),   // the agent's move now
+    comment('c4', 'resolved', msg(AGENT, 'settled')),                           // not live at all
+    sug('s2', 'accepted'),
+  ] };
+  const t = Turn.of(review, AGENT);
+  assert.equal(t.turn, 3, 'two agent-last comments and one pending suggestion');
+  assert.equal(t.open, 4, 'the human-last comment is open too, just not yours');
+  assert.deepEqual(t.items.filter(i => i.turn).map(i => i.id), ['c1', 'c2', 's1']);
+});
+
+test('turn is keyed off the agent NAME, so any other author reads as the human', () => {
+  const review = { schema: 1, items: [comment('c1', 'open', msg('gemini', 'hello'))] };
+  assert.equal(Turn.of(review, 'gemini').turn, 1, 'a differently named agent still holds the turn');
+  assert.equal(Turn.of(review, AGENT).turn, 0, 'and to claude it is someone else speaking');
+  // The default SIDECAR_USER, a legacy `alex`, and a custom name all read as the human — the same rule
+  // index.html's whoCls uses to colour the chip.
+  for (const who of ['you', 'alex', 'Alexandra']) {
+    assert.equal(Turn.of({ items: [comment('c1', 'open', msg(who, 'hi'))] }, AGENT).turn, 0, who);
+  }
+});
+
+test('a comment with no thread falls back to its author', () => {
+  // `sidecar comment` always writes a thread, but an item hand-written into the JSON may not have one,
+  // and an agent's unanswered comment is the clearest "your turn" there is.
+  const bare = { id: 'c1', kind: 'comment', by: AGENT, anchor: { quote: 'x' }, status: 'open' };
+  assert.equal(Turn.of({ items: [bare] }, AGENT).turn, 1);
+  assert.equal(Turn.of({ items: [{ ...bare, by: HUMAN }] }, AGENT).turn, 0);
+});
+
+test('an orphaned suggestion is open but is the AGENT\'s move; an orphaned comment keeps the thread rule', () => {
+  // Repairing a broken anchor is `sidecar reanchor`, which the human cannot run — so it gets the
+  // neutral dot. A comment on a broken anchor is still a conversation, and whoever spoke last owns it.
+  const t = Turn.of({ items: [
+    sug('s1', 'orphaned'),
+    comment('c1', 'orphaned', msg(AGENT, 'still asking')),
+    comment('c2', 'orphaned', msg(HUMAN, 'still answering')),
+  ] }, AGENT);
+  assert.equal(t.open, 3);
+  assert.deepEqual(t.items.filter(i => i.turn).map(i => i.id), ['c1']);
+});
+
+test('a settled item counts for nothing, whatever it used to be', () => {
+  const t = Turn.of({ items: [
+    comment('c1', 'resolved', msg(AGENT, 'x')), sug('s1', 'accepted'), sug('s2', 'rejected'),
+  ] }, AGENT);
+  assert.deepEqual(t, { turn: 0, open: 0, items: [] });
+});
+
+test('a missing, empty or malformed review is zero badges rather than a throw', () => {
+  // The renamed-file case: a document whose sidecar is still `.review.json` has no `.sidecar.json` for
+  // the panel to read, and one truncated by a crashed write parses to nothing useful. Neither may take
+  // the folder listing down with it — every OTHER document in that folder still has to draw.
+  for (const bad of [undefined, null, {}, { items: null }, { items: [] }, { items: [{}] },
+                     { items: [{ id: 'x', status: 'open' }] }]) {
+    const t = Turn.of(bad, AGENT);
+    assert.equal(t.turn, 0, JSON.stringify(bad));
+  }
+  // An item with no anchor and no kind is still LIVE and still counts as open — it is a real card in
+  // the rail. It just has no quote to show, and the inbox says so rather than rendering "undefined".
+  assert.equal(Turn.of({ items: [{ id: 'x', status: 'open' }] }, AGENT).open, 1);
+  assert.equal(Turn.of({ items: [{ id: 'x', status: 'open' }] }, AGENT).items[0].quote, '');
+});
+
+test('an inbox item carries enough to be recognised, with the quote cut to one line', () => {
+  const long = 'word '.repeat(80).trim();
+  const it = Turn.of({ items: [{ id: 'c1', kind: 'comment', by: HUMAN, status: 'open',
+    anchor: { quote: 'a\n  quote   across\nlines' }, thread: [msg(AGENT, 'hi')] }] }, AGENT).items[0];
+  assert.equal(it.by, AGENT, 'who spoke LAST, which is who the row is waiting on');
+  assert.equal(it.kind, 'comment');
+  assert.equal(it.quote, 'a quote across lines', 'whitespace collapsed to one line');
+  assert.ok(it.at, 'and when it last moved');
+  const cut = Turn.of({ items: [comment('c1', 'open', msg(AGENT, long))] }, AGENT).items[0];
+  assert.ok(cut.quote.length <= Turn.QUOTE_MAX, 'never longer than the cap');
+  const big = Turn.of({ items: [{ id: 'c1', kind: 'comment', status: 'open', anchor: { quote: long } }] }, AGENT);
+  assert.equal(big.items[0].quote.length, Turn.QUOTE_MAX);
+  assert.ok(big.items[0].quote.endsWith('…'), 'and says it was cut');
+});
+
+test('a flag reads as its own kind, so the inbox does not call it a comment', () => {
+  const t = Turn.of({ items: [{ id: 'f1', kind: 'comment', flag: true, by: AGENT, status: 'open',
+    anchor: { quote: 'x' }, thread: [msg(AGENT, 'blocking')] }] }, AGENT);
+  assert.equal(t.items[0].kind, 'flag');
+  assert.equal(t.turn, 1, 'and it is still the human\'s turn');
+});
+
+test('inbox: grouped by document, your turn first, newest first inside a group', () => {
+  const docs = [
+    { rel: 'p/summary.md', name: 'summary.md', turn: 0,
+      items: Turn.of({ items: [comment('c1', 'open', msg(HUMAN, 'mine'))] }, AGENT).items },
+    { rel: 'p/brief.md', name: 'brief.md', turn: 2, items: Turn.of({ items: [
+      comment('b1', 'open', msg(AGENT, 'older')),
+      comment('b2', 'open', msg(AGENT, 'newer')),
+    ] }, AGENT).items },
+    { rel: 'p/quiet.md', name: 'quiet.md', turn: 0, items: [] },
+  ];
+  const groups = Turn.inbox(docs);
+  assert.deepEqual(groups.map(g => g.name), ['brief.md', 'summary.md'],
+    'the document waiting on you leads, and one with nothing open is not in the inbox at all');
+  assert.deepEqual(groups[0].items.map(i => i.id), ['b2', 'b1'], 'newest first inside a group');
+  assert.equal(groups[0].turn, 2);
+  assert.equal(groups[0].open, 2);
+});
+
+test('inbox: with no turns anywhere, the most recently moved document leads', () => {
+  const older = { rel: 'p/a.md', name: 'a.md', turn: 0, items: [{ id: 'a1', at: '2026-08-01T00:00:00Z' }] };
+  const newer = { rel: 'p/z.md', name: 'z.md', turn: 0, items: [{ id: 'z1', at: '2026-08-14T00:00:00Z' }] };
+  assert.deepEqual(Turn.inbox([older, newer]).map(g => g.name), ['z.md', 'a.md']);
+  assert.deepEqual(Turn.inbox([]), [], 'and an empty folder is an empty inbox');
+});
+
+test('inbox: items with no timestamp fall back to the order they were written in', () => {
+  // A suggestion is born as a diff with no thread and so has no `at` at all. Two of them must not
+  // shuffle between renders — insertion order in the file IS chronological, so it is the tiebreak.
+  const items = Turn.of({ items: [sug('s1', 'pending'), sug('s2', 'pending'), sug('s3', 'pending')] }, AGENT).items;
+  const once = Turn.inbox([{ rel: 'p/a.md', name: 'a.md', turn: 3, items }]);
+  const again = Turn.inbox([{ rel: 'p/a.md', name: 'a.md', turn: 3, items: items.slice().reverse() }]);
+  assert.deepEqual(once[0].items.map(i => i.id), ['s3', 's2', 's1'], 'last written, first shown');
+  assert.deepEqual(again[0].items.map(i => i.id), once[0].items.map(i => i.id), 'whatever order it arrives in');
+});
+
+test('inbox does not mutate the documents it is given', () => {
+  const items = Turn.of({ items: [comment('c1', 'open', msg(AGENT, 'a')), comment('c2', 'open', msg(AGENT, 'b'))] }, AGENT).items;
+  const docs = [{ rel: 'p/a.md', name: 'a.md', turn: 2, items }];
+  Turn.inbox(docs);
+  assert.deepEqual(items.map(i => i.id), ['c1', 'c2'], 'the caller keeps its own order');
 });
 
 // ---------- which links open IN sidecar (public/doclink.js) ----------
@@ -3067,6 +3224,55 @@ test('the directory listing at the served root has no parent to walk up to', asy
   assert.equal(d.parent, null, 'null, not a path outside the root');
   assert.ok(d.docs.some(x => x.name === 'doc.md'));
   assert.ok(!d.docs.some(x => x.name === 'folder'), 'a directory is not a document');
+});
+
+test('the directory listing carries each document\'s turn count and its open items', async () => {
+  // The badge's data path end to end: a review on disk → /api/dir → what the panel draws. The counting
+  // is public/turn.js, asserted directly above; this is that the server runs it, per document, per
+  // folder, and hands back the items the Inbox lists.
+  const folder = path.join(dir, 'badges');
+  fs.mkdirSync(folder, { recursive: true });
+  fs.writeFileSync(path.join(folder, 'brief.md'), '# brief\n\nA sentence to anchor to.\n');
+  fs.writeFileSync(path.join(folder, 'quiet.md'), '# quiet\n\nNothing open here.\n');
+  fs.writeFileSync(path.join(folder, 'brief.md.sidecar.json'), JSON.stringify({ schema: 1, items: [
+    { id: 'c1', kind: 'comment', by: 'claude', anchor: { quote: 'A sentence' }, status: 'open',
+      thread: [{ by: 'claude', at: '2026-08-15T10:00:00Z', text: 'asking' }] },
+    { id: 'c2', kind: 'comment', by: 'alex', anchor: { quote: 'to anchor to' }, status: 'open',
+      thread: [{ by: 'alex', at: '2026-08-15T11:00:00Z', text: 'over to you' }] },
+    { id: 's1', kind: 'suggestion', by: 'claude', anchor: { quote: 'sentence' }, replacement: 'line', status: 'pending' },
+    { id: 'c3', kind: 'comment', by: 'alex', anchor: { quote: 'brief' }, status: 'resolved',
+      thread: [{ by: 'alex', at: '2026-08-15T09:00:00Z', text: 'done' }] },
+  ] }));
+  const d = await fetchRetry(`${BASE}/api/dir?path=badges`).then(j);
+  const brief = d.docs.find(x => x.name === 'brief.md'), quiet = d.docs.find(x => x.name === 'quiet.md');
+  assert.equal(brief.turn, 2, 'the agent-last comment and the pending suggestion');
+  assert.equal(brief.open, 3, 'the human-last one is open too');
+  assert.deepEqual(brief.items.map(i => i.id), ['c1', 'c2', 's1'], 'and the settled one is gone');
+  assert.equal(brief.items.find(i => i.id === 'c1').quote, 'A sentence', 'each item carries its span');
+  assert.equal(quiet.turn, 0, 'a document with no sidecar at all');
+  assert.equal(quiet.open, 0);
+  assert.deepEqual(quiet.items, []);
+});
+
+test('a legacy or unreadable sidecar is zero badges, and the rest of the folder still lists', async () => {
+  // The renamed-file case (pre-1.7 `.review.json`) and the crashed-write case, which must not take the
+  // listing down with them. The panel counts only; migrating on a listing nobody asked to migrate would
+  // rename a whole folder's siblings as a side effect of scrolling past it.
+  const folder = path.join(dir, 'legacy');
+  fs.mkdirSync(folder, { recursive: true });
+  fs.writeFileSync(path.join(folder, 'old.md'), '# old\n\nStill here.\n');
+  fs.writeFileSync(path.join(folder, 'old.md.review.json'), JSON.stringify({ schema: 1, items: [
+    { id: 'c1', kind: 'comment', by: 'claude', anchor: { quote: 'Still here' }, status: 'open',
+      thread: [{ by: 'claude', at: '2026-08-15T10:00:00Z', text: 'from before the rename' }] },
+  ] }));
+  fs.writeFileSync(path.join(folder, 'broken.md'), '# broken\n');
+  fs.writeFileSync(path.join(folder, 'broken.md.sidecar.json'), '{"schema":1,"items":[{"id":"c1"');
+  fs.writeFileSync(path.join(folder, 'fine.md'), '# fine\n');
+  const d = await fetchRetry(`${BASE}/api/dir?path=legacy`).then(j);
+  assert.deepEqual(d.docs.map(x => x.name).sort(), ['broken.md', 'fine.md', 'old.md'],
+    'every document still lists');
+  for (const x of d.docs) { assert.equal(x.turn, 0, x.name); assert.equal(x.open, 0, x.name); }
+  assert.ok(fs.existsSync(path.join(folder, 'old.md.review.json')), 'and the listing renamed nothing');
 });
 
 test('the directory listing is confined to the served root, and refuses a file', async () => {

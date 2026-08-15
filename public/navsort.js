@@ -29,10 +29,11 @@
   function sort(docs, mode) {
     const list = (docs || []).slice();
     if (mode === 'updated') return list.sort((a, b) => (b.mtime || 0) - (a.mtime || 0) || cmpSpine(a, b));
-    // "waiting on you" is the count of items on a doc whose turn is the HUMAN's. Nothing computes
-    // `turn` yet — the badges are their own slice — and an absent count reads as 0 on every document,
-    // so this mode currently resolves to spine order rather than to an arbitrary one. The ordering
-    // hook is here so the switcher is a real choice the moment the counts arrive.
+    // "waiting on you" is the count of items on a doc whose turn is the HUMAN's — an open comment
+    // whose latest message is the agent's, plus every pending suggestion. `turn` is computed by
+    // public/turn.js and arrives on each document from /api/dir, which is the same number the row's
+    // badge draws, so the order and the badges can never tell two different stories. A document with
+    // no sidecar at all carries no count, reads as 0, and falls to spine order behind the rest.
     if (mode === 'turn') return list.sort((a, b) => (b.turn || 0) - (a.turn || 0) || cmpSpine(a, b));
     return list.sort(cmpSpine);
   }

@@ -10,6 +10,7 @@
 <script src="/flow.js"></script>   <!-- ```flow fences → SVG; pure string in/out, Node tests require the same file -->
 <script src="/navsort.js"></script>   <!-- the directory panel's ordering; pure list in/out, Node tests require the same file -->
 <script src="/doclink.js"></script>   <!-- does a link in the document open IN sidecar; pure string in/out, Node tests require the same file -->
+<script src="/turn.js"></script>   <!-- whose turn is it: the panel's badges and the inbox; server.js requires the same file -->
 <script src="/stability.js"></script>   <!-- freeze / last known position / orphan grace for the docked rail; Node tests require the same file -->
 <script src="/assetframe.js"></script>   <!-- an .html asset → the sandboxed frame's srcdoc; Node tests require the same file -->
 <script src="/lib/marked/marked.min.js"></script>
@@ -213,6 +214,10 @@
      section label (9.5px/700 at .15em, its rail's WORK and ORGANIZATION) — structure stated once,
      quietly, so the filenames below it are the only thing competing for the eye. */
   .nav-sect { display:flex; align-items:center; gap:8px; padding:9px 5px 3px; }
+  /* `hidden` is how the two views are switched, and a `display` set anywhere in this file beats the
+     browser's own `[hidden] { display:none }` — which is why both of the things it hides say so
+     themselves. The list stayed on screen under the inbox until they did. */
+  .nav-sect[hidden], .nav-list[hidden] { display:none; }
   .nav-label { flex:1; min-width:0; font:700 9.5px 'Geist', ui-sans-serif, sans-serif;
     letter-spacing:.15em; text-transform:uppercase; color:var(--muted); }
   /* the sort switcher — a menu, not three tabs: at 248px three labels have nowhere to sit, and the
@@ -255,6 +260,69 @@
   .nav-list a .meta:empty { display:none; }
   .nav-list a .ini { display:none; }
   .nav-empty { padding:10px; margin:0 8px; color:var(--muted); font-size:12.5px; line-height:1.5; }
+  /* ---------- the your-turn badge ----------
+     The count of items on a document that are waiting on the HUMAN (public/turn.js). Yellow, because
+     yellow is the agent everywhere in this tool and a badge here means the agent is holding something
+     out to you. A document with open items that are NOT your turn gets the neutral dot instead: still
+     live, but the next move is the agent's, and drawing that in the same colour would make the whole
+     folder look like a to-do list.
+     The same pill as #railToggle's unread count, which is the other place a number means "look here". */
+  .nav-list a .meta .nb { flex:none; }
+  .nav-list a .meta .nb.turn { min-width:16px; height:16px; padding:0 4px; border-radius:99px;
+    background:var(--yellow); color:var(--chip-fg); box-shadow:0 0 0 1px var(--yellow-ring);
+    font:600 10px/16px 'Geist', ui-sans-serif, sans-serif; text-align:center; }
+  .nav-list a .meta .nb.dot { width:6px; height:6px; margin:0 5px; border-radius:50%;
+    background:var(--fainter); }
+  .nav-list a.on .meta .nb.dot { background:var(--muted); }
+  /* ---------- files / inbox ----------
+     One choice, two states, so it is drawn as one control: a recessed track with the chosen half
+     raised onto the page's own ground. GD's segmented switch, at the panel's scale. */
+  .nav-tabs { display:flex; gap:2px; margin:0 5px 2px; padding:2px; border-radius:9px;
+    background:var(--shell-row); }
+  .nav-tabs button { flex:1; display:flex; align-items:center; justify-content:center; gap:5px;
+    border:none; background:none; box-shadow:none; border-radius:7px; padding:4px 8px; color:var(--muted);
+    font:500 12px 'Geist', ui-sans-serif, sans-serif; }
+  .nav-tabs button:hover { color:var(--ink); transform:none; }
+  .nav-tabs button[aria-selected="true"] { background:var(--bg); color:var(--ink); font-weight:600;
+    box-shadow:0 1px 2px rgba(20,20,15,.06); }
+  .nav-tabs .n { min-width:15px; height:15px; padding:0 4px; border-radius:99px; background:var(--yellow);
+    color:var(--chip-fg); font:600 9.5px/15px 'Geist', ui-sans-serif, sans-serif; text-align:center; }
+  .nav-tabs .n:empty { display:none; }
+  /* ---------- the inbox ----------
+     Every open item in the folder, grouped under the document it is on. A row has to be recognisable
+     without opening it, so it carries who spoke last, what kind of item it is, and the span it is
+     about — the quote on its own line, because at 248px a quote sharing a line with anything is two
+     words and an ellipsis. */
+  .nav-inbox { display:flex; flex-direction:column; gap:2px; padding:0 8px; }
+  .nav-inbox[hidden] { display:none; }
+  .ib-group { margin-bottom:9px; }
+  .ib-doc { display:flex; align-items:center; gap:6px; width:100%; padding:4px 9px; border:none;
+    background:none; box-shadow:none; border-radius:7px; color:var(--muted); text-align:left;
+    font:700 9.5px 'Geist', ui-sans-serif, sans-serif; letter-spacing:.13em; text-transform:uppercase; }
+  .ib-doc:hover { background:var(--shell-row); color:var(--ink); transform:none; }
+  .ib-doc .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ib-doc .n { flex:none; margin-left:auto; letter-spacing:0; font-size:10px; color:var(--faint); }
+  .ib-item { display:block; width:100%; text-align:left; border:none; box-shadow:none;
+    background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:6px 9px 7px;
+    margin-top:2px; color:var(--fg); font:400 12.5px/1.45 'Geist', ui-sans-serif, sans-serif; }
+  .ib-item:hover { border-color:var(--line-strong); transform:none; }
+  /* Your turn reads as the agent's yellow, same as the badge and the same as a card's chip. Everything
+     else stays on the page's ground: open, and not yours to move.
+     `ib-turn` rather than a bare `turn`, which the header's open/orphaned cluster already owns as a
+     FLEX row — every yellow inbox row laid its quote out beside its header until this was renamed. */
+  .ib-item.ib-turn { background:var(--chip); border-color:var(--yellow-ring); }
+  .ib-item .hd { display:flex; align-items:center; gap:6px; margin-bottom:3px; }
+  .ib-item .who { flex:none; font-weight:600; font-size:11.5px; color:var(--ink); }
+  .ib-item .kind { flex:none; font-size:9.5px; font-weight:600; letter-spacing:.06em;
+    text-transform:uppercase; color:var(--muted); }
+  .ib-item .when { flex:none; margin-left:auto; font-family:'Geist Mono', ui-monospace, monospace;
+    font-size:10px; color:var(--faint); }
+  /* Two lines of the quote and then a cut: enough to recognise the sentence, never enough for one
+     item to own the panel. */
+  .ib-item .q { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+    color:var(--muted); font-size:12px; line-height:1.4; }
+  .ib-empty { padding:14px 10px; margin:0 8px; color:var(--muted); font-size:12.5px; line-height:1.55; }
+  .ib-empty b { display:block; color:var(--ink); font-weight:600; margin-bottom:3px; }
   /* the handle between the panel and the document — the rail's grip mirrored, same 11px of grab area
      straddling the hairline, same reason it is placed over the boundary rather than given a track.
      Fixed now, because the boundary it straddles belongs to the window rather than to main. */
@@ -283,11 +351,24 @@
     body.nav-collapsed .nav-list { padding:8px 0 0; align-items:center; gap:2px; }
     /* Each document keeps its click target, as its initial. A strip of blank squares would be a
        decoration; this one still switches documents, and the title carries the name. */
-    body.nav-collapsed .nav-list a { justify-content:center; width:32px; height:32px; padding:0; gap:0; }
-    body.nav-collapsed .nav-list a .nm, body.nav-collapsed .nav-list a .ic,
-    body.nav-collapsed .nav-list a .meta { display:none; }
+    body.nav-collapsed .nav-list a { position:relative; justify-content:center; width:32px; height:32px; padding:0; gap:0; }
+    body.nav-collapsed .nav-list a .nm, body.nav-collapsed .nav-list a .ic { display:none; }
     body.nav-collapsed .nav-list a .ini { display:block; font-size:12.5px; text-transform:uppercase; }
     body.nav-collapsed .nav-empty { display:none; }
+    /* The badge SURVIVES the collapse, as a corner dot. Minimizing the folder is a request for less
+       chrome, not a request to stop being told which document is waiting on you — and a strip that
+       hides that is a strip you have to expand to check, every time. The number goes (nothing legible
+       fits on a 32px square) and the colour stays, which is the half that carries the meaning. */
+    body.nav-collapsed .nav-list a .meta { position:absolute; top:1px; right:1px; margin:0; gap:0; }
+    body.nav-collapsed .nav-list a .meta .ago { display:none; }
+    body.nav-collapsed .nav-list a .meta .nb.turn { min-width:0; width:7px; height:7px; padding:0;
+      font-size:0; box-shadow:0 0 0 1.5px var(--shell); }
+    body.nav-collapsed .nav-list a .meta .nb.dot { width:5px; height:5px; margin:1px; }
+    /* A strip has no room for the inbox, and no tabs to switch back with (they live in .nav-nav, which
+       the collapse removes). So the strip is always the documents, whatever view the panel was left on;
+       expanding restores it. */
+    body.nav-collapsed #navInbox { display:none; }
+    body.nav-collapsed #navList { display:flex; }
   }
   /* The document itself is the editor: edit rich text in place, no mode switch, no chrome. */
   /* pwd — the document's path, and the content header's title. It sits IN the header now rather than
@@ -324,6 +405,15 @@
      into its bare label text, which is what it does to any HTML it doesn't understand. */
   #doc .block[data-atomic] { position:relative; margin:22px 0; }
   #doc .block[data-atomic]:focus-within, #doc .block[data-atomic]:focus { outline:none; }
+  /* A diagram is only worth drawing at a size its labels can be read at. `max-width:100%` alone
+     shrank a six-node flow to fit a phone and produced 5px text — the picture was there and said
+     nothing, which Alex hit reading a brief on his phone. So the SVG keeps a MIN-WIDTH (set in
+     renderAtomic from its own intrinsic width and the smallest label size still worth reading) and
+     this box scrolls sideways when the two conflict. min-width beats max-width in CSS, which is the
+     whole mechanism: a diagram that fits legibly still shrinks to the column, and one that cannot
+     stops shrinking and starts scrolling. */
+  .fl-scroll { overflow-x:auto; overflow-y:hidden; overscroll-behavior-x:contain;
+    -webkit-overflow-scrolling:touch; }
   .fl { display:block; max-width:100%; height:auto; margin:0 auto; }
   .fl-box { fill:#fff; stroke:var(--line-strong); stroke-width:1.25; }
   .fl-label { font:13px/1 'Geist', ui-sans-serif, system-ui, sans-serif; fill:var(--ink); text-anchor:middle; }
@@ -804,9 +894,16 @@
           <path d="M11.4 7.9 13.5 10l-2.1 2.1"/></svg></button>
       </div>
       <div class="nav-nav">
+        <!-- Two ways to read the same folder: what is IN it, and what is still open across it. A
+             segmented pair rather than two buttons, because they are one choice and only one can be
+             true. The count rides on the inbox side, so the reason to go there is legible from here. -->
+        <div class="nav-tabs" role="tablist" aria-label="folder view">
+          <button role="tab" data-view="files" aria-selected="true">files</button>
+          <button role="tab" data-view="inbox" aria-selected="false">inbox<span class="n" id="navInboxCount"></span></button>
+        </div>
         <div id="navCrumb"></div>
-        <div class="nav-sect">
-          <span class="nav-label">documents</span>
+        <div class="nav-sect" id="navSect">
+          <span class="nav-label" id="navListLabel">documents</span>
           <div id="navSort">
             <button class="sortbtn" onclick="toggleSortMenu()" aria-haspopup="true" aria-expanded="false"
               title="Sort the folder"><span id="navSortLabel">spine</span><span class="car">▾</span></button>
@@ -816,6 +913,7 @@
       </div>
     </div>
     <div id="navList" class="nav-list"></div>
+    <div id="navInbox" class="nav-inbox" hidden></div>
   </nav>
   <!-- The panel's drag handle. Same contract as #railGrip: over the boundary, not a track of its own. -->
   <div id="navGrip" role="separator" aria-orientation="vertical" aria-label="Resize the folder panel" tabindex="0"></div>
@@ -1293,6 +1391,21 @@ async function backfillElement(id, element) {
 // ("Sign up\n\nVerify"). Making the block uneditable means that code path can never be reached for it,
 // rather than merely being unlikely. Their md0 is the ORIGINAL markdown, so serialize() emits the
 // source bytes verbatim on every save, in both the aligned and the block-count-changed path.
+// The floor a diagram is allowed to shrink to. Flow.render draws its labels at 13px (see .fl-label),
+// so a diagram scaled to s renders them at 13s; 11px is the smallest that still reads as a label on a
+// phone rather than as a smudge, which puts the floor at ~0.85 of the natural width. Below that the
+// box scrolls instead (.fl-scroll) — a picture you have to swipe beats one you cannot read.
+const FL_LABEL_PX = 13, FL_MIN_LABEL_PX = 11;
+function sizeFlow(svg) {
+  if (!svg) return;
+  // The intrinsic width flow.js laid the boxes out at. It rides on the width attribute and in the
+  // viewBox; read the attribute, and fall back to the viewBox so a future renderer dropping the
+  // attribute degrades to today's shrink-to-fit rather than to a diagram 0px wide.
+  let w = Number(svg.getAttribute('width'));
+  if (!(w > 0)) { const vb = (svg.getAttribute('viewBox') || '').split(/[\s,]+/); w = Number(vb[2]); }
+  if (!(w > 0)) return;
+  svg.style.minWidth = Math.round(w * (FL_MIN_LABEL_PX / FL_LABEL_PX)) + 'px';
+}
 function renderAtomic(el, b) {
   const t = b.token;
   const isFlow = t.type === 'code' && (t.lang || '').trim().toLowerCase() === 'flow';
@@ -1300,7 +1413,10 @@ function renderAtomic(el, b) {
 
   if (isFlow) {
     const { svg, nodes } = Flow.render(t.text || '');
-    el.innerHTML = svg + '<span class="fl-hint">click a node to comment</span>';
+    // The scroll box is the page's, not the renderer's: flow.js is pure string in, string out and has
+    // no idea how wide the column is. See .fl-scroll for why min-width is what enforces legibility.
+    el.innerHTML = `<div class="fl-scroll">${svg}</div><span class="fl-hint">click a node to comment</span>`;
+    sizeFlow(el.querySelector('svg.fl'));
     // Where the fence's CONTENT starts inside the document, so a node's offset within the fence
     // becomes an offset in state.markdown — which is what picks the right occurrence of a label that
     // also appears in the prose above.
@@ -2326,6 +2442,7 @@ function renderSide() {
   renderTurn();    // right cluster: open / orphaned counts
   renderPresence();// center: claude is here ↔ waiting for claude
   noteRailTraffic();// and the collapsed rail's "something arrived" badge
+  navSelfUpdate(); // and the panel's badge for this document, which a resolve just changed
   scheduleOrphanFlip();// …and the one timer that ends a grace window nothing else would end
   // Put the view back where it was. Twice on purpose: once now, and once after
   // the next frame, because dockCards repositions cards and autogrow resizes
@@ -2819,6 +2936,10 @@ const dirOf = (rel) => { const i = String(rel || '').lastIndexOf('/'); return i 
 let navDir = null;    // the folder currently LISTED, which the breadcrumb can walk away from the open doc
 let navData = null;   // the last /api/dir payload
 let navSort = 'spine';
+// Files or inbox. Remembered globally rather than per folder, unlike the sort: which ORDER a folder
+// wants is a fact about that folder, while working out of the inbox is how you are working today, and
+// having it flip back to files every time you follow a citation would undo the choice constantly.
+let navView = uiStore.get('navView', '') === 'inbox' ? 'inbox' : 'files';
 
 // The sort is remembered PER FOLDER: a project folder wants its spine on top, a folder of dated notes
 // wants the newest, and one preference cannot be both.
@@ -2865,27 +2986,98 @@ function navIcon(name) {
   return `<svg class="ic" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4"` +
     ` stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
 }
+// The row's right-hand marker, and the one thing the panel says about a document without opening it.
+//
+// A NUMBER means that many items are waiting on you (public/turn.js: an agent-last comment, a pending
+// suggestion). A DOT means the document has open items whose next move is the agent's. Nothing means
+// nothing is open. Three states rather than one count, because "3 open" on a document you have already
+// answered is a nag, and a folder where every row wears a number stops meaning anything.
+function navMarker(d) {
+  const turn = d.turn || 0, open = d.open || 0;
+  if (turn > 0) return `<span class="nb turn" title="${turn} waiting on you">${turn > 9 ? '9+' : turn}</span>`;
+  if (open > 0) return `<span class="nb dot" title="${open} open, waiting on claude"></span>`;
+  return '';
+}
 function renderNav() {
   if (!navData) return;
   renderCrumb();
+  const inbox = navView === 'inbox';
   $('navSortLabel').textContent = Nav.LABELS[navSort];
   $('navSortMenu').innerHTML = Nav.MODES.map(m =>
     `<button role="menuitemradio" aria-checked="${m === navSort}" data-mode="${m}">${esc(Nav.LABELS[m])}</button>`).join('');
+  // Sorting orders the FILE LIST; the inbox has its own order (waiting on you first, then whatever
+  // moved most recently), so the switcher goes away rather than sitting there doing nothing.
+  $('navSect').hidden = inbox;
+  $('navList').hidden = inbox;
+  $('navInbox').hidden = !inbox;
+  const waiting = navData.docs.reduce((n, d) => n + (d.turn || 0), 0);
+  $('navInboxCount').textContent = waiting ? (waiting > 9 ? '9+' : String(waiting)) : '';
+  for (const b of document.querySelectorAll('.nav-tabs button'))
+    b.setAttribute('aria-selected', b.dataset.view === navView ? 'true' : 'false');
   const docs = Nav.sort(navData.docs, navSort);
   $('navList').innerHTML = docs.length ? docs.map(d => {
     const i = d.name.lastIndexOf('.');
     const stem = i > 0 ? d.name.slice(0, i) : d.name;
     // The timestamp shows in the order that is ABOUT it. In spine order it would be three columns of
-    // noise in a 248px panel next to names that are already the point. It rides in `.meta`, the row's
-    // right-hand slot, which is where a your-turn count goes next.
-    const ago = navSort === 'updated' ? esc(timeAgo(d.mtime)) : '';
+    // noise in a 248px panel next to names that are already the point.
+    //
+    // It shares `.meta` with the badge rather than losing the slot to it, and the badge takes the outer
+    // edge. The two answer different questions — how stale is this, and does it want me — and the
+    // timestamp is only ever on screen in the order that is already sorting by it, so it is never the
+    // thing being scanned for. The badge is, so it sits where the eye stops.
+    const ago = navSort === 'updated' ? `<span class="ago">${esc(timeAgo(d.mtime))}</span>` : '';
     return `<a href="/?f=${encodeURIComponent(d.rel)}" data-rel="${esc(d.rel)}"` +
       `${d.rel === FILE ? ' class="on" aria-current="page"' : ''} title="${esc(d.name)}">` +
       navIcon(d.name) +
       `<span class="ini">${esc(stem.slice(0, 1))}</span><span class="nm">${esc(stem)}</span>` +
-      `<span class="meta">${ago}</span></a>`;
+      `<span class="meta">${ago}${navMarker(d)}</span></a>`;
   }).join('') : '<div class="nav-empty">No documents in this folder. The path above is live, in both directions.</div>';
+  renderInbox();
   revealOpenDoc();
+}
+// ---------- the inbox: everything still open in this folder ----------
+// The panel's other question. The file list says what is here; this says what is left, across all of
+// it, so a review that spans a brief and its research is one list instead of three visits.
+//
+// It is built from the SAME /api/dir payload the rows are (each document carries its live items), so
+// opening the inbox costs no fetch and it refreshes on exactly the events the badges do.
+function renderInbox() {
+  const groups = Turn.inbox(Nav.sort(navData.docs, 'spine'));
+  if (!groups.length) {
+    // Two different nothings, and conflating them would be a lie either way. A folder with no documents
+    // in it has no inbox to be empty; a folder of documents with everything settled is the good state
+    // and should read like one.
+    $('navInbox').innerHTML = navData.docs.length
+      ? `<div class="ib-empty"><b>All clear in this folder.</b>Every comment and suggestion here is settled. New ones show up in this list as they arrive.</div>`
+      : `<div class="ib-empty"><b>Nothing to read here yet.</b>This folder holds no documents. The path above is live, in both directions.</div>`;
+    return;
+  }
+  $('navInbox').innerHTML = groups.map(g => {
+    const rows = g.items.map(it => {
+      const when = it.at ? `<span class="when">${esc(timeAgo(Date.parse(it.at)))}</span>` : '';
+      return `<a class="ib-item${it.turn ? ' ib-turn' : ''}" href="/?f=${encodeURIComponent(g.rel)}"` +
+        ` data-rel="${esc(g.rel)}" data-id="${esc(it.id)}" title="${esc(it.quote)}">` +
+        `<span class="hd"><span class="who">${esc(it.by || '?')}</span>` +
+        `<span class="kind">${esc(it.kind)}</span>${when}</span>` +
+        `<span class="q">${esc(it.quote || 'no quote')}</span></a>`;
+    }).join('');
+    return `<div class="ib-group"><a class="ib-doc" href="/?f=${encodeURIComponent(g.rel)}"` +
+      ` data-rel="${esc(g.rel)}" title="${esc(g.name)}"><span class="nm">${esc(g.name)}</span>` +
+      `<span class="n">${g.turn ? g.turn + ' for you' : g.open + ' open'}</span></a>${rows}</div>`;
+  }).join('');
+}
+// The panel's numbers for the OPEN document, recomputed from the review this page is already holding.
+// The watcher would deliver the same answer a quarter of a second later, and a badge that lags the
+// click that changed it reads as broken — so a resolve here updates the row now and the fs event
+// confirms it. Same function the server ran, so the two cannot drift.
+function navSelfUpdate() {
+  if (!navData || !state || !state.review) return;
+  const d = navData.docs.find(x => x.rel === FILE);
+  if (!d) return;
+  const t = Turn.of(state.review, state.agent);
+  if (d.turn === t.turn && d.open === t.open && JSON.stringify(d.items) === JSON.stringify(t.items)) return;
+  d.turn = t.turn; d.open = t.open; d.items = t.items;
+  renderNav();
 }
 // A folder can be sixty documents long (this vault has one), and the open one is then somewhere below
 // the fold with nothing saying so. Scroll the PANEL to it, never the page: scrollIntoView would take
@@ -2896,6 +3088,9 @@ function renderNav() {
 // time they typed — the same mistake the rail made rebuilding itself on a presence heartbeat.
 let revealedFor = null;
 function revealOpenDoc() {
+  // Nothing to reveal while the list is the inbox: the row is in the DOM but display:none, so every
+  // measurement below reads zero and the panel would scroll itself to the top for no reason.
+  if (navView !== 'files') return;
   const key = navDir + '|' + FILE;
   if (revealedFor === key) return;
   revealedFor = key;
@@ -2915,6 +3110,24 @@ $('navList').addEventListener('click', (e) => {
   if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
   e.preventDefault();
   openDoc(a.dataset.rel);
+});
+// An inbox row names a document AND an item in it. Real hrefs again, so a modified click still opens
+// the document in a tab; a plain click lands on the anchored span with the card flashing beside it.
+$('navInbox').addEventListener('click', (e) => {
+  const a = e.target.closest && e.target.closest('a[data-rel]');
+  if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+  e.preventDefault();
+  const id = a.dataset.id || '';
+  // Already open: no swap, just the jump. openDoc's own early return would eat the anchor.
+  if (a.dataset.rel === FILE) { closeNavDrawer(); if (id) jumpToItem(id); return; }
+  openDoc(a.dataset.rel, id ? { anchor: id } : null);
+});
+$('nav').addEventListener('click', (e) => {
+  const b = e.target.closest && e.target.closest('.nav-tabs button[data-view]');
+  if (!b) return;
+  navView = b.dataset.view === 'inbox' ? 'inbox' : 'files';
+  uiStore.set('navView', navView);
+  renderNav();
 });
 $('navCrumb').addEventListener('click', (e) => {
   const b = e.target.closest && e.target.closest('button[data-dir]');
@@ -2967,6 +3180,7 @@ function resetDocState() {
   frameEl = null; frameNatural = null; frameGeometry = {}; frameAnchors = {}; frameScale = 1;
   pointerInFrame = false;
   pendingScrollY = null;    // a restore the outgoing document never got tall enough to satisfy
+  pendingAnchor = null;     // and an item id that belongs to the document being left
   hideTool(); hidePopover(); hideBanner(); toggleSheet(false); closeNavDrawer();
   lightbox.classList.remove('on');
   setStatus('');
@@ -3011,9 +3225,42 @@ function restoreScroll(y) {
   setTimeout(applyPendingScroll, 120);
   setTimeout(applyPendingScroll, 400);   // images and fonts land late and the height moves with them
 }
+// ---------- arriving at an ITEM rather than at a document ----------
+// The inbox lands on a span, not on a file, so the jump has to survive the same render timing the
+// scroll restore does: a markdown document is laid out synchronously and the first attempt lands, an
+// asset's element rects arrive over postMessage some frames later. Same shape as pendingScrollY —
+// try, then try again as the document acquires a height — and the same lifetime, cleared on a swap.
+//
+// It SCROLLS and FLASHES and does nothing else. Docking is the rail's own business (public/stability.js
+// may be holding a card frozen mid-reply, or inside a grace window), and forcing a re-dock to bring a
+// card into view would move the one thing the human might be typing into.
+let pendingAnchor = null;
+function jumpToItem(id) {
+  markAnchors();
+  document.querySelectorAll('.flash').forEach(m => m.classList.remove('flash'));
+  const els = anchorEls(id);
+  if (els.length) { els[0].scrollIntoView({ behavior: 'smooth', block: 'center' }); pulse(els); }
+  else if (isAsset()) {
+    // Inside the frame the flash is the picker's to draw; this side can only scroll to the rect.
+    sendFrame('pulse', { id });
+    const r = frameRectFor(id);
+    if (r) scrollTo({ top: Math.max(0, scrollY + r.top - innerHeight / 2), behavior: 'smooth' });
+  }
+  const card = $('side').querySelector('.card[data-id="' + cssId(id) + '"]');
+  if (card) pulse([card]);
+  // An orphan has no span in the document and no rect in the frame; its card is the whole of it, and
+  // flashing that is a successful arrival rather than a reason to keep retrying.
+  return !!(els.length || card);
+}
+function applyPendingAnchor() {
+  if (pendingAnchor && jumpToItem(pendingAnchor)) pendingAnchor = null;
+}
 // Load a document into the view we already have. No navigation, so the EventSource, the layout
 // preferences and the page itself survive; `FILE` is a let and every reader of it (the SSE filter, the
 // /assets rewriter, every api call) picks up the new value on its own.
+//
+// `opts.anchor` is an item id to land on, the inbox's way in, and it rides beside `opts.y` because they
+// are the same kind of thing: where in the incoming document the reader wants to be.
 async function openDoc(rel, opts) {
   const o = opts || {};
   if (!rel) return;
@@ -3034,6 +3281,14 @@ async function openDoc(rel, opts) {
   try { await reloadFile(); }             // applyState → renderPwd, renderDoc (frame or blocks), renderSide
   catch (e) { showBanner('Could not open ' + rel + '. ' + e.message, [{ label: 'OK', fn: () => {} }]); }
   restoreScroll(Number(o.y) || 0);        // the top, unless this is a back to somewhere
+  // Set after resetDocState (which clears it) so the arrival survives its own swap. The jump overrides
+  // the scroll restore above, which for an inbox click is a restore to the top of a document the reader
+  // never asked to see the top of.
+  pendingAnchor = o.anchor || null;
+  applyPendingAnchor();
+  requestAnimationFrame(applyPendingAnchor);
+  setTimeout(applyPendingAnchor, 200);
+  setTimeout(applyPendingAnchor, 700);    // an asset's rects cross a postMessage boundary
   if (dirOf(rel) !== navDir) await loadDir(dirOf(rel));
   else renderNav();           // same folder: only the current row moved
 }

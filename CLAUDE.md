@@ -5,7 +5,7 @@ For *driving* sidecar as an agent (reviewing a document with a human), see
 
 ## Shape
 
-No build step. Fifteen files carry the whole tool:
+No build step. Sixteen files carry the whole tool:
 
 | File | What it is |
 |---|---|
@@ -18,6 +18,7 @@ No build step. Fifteen files carry the whole tool:
 | `public/index.html` | The entire frontend: rendering, contenteditable editor, directory panel, review rail. |
 | `public/navsort.js` | The directory panel's ordering. Pure list in/out; no DOM, no dependency. |
 | `public/doclink.js` | Does a link in a document open IN sidecar, and which document. Pure string in/out. |
+| `public/turn.js` | Whose turn is it: the panel's badges and the inbox. Pure review in, counts + items out; `server.js` requires it too. |
 | `public/anchor.js` | The ONE content-anchor matcher, loaded by both the browser and Node. |
 | `public/stability.js` | What the rail shows while the document is rewritten under it: freeze, last known position, orphan grace. Pure; the clock is passed in. |
 | `public/serialize.js` | The tight-diff serialize/reindex round-trip, shared with the Node tests. |
@@ -146,6 +147,30 @@ has already deferred. A cold load has nothing remembered and behaves exactly as 
 Auto-migrating an anchor across a diff was considered and refused; `annotateOrphans` documents why
 silent re-anchoring picks the wrong target. Nothing here re-anchors anything. It buys the honest
 answer a few seconds so it can be delivered in place instead of somewhere else.
+
+## The folder says what is still waiting on you
+
+A badge on a panel row counts the items on that document whose next move is the HUMAN's: a live comment
+whose latest message is the agent's, and a pending suggestion, which only the human can decide. A
+document with open items that are the AGENT's move gets a neutral dot instead, and a document with
+nothing open gets nothing. Three states rather than one count, because a folder where every row wears a
+number stops meaning anything.
+
+`public/turn.js` is that rule and it is required by both sides, which is the point. The server is the
+only side that can see a document nobody has open, so `/api/dir` counts every document in the folder
+and sends the live items along for the Inbox; the page is the only side that knows about a resolve half
+a second before the file watcher does, so `navSelfUpdate` re-runs the same function over the open
+document's review after every render. Two answers to one question agree by being one function.
+
+The counting reads STORED status and nothing else. `public/stability.js`'s grace window is the client's,
+the server has no such state, and an item inside its window is being shown as open anyway — so
+`orphaned` counts as live on both sides and the badge and the rail can never disagree. An orphaned
+SUGGESTION is the one asymmetry: it is open but it is not your turn, because repairing an anchor is
+`sidecar reanchor` and the human cannot run it.
+
+The panel reads the sidecar RAW rather than through `loadReview`, which also migrates the pre-1.7
+`.review.*` names. Migrating a whole folder as a side effect of listing it is a rename nobody asked
+for, so a legacy-named or unparseable sidecar counts zero and its row still draws.
 
 ## Testing
 
