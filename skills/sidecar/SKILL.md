@@ -386,9 +386,9 @@ remembers which per folder: *spine* (`summary.md` first, `brief.md` second, then
 Each row carries a badge counting the items on that document whose next move is THEIRS: a live
 comment whose latest message is yours, plus every pending suggestion. A document with open items
 that are yours to move shows a neutral dot instead, and a settled document shows nothing. The
-panel's **Inbox** tab lists those open items across the whole folder, grouped by document; clicking
-one opens that document and lands on the anchored span. So they can see where the conversation
-stands without opening five documents, and your reply is what clears a row.
+panel's **inbox** tab (beside **files**) lists those open items across the whole folder, grouped by
+document; clicking one opens that document and lands on the anchored span. So they can see where the
+conversation stands without opening five documents, and your reply is what clears a row.
 
 **Relative links between documents open in sidecar.** Write `[the research](./market-research.md)`
 in a brief and a click on it loads that document in place, with browser back returning to the
