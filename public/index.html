@@ -485,6 +485,24 @@
     padding:0 6px; min-width:17px; text-align:center; }
   .tab.on .tc { background:#e4e4dc; }
   .side-list { display:flex; flex-direction:column; gap:8px; }
+  /* ---------- the full-height rail (desktop) ----------
+     The rail is the frame's right column now, the folder panel mirrored: it runs the full height of
+     the window and the header spans only the band between the two panels. The aside STAYS a grid
+     item — its content still sizes main, and the one shared scroll context is what lets dockCards
+     hold a card level with its anchor — the negative margin just extends it up over the 52px the
+     header no longer covers. The header's inset follows --rail-w the same way the body's follows
+     --nav-track, so a drag on the grip moves both edges together. */
+  @media (min-width: 781px) {
+    body:not(.no-nav):not(.rail-collapsed) header { margin-right:var(--rail-w); }
+    aside { margin-top:-52px; padding:0 20px 28px; }
+    #railGrip { top:-52px; }
+    /* The tabs are the rail's brand row now: 52px including the rule, full bleed past the aside's
+       padding, sticky at the top of the WINDOW — so the folder's brand row, the header and this row
+       put their three hairlines on the same pixel line across the application. */
+    .tabs { top:0; height:52px; align-items:center; margin:0 -20px; padding:0 14px;
+      border-bottom:1px solid var(--line); }
+    .side-list { margin-top:16px; }
+  }
   /* Docked layout (desktop, active tab): each card is absolutely placed level with its anchor by
      dockCards(), which also sets the list's height so the page can scroll to the last one. Cards keep
      left/right 0 so they still span the rail's width and measure the same height they did in flow. */
