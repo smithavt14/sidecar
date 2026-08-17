@@ -90,9 +90,11 @@
   /* 51px + the 1px rule = the same 52px band the panel's brand row is, rule included. Both are
      border-box, so the two hairlines land on the same pixel row and read as one line across the app. */
   .hwrap { position:relative; display:flex; align-items:center; gap:12px; height:51px; padding:0 20px; }
-  /* The title group. Nothing is absolutely centred over it any more (presence moved to the rail's
-     head band), so a long path truncates against the right cluster the way flex already does it. */
-  .htitle { display:flex; align-items:center; gap:10px; min-width:0; }
+  /* The title group, bounded so it can never run under the presence readout. That readout is
+     absolutely centred, so it exerts no pressure on the flow and a long path simply slid beneath it:
+     an asset's `read-only` tag and the word `claude` printed on top of each other at 1440. Half the
+     bar, less the widest half a readout gets, is where the title has to stop. */
+  .htitle { display:flex; align-items:center; gap:10px; min-width:0; max-width:calc(50% - 92px); }
   .hbrand { display:none; align-items:center; gap:8px; text-decoration:none; color:inherit; }
   body.no-nav .hbrand { display:flex; }
   .hbrand .mark, .nav-brand .mark { height:20px; width:auto; flex:none; display:block; }
@@ -698,13 +700,11 @@
   .turn { font-size:12.5px; color:var(--faint); display:flex; align-items:center; gap:5px; white-space:nowrap; }
   .turn:empty { display:none; }
   .turn .orphan { color:var(--fg); border-bottom:1.5px solid var(--yellow); cursor:pointer; }
-  /* the shared "are we in the room together?" readout — here ↔ waiting. It heads the review rail
-     (renderSide seats it in the tabs row), because the room it reports on is the conversation the
-     rail holds — the way a chat panel's own header names who is in it. */
-  .presence { margin-left:auto; pointer-events:none; min-width:0;
+  /* center of the navbar: the shared "are we in the room together?" readout — here ↔ waiting. The
+     header spans only the document column now, so the centre it takes is the centre of the PROSE. */
+  .presence { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); pointer-events:none;
     display:flex; align-items:center; gap:6px; font-size:12.5px; white-space:nowrap; }
   .presence .dot { width:7px; height:7px; border-radius:50%; flex:none; }
-  .presence .lbl { overflow:hidden; text-overflow:ellipsis; }   /* a narrow rail trims the label, never the dot */
   .presence.here { color:#6b6b64; font-weight:500; }
   .presence.here .dot { background:var(--yellow); box-shadow:0 0 0 1px var(--yellow-ring); }
   .presence.away { color:var(--muted); font-weight:500; }
@@ -713,11 +713,6 @@
   .presence.sent .dot { background:var(--muted); box-shadow:none; }
   @keyframes presPulse { 0%,100%{opacity:.35} 50%{opacity:1} }
   .presence.working .dot { animation:presPulse 1.4s ease-in-out infinite; }
-  /* The header's stand-in dot: only when the real readout is off screen — the collapsed rail on
-     desktop, and the phone, where the rail is a closed sheet. Same state rules, label as a title. */
-  .presence.mini { display:none; margin-left:0; }
-  @media (min-width: 781px) { body.rail-collapsed .presence.mini { display:flex; } }
-  @media (max-width: 780px) { .presence.mini { display:flex; } }
   /* Per-thread presence: the card the agent is answering right now. Just the label, plain body
      text with a shimmer sweeping through it — no chip, no dot, no spinner. The motion IS the
      signal. Appears when the agent's wait exit names the thread, clears when the reply lands
@@ -818,8 +813,15 @@
     .hwrap { padding:0 12px; height:calc(51px + env(safe-area-inset-top));
       padding-top:env(safe-area-inset-top); gap:8px; }
     #status { min-width:0; }
-    /* The full readout is in the sheet's tabs row down here, which is closed most of the time; the
-       header's mini dot (base rules) is what carries the state in the meantime. */
+    /* The readout is in the flow down here (see .presence below), so it pushes the title rather than
+       sitting on top of it, and the desktop bound would only starve a path that is already tight. */
+    .htitle { max-width:none; }
+    /* the absolute-center readout collides with the cramped mobile header, so drop it into the flow
+       as a compact dot-only chip beside the title — the dot's color/pulse still carries the state
+       (yellow=here, outline=away, filled=sent, pulsing=working); the label is hidden to save width. */
+    .presence { position:static; transform:none; gap:0; padding:5px; margin-left:-2px;
+      background:var(--fill); border-radius:99px; }
+    .presence .lbl { display:none; }
     #filelist { padding:28px 18px; }
     #popover { width:min(300px, calc(100vw - 24px)); }
     /* iOS Safari zooms into any focused input with font-size <16px (and won't zoom back). Pin to 16px. */
@@ -879,12 +881,9 @@
       <div id="pwd"></div>
       <div id="kind" class="kindtag"></div>
     </div>
+    <div id="presence" class="presence away"></div>
     <div class="spacer"></div>
     <div id="turn" class="turn"></div>
-    <!-- Presence lives in the rail's head band now, with the conversation it is about. This dot is
-         its stand-in for the states where that band is off screen: the collapsed rail, and the phone,
-         where the rail is a closed sheet most of the time. Same classes, so the state rules carry. -->
-    <div id="presenceMini" class="presence mini away" aria-hidden="true"><span class="dot"></span></div>
     <button id="railToggle" class="ghost iconbtn" onclick="toggleRail()" aria-controls="side" aria-expanded="true"
       title="Hide review panel" aria-label="Hide review panel"><svg viewBox="0 0 20 20" fill="none"
       stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -2456,11 +2455,6 @@ function renderSide() {
   const tabs = document.createElement('div'); tabs.className = 'tabs';
   const tab = (id, label, n) => `<button class="tab${sideTab === id ? ' on' : ''}" data-tab="${id}">${label}${n ? ` <span class="tc">${n}</span>` : ''}</button>`;
   tabs.innerHTML = tab('active', 'active', activeTop.length) + tab('archived', 'archived', archivedTop.length);
-  // Presence heads the rail, opposite the tabs: the room it reports on is the conversation this
-  // column holds. Rebuilt empty here; renderPresence (below, and on every presence event between
-  // rebuilds) is the one writer of its contents.
-  const pres = document.createElement('div'); pres.id = 'presence'; pres.className = 'presence away';
-  tabs.appendChild(pres);
   side.appendChild(tabs);
   const list = document.createElement('div'); list.className = 'side-list'; side.appendChild(list);
   if (sideTab === 'active') renderActive(list, activeTop, childSug);
@@ -2657,13 +2651,10 @@ function renderTurn() {
   el.innerHTML = orphaned
     ? `<span class="orphan" data-action="orphans" title="text moved or changed — re-anchor or resolve">${orphaned} orphaned</span>` : '';
 }
-// Head of the rail — the shared "are we in the room together right now?" readout. Lit while a
+// Center of the navbar — the shared "are we in the room together right now?" readout. Lit while a
 // `sidecar wait` is heartbeating presence; falls back to "waiting for claude" when no agent is watching.
-// The header's mini dot mirrors the state for the two layouts where the rail's head is off screen.
 function renderPresence() {
-  // The rail readout does not exist until the first renderSide; the header's mini dot always does.
-  const el = $('presence'), mini = $('presenceMini');
-  if (!el && !mini) return;
+  const el = $('presence'); if (!el) return;
   // Expired on our clock reads as away — a killed agent's last "working" ping must not glow forever.
   const live = state.presence && (!state.presence.until || state.presence.until > Date.now());
   const st = live && state.presence.state;
@@ -2674,11 +2665,8 @@ function renderPresence() {
   else if (st === 'watching') { cls = 'here'; txt = 'claude is here'; }          // watching; ball in Alex's court
   else if (done) { cls = 'sent'; txt = 'sent to claude'; }                       // review handed off, not "waiting"
   else { cls = 'away'; txt = 'waiting for claude'; }
-  if (el) {
-    el.className = 'presence ' + cls;
-    el.innerHTML = '<span class="dot"></span><span class="lbl">' + txt + '</span>';
-  }
-  if (mini) { mini.className = 'presence mini ' + cls; mini.title = txt; }
+  el.className = 'presence ' + cls;
+  el.innerHTML = '<span class="dot"></span><span class="lbl">' + txt + '</span>';
 }
 // Header orphan cue → open the sidebar and flash the orphaned cards (the doc-side fix for §6a: orphaned
 // items have no in-doc highlight, so they must never go silently missing).
