@@ -1287,6 +1287,17 @@ window.addEventListener('keydown', (e) => {
   e.preventDefault();      // Alt alone focuses the menu bar on Windows and Linux
   sendFrame('step', {});
 });
+// Shift held over the frame puts the asset in LINK MODE: its links read as links and a click follows one
+// (see the picker's STYLE and its click handler). Forwarded for the same reason Alt is, that the frame has
+// no focus until it is clicked, so the first press would otherwise do nothing.
+//
+// The key is only ever forwarded ON here. Turning it off is the picker's own keyup, its blur, and the true
+// state on every mouse event, because the press that got us here can be released anywhere: another
+// window, another tab, the rail. The clear below is the page's half of the same insurance.
+const sayLinkMode = (on) => { if (isAsset()) sendFrame('linkmode', { on: on }); };
+window.addEventListener('keydown', (e) => { if (e.key === 'Shift' && pointerInFrame) sayLinkMode(true); });
+window.addEventListener('keyup', (e) => { if (e.key === 'Shift') sayLinkMode(false); });
+window.addEventListener('blur', () => sayLinkMode(false));
 
 async function refreshFrame() {
   const el = frameEl, src = await pickerSource();
@@ -1331,13 +1342,32 @@ function frameItems() {
     .map(i => ({ id: i.id, element: i.anchor.element }));
 }
 // A frame rect in PAGE coordinates. The iframe's own bounding rect already carries the scale, so only
-// the offset inside the frame has to be scaled.
-function frameRectFor(id) {
-  const r = frameGeometry[id];
+// the offset inside the frame has to be scaled. Every rect the frame reports comes through here (an
+// item's, and a fragment target's), so the two cannot land in different coordinate spaces.
+function framePageRect(r) {
   if (!r || !frameEl) return null;
   const fr = frameEl.getBoundingClientRect();
   return { top: fr.top + r.top * frameScale, left: fr.left + r.left * frameScale,
     width: r.width * frameScale, height: r.height * frameScale };
+}
+function frameRectFor(id) { return framePageRect(frameGeometry[id]); }
+
+// What Shift+click would do with a link inside an asset: the label the header shows, and the action
+// itself. One function so the affordance and the click cannot disagree about what a link is. Four
+// answers, and only the first two are navigation: another document in this root (public/doclink.js
+// decides, and it refuses anything that climbs out of it), an outbound URL, a fragment in this asset,
+// and nothing sidecar follows (an absolute path, a mailto:, a file it does not review), which stays an
+// ordinary pick so the click still lands a comment rather than nothing at all.
+function frameLink(href) {
+  const s = String(href == null ? '' : href).trim();
+  if (!s) return null;
+  const to = DocLink.route(s, FILE);
+  if (to) return { label: 'open ' + to.rel.split('/').pop(), go: () => openDoc(to.rel) };
+  if (/^https?:\/\//i.test(s)) return { label: 'open ' + s.replace(/^https?:\/\//i, '').split('/')[0] + ' in a new tab',
+    go: () => window.open(s, '_blank', 'noopener,noreferrer') };
+  // A bare '#' is a wireframe's placeholder for a link that goes nowhere yet, so it is not one.
+  if (s.charAt(0) === '#' && s.length > 1) return { label: 'scroll to ' + s, go: () => sendFrame('reveal', { frag: s.slice(1) }) };
+  return null;
 }
 
 window.addEventListener('message', (e) => {
@@ -1362,21 +1392,39 @@ window.addEventListener('message', (e) => {
     // The cursor affordance: the header's status slot says what a click would land on. An asset never
     // saves, so the slot is free and it is already where the eye goes for document state. The depth is
     // the only sign that anything sits under the layer being pointed at, so it shows whenever the stack
-    // is deeper than one, along with the key that walks it.
+    // is deeper than one. Where the element sits in a link the slot also names the modifier and the
+    // destination, which is the half of the confusion the outline could not fix: the comment click and
+    // the navigating click looked identical, so hovering says which is which before either is spent.
+    //
+    // One modifier at a time, though. A named link takes the slot and ⌥ is learnt on the other nine
+    // tenths of a document, because the slot shares a header row with the presence line and a third
+    // clause runs into it.
     case 'hover': {
-      const to = m.label ? DocLink.route(m.href || '', FILE) : null;
+      const link = frameLink(m.href);
+      const deep = m.count > 1 ? '  ·  ' + m.depth + '/' + m.count : '';
       setStatus(!m.label ? ''
-        : to ? 'open ' + to.rel.split('/').pop()
-        : 'comment on ' + m.label + (m.count > 1 ? '  ·  ' + m.depth + '/' + m.count + '  ·  ⌥ steps deeper' : ''));
+        : m.link && link ? link.label
+        : link ? 'comment on ' + m.label + '  ·  ⇧ ' + link.label + deep
+        : 'comment on ' + m.label + deep + (deep ? '  ·  ⌥ steps deeper' : ''));
       break;
     }
     case 'open': openReview(m.id); break;
-    // A click on a link inside an asset follows it when it names another document in this root, and is
-    // an ordinary pick otherwise. The frame reports the href and the PAGE decides, because the rule is
-    // public/doclink.js and the frame is deliberately given one script and no way to fetch a second.
+    // A click on a link inside an asset follows it when SHIFT is held, and is an ordinary pick every
+    // other time. The frame reports the href and whether Shift was down; the PAGE decides, because the
+    // rule is public/doclink.js and the frame is deliberately given one script and no way to fetch a
+    // second. Shift is what Alex asked for after nine linked wireframes: a plain click has to stay the
+    // comment, since a nav bar is a thing to comment ON as often as a thing to click through.
     case 'pick': {
-      const to = DocLink.route(m.href || '', FILE);
-      if (to) openDoc(to.rel); else onFramePick(m);
+      const link = m.follow ? frameLink(m.href) : null;
+      if (link) link.go(); else onFramePick(m);
+      break;
+    }
+    // A fragment link scrolls this asset instead of loading anything. The frame is laid out at its full
+    // height and has no scrollport of its own, so it reports where the target sits and the page scrolls,
+    // on the same math and to the same place a jump to an item lands.
+    case 'revealed': {
+      const r = framePageRect(m.rect);
+      if (r) scrollTo({ top: Math.max(0, scrollY + r.top - innerHeight / 2), behavior: 'smooth' });
       break;
     }
   }

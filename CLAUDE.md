@@ -248,6 +248,16 @@ hover title in the UI.
   document's click handlers, the render that marks a link, and the asset frame's `pick`), so a rule
   added there is a rule all three follow. The frame reports the href out and the page decides, because
   the frame is given the picker and no way to fetch a second script.
+- Inside an asset, following a link takes **Shift**, and a plain click there is always the comment. The
+  frame is one picking surface, so a nav bar is as often a thing to comment on as a thing to click
+  through, and the two clicks looked identical while one of them silently navigated. `frameLink()` turns
+  one href into both the label the header shows and the action the click runs (a document in the root, an
+  outbound tab, a fragment scroll, or nothing sidecar follows, which stays an ordinary pick), so the
+  affordance and the click cannot disagree. While Shift is held the picker paints its own document
+  through an `sc-linkmode` class. It arrives three ways (the page forwards the key, the frame sees its own
+  once it has focus, and every mouse event carries the true state) and it clears on a keyup, on a blur,
+  and on the next movement over the frame, because a modifier whose keyup goes missing to a window switch
+  leaves every link in the asset looking live.
 - Safety properties that tests cover and should stay covered: atomic sidecar writes, merge-by-id never
   dropping the other side's work, decided statuses never regressing, path confinement to the served
   root, Host-header allowlisting, DOMPurify on rendered markdown, `git diff` run without a shell

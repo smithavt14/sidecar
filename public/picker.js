@@ -7,16 +7,21 @@
 
      in    init { items }        the review's element anchors, to resolve and mark
            step {}               Alt was tapped over the frame: outline one layer deeper
+           linkmode { on }       Shift is down over the frame: the asset's links read as links again
+           reveal { frag }       where does '#flags' sit, so the page can scroll to it
            pulse { id }          flash one element (the rail's quote was clicked)
            highlight { id }      hover cue (a card is hovered; null clears it)
      out   ready { width, height }        the natural canvas size, so the page can scale to its column
-           hover { label, depth, count, href }  what the cursor is over and where in the stack, for the
-                                          page's affordance; href is set when it sits inside a link
-           pick { candidates, label, text, rect, href }   a click on a bare element
+           hover { label, depth, count, href, link }  what the cursor is over and where in the stack, for
+                                          the page's affordance; href is set when it sits inside a link,
+                                          and link says whether link mode is on right now
+           pick { candidates, label, text, rect, href, follow }   a click on a bare element; follow is
+                                          Shift, the human asking for the link rather than a comment
            open { id }                    a click on an element that already carries an item
            geometry { rects }             per-item rects, which is what card docking reads
            anchors { anchors }            per-item resolved|missing, which is what orphan display reads
            backfill { id, element }       a refreshed { path, sig } for an anchor the page should store
+           revealed { rect }              where a `reveal` target sits, in this frame's coordinates
 
    The file is loaded two other ways and both matter. Node's tests `require()` it (like public/anchor.js)
    to exercise the pure half — candidate order, path building, signatures, resolution — without a
@@ -265,6 +270,10 @@
     /* The frame is one big picking surface, and the cursor is the only thing that says so before the
        first click. */
     'body { cursor: crosshair; }',
+    /* A link is the one thing the crosshair does not reach: the UA stylesheet puts a pointer on every
+       `a[href]`, so a wireframe's nav read as clickable while a click on it wrote a comment, which is
+       half of how the two clicks became indistinguishable. The picking surface includes the links. */
+    'html:not(.sc-linkmode) a[href], html:not(.sc-linkmode) a[href] * { cursor: crosshair; }',
     /* Yellow is the agent's colour everywhere else in sidecar; here it marks what the click will take.
        outline rather than border: it paints outside the box and reflows nothing, so a poster laid out
        to the pixel does not shift under the pointer. */
@@ -273,6 +282,17 @@
     '.sc-lit { outline: 3px solid #ffeb00 !important; outline-offset: 2px; }',
     '@media (prefers-reduced-motion: no-preference) { .sc-flash { animation: sc-flash 1.2s ease-out; } }',
     '@keyframes sc-flash { 0%, 100% { box-shadow: none; } 25% { box-shadow: 0 0 0 8px rgba(255,235,0,.5); } }',
+    /* LINK MODE, while Shift is held. Half of Alex's complaint about a set of linked wireframes was that
+       he could not tell the two clicks apart ("I'm unsure when I'm able to click on a link"), so the
+       modifier that follows a link says so the whole time it is down: the pointer comes back on the link
+       and on everything inside it, and the underline is forced because a wireframe's own nav sets
+       `text-decoration: none` on exactly these elements. */
+    'html.sc-linkmode a[href], html.sc-linkmode a[href] * { cursor: pointer !important; }',
+    'html.sc-linkmode a[href] { text-decoration: underline !important; text-decoration-thickness: 2px;',
+    '  text-decoration-color: currentColor; text-underline-offset: 2px; }',
+    /* The yellow outline is the promise that a click TAKES this element, and in link mode the click is
+       going to follow the link instead, so it drops: on the link, and on whatever inside it is outlined. */
+    'html.sc-linkmode a[href].sc-hover, html.sc-linkmode a[href] .sc-hover { outline: none !important; }',
   ].join('\n');
 
   function boot(win) {
@@ -282,6 +302,7 @@
     let resolved = {};              // id → element, refreshed on every render
     let hovered = null, lit = null;
     let stack = [], step = 0;       // the layers under the cursor, and how far down them Alt has walked
+    let linkMode = false;           // Shift is down: a click follows a link instead of commenting on it
 
     // targetOrigin '*' in both directions, and it has to be: the frame's origin is opaque, so the page
     // cannot name it, and the frame cannot name the page's. What actually authenticates the channel is
@@ -347,17 +368,32 @@
       }
       const depth = hovered ? stack.indexOf(hovered) + 1 : 0;
       const body = { label: hovered ? labelOf(hovered) : null, depth: depth, count: hovered ? stack.length : 0,
-        href: hovered ? linkHref(hovered) : '' };
+        href: hovered ? linkHref(hovered) : '', link: linkMode };
       const key = JSON.stringify(body);
       if (key === said) return;      // mousemove fires on every pixel; the page hears only real changes
       said = key;
       send('hover', body);
     }
 
+    // Link mode on or off. The class does the affordance (see STYLE) and the re-hover re-sends the
+    // status line, so the header stops saying "comment on a" the moment Shift goes down over a link,
+    // without the human having to move the cursor to be told.
+    function setLinkMode(on) {
+      const next = !!on;
+      if (next === linkMode) return;
+      linkMode = next;
+      doc.documentElement.classList.toggle('sc-linkmode', linkMode);
+      setHover(hovered);
+    }
+
     // The cursor moved: read the layers under it, and keep the step only while the layers are the same
     // ones. Both the outline and every pick run through here, so what a click takes is what the human
     // watched being outlined.
+    //
+    // Every mouse event carries the modifier's true state, so this is also where a link mode that got
+    // stuck (a keyup lost to a window switch) corrects itself: one movement over the frame is enough.
     function onPoint(e) {
+      setLinkMode(e.shiftKey);
       const next = stackAt(doc, e.clientX, e.clientY, e.target);
       if (!sameStack(next, stack)) { stack = next; step = 0; }
       setHover(stepped(stack, step));
@@ -377,6 +413,16 @@
       void el.offsetWidth;              // restart the animation on a second click of the same quote
       el.classList.add('sc-flash');
       win.setTimeout(() => el.classList.remove('sc-flash'), 1400);
+    }
+
+    // Where a fragment link points ('#flags'). The frame is laid out at its full natural height and so
+    // has no scrollport of its own (scrollIntoView in here moves nothing), which is why this reports a
+    // rect and the page does the scrolling. An id that is in no element says nothing back: that is a
+    // broken link in the asset, and a comment about it is the human's to write.
+    function reveal(frag) {
+      let el = null;
+      try { el = doc.getElementById(String(frag == null ? '' : frag)); } catch (e) {}
+      if (el) send('revealed', { rect: rectOf(el, win) });
     }
 
     // Which item, if any, already owns this element — so a second click on a discussed element opens
@@ -404,17 +450,24 @@
     doc.addEventListener('mousemove', (e) => { sayPointer(true); onPoint(e); }, true);
     doc.addEventListener('mouseover', (e) => { sayPointer(true); onPoint(e); }, true);
     doc.addEventListener('mouseout', (e) => { if (!e.relatedTarget) { sayPointer(false); setHover(null); } }, true);
-    win.addEventListener('blur', () => { sayPointer(false); setHover(null); });
+    // A frame that loses focus never sees the keyup, so link mode would stay on across a tab switch and
+    // come back to a document whose links all still look live.
+    win.addEventListener('blur', () => { sayPointer(false); setHover(null); setLinkMode(false); });
     // Alt reaches here only while the FRAME has focus, which it does not until it is clicked. The page
     // forwards the same key as a `step` message whenever the pointer is over the frame (public/index.html),
     // so the first press works too. e.repeat is dropped: holding Alt would spin through the stack.
+    // Shift arrives by the same two routes, for the same reason, and is a HOLD rather than a tap.
     doc.addEventListener('keydown', (e) => {
       if (e.key === 'Alt' && !e.repeat) { e.preventDefault(); stepDeeper(); }
+      else if (e.key === 'Shift') setLinkMode(true);
     }, true);
+    doc.addEventListener('keyup', (e) => { if (e.key === 'Shift') setLinkMode(false); }, true);
 
     doc.addEventListener('click', (e) => {
       // Every click, unconditionally. A link inside the frame would otherwise navigate the frame itself
-      // (which the sandbox permits) and replace the asset with whatever the URL resolves to.
+      // (which the sandbox permits) and replace the asset with whatever the URL resolves to, and a
+      // shift+click would ask Chrome for a second window on top of that. Following a link is the page's
+      // job either way: it happens in the viewer, in the route the file picker uses.
       e.preventDefault();
       e.stopPropagation();
       // The OUTLINED element, never the raw event target: after a step those are two different things,
@@ -422,15 +475,19 @@
       onPoint(e);
       const el = hovered;
       if (!el) return;
-      const id = itemOn(el);
+      const href = linkHref(el);
+      // Shift means "this is a link", which beats the element's own thread: a nav bar that has been
+      // commented on is exactly the thing a human then wants to click through, and reopening the card
+      // instead is how the nine wireframes became unreachable from each other.
+      const id = e.shiftKey && href ? null : itemOn(el);
       if (id) { flash(resolved[id]); return send('open', { id: id }); }
       const candidates = candidatesFor(el);
       // `href` rides on the pick rather than travelling as a message of its own, so the page makes ONE
-      // decision per click: follow the link if it names a document, and otherwise open the composer on
-      // the element. A separate `nav` message would have to guess here, and a guess that guessed wrong
-      // is a click that does nothing at all.
+      // decision per click: follow the link if `follow` is set and the href names somewhere it can go,
+      // and otherwise open the composer on the element. A separate `nav` message would have to guess
+      // here, and a guess that guessed wrong is a click that does nothing at all.
       send('pick', { candidates: candidates, label: candidates[0].label,
-        text: snippet(textOf(el)), rect: rectOf(el, win), href: linkHref(el) });
+        text: snippet(textOf(el)), rect: rectOf(el, win), href: href, follow: !!(e.shiftKey && href) });
     }, true);
     doc.addEventListener('dragstart', (e) => e.preventDefault(), true);
 
@@ -440,6 +497,8 @@
       const name = m.type.slice(8);
       if (name === 'init') { items = m.items || []; render(); }
       else if (name === 'step') stepDeeper();
+      else if (name === 'linkmode') setLinkMode(m.on);
+      else if (name === 'reveal') reveal(m.frag);
       else if (name === 'pulse') flash(resolved[m.id]);
       else if (name === 'highlight') {
         if (lit) lit.classList.remove('sc-lit');

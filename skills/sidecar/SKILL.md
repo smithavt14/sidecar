@@ -345,6 +345,13 @@ steps the outline one layer deeper and wraps at the bottom, with the depth shown
 (`img · 2/5`). So a comment can land on the background photograph under three overlays, and the
 element reference you get back is that photograph's.
 
+**A link inside an asset is held behind Shift.** A plain click always writes a comment, on a nav bar
+and a citation as much as on anything else; Shift+click follows the link, and while Shift is down the
+asset's links underline and take a pointer, so the two clicks are told apart before either is spent. A
+relative link naming another document in the served root opens in sidecar, an outbound URL opens a tab,
+and a fragment scrolls the asset it is already in. So a set of linked wireframes is walkable and their
+nav is still commentable.
+
 **You edit the file; the frame reloads.** There is no save, no accept, no splice: `suggest`, `answer`
 and `reanchor` all refuse an asset, because accepting a diff would mean splicing raw bytes into HTML.
 Change the markup yourself and `sidecar reply` that it is done, exactly as you would for a mechanical

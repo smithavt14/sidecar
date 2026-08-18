@@ -4159,8 +4159,8 @@ test('Alt steps the outline a layer deeper, and the click takes what is outlined
 
   move();
   assert.deepEqual({ ...hover(), type: undefined },
-    { type: undefined, label: 'scrim', depth: 1, count: 3, href: '' },
-    'the top of the stack by default, with the depth the page shows and no link under it');
+    { type: undefined, label: 'scrim', depth: 1, count: 3, href: '', link: false },
+    'the top of the stack by default, with the depth the page shows, no link under it, no link mode');
   assert.equal(scrim.classList.contains('sc-hover'), true);
 
   // The page forwards the key, because a keydown reaches the frame only once the frame has focus.
@@ -4221,8 +4221,19 @@ test('a citation inside an asset reaches the page as a pick carrying its href', 
   span.dispatchEvent(new win.MouseEvent('click', { bubbles: true, cancelable: true, clientX: 5, clientY: 5 }));
   const pick = sent.find(m => m.type === 'sidecar:pick');
   assert.equal(pick.href, './market-research.md', 'found from the deepest element, through its ancestors');
+  assert.equal(pick.follow, false, 'a plain click is the comment, whatever the href turns out to be');
   assert.deepEqual(DocLink.route(pick.href, from),
-    { rel: 'vault/projects/ccdc-portal/market-research.md', hash: '' }, 'and the page opens that document');
+    { rel: 'vault/projects/ccdc-portal/market-research.md', hash: '' }, 'and the page could open that document');
+
+  // Shift is what asks for the link. The page reads `follow` and routes the href; the frame's part is
+  // reporting both, and preventing the default, since Chrome's own shift+click would want a second window.
+  sent.length = 0;
+  const shifted = new win.MouseEvent('click', { bubbles: true, cancelable: true, clientX: 5, clientY: 5, shiftKey: true });
+  span.dispatchEvent(shifted);
+  const follow = sent.find(m => m.type === 'sidecar:pick');
+  assert.equal(follow.follow, true, 'shift+click asks the page to follow the link');
+  assert.equal(follow.href, './market-research.md');
+  assert.equal(shifted.defaultPrevented, true, 'and never navigates the frame or opens a window itself');
 
   // The poster's own call to action is an absolute path, which is a URL on this origin rather than a
   // path in the served root — so it stays an ordinary pick and the composer opens on it.
@@ -4232,6 +4243,71 @@ test('a citation inside an asset reaches the page as a pick carrying its href', 
   const second = sent.find(m => m.type === 'sidecar:pick');
   assert.equal(second.href, '/start');
   assert.equal(DocLink.route(second.href, from), null);
+  dom.window.close();
+});
+
+test('shift puts the asset in link mode, and it comes back out of it', () => {
+  // The other half of the complaint: a click that navigates and a click that comments looked identical.
+  // While shift is down the frame carries a class the picker's own stylesheet paints links with, the
+  // hover report says link mode is on so the page's status slot can name the destination, and a click
+  // follows the link even where the element already carries a thread.
+  const linked = POSTER.replace('<footer>© 2026 spktr</footer>',
+    '<footer><a href="my-zone.html" id="nav">my zone</a></footer>');
+  const { win, doc, sent, say, dom } = bootFrame(linked);
+  const nav = doc.querySelector('#nav');
+  const html = doc.documentElement;
+  const hover = () => sent.find(m => m.type === 'sidecar:hover');
+  doc.elementsFromPoint = () => [nav, doc.querySelector('footer'), doc.body];
+
+  // The page forwards the first press, because the frame has no focus until it is clicked.
+  say({ type: 'sidecar:linkmode', on: true });
+  assert.equal(html.classList.contains('sc-linkmode'), true);
+  assert.equal(hover().link, true, 'and the status slot is told without the cursor having to move');
+  say({ type: 'sidecar:linkmode', on: false });
+  assert.equal(html.classList.contains('sc-linkmode'), false);
+
+  // The frame's own keys do the same, so the two routes cannot drift.
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Shift', bubbles: true }));
+  assert.equal(html.classList.contains('sc-linkmode'), true);
+  doc.dispatchEvent(new win.KeyboardEvent('keyup', { key: 'Shift', bubbles: true }));
+  assert.equal(html.classList.contains('sc-linkmode'), false);
+
+  // A keyup lost to a window switch would leave every link in the asset looking live. Blur clears it,
+  // and so does the true modifier state on the next movement over the frame.
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Shift', bubbles: true }));
+  win.dispatchEvent(new win.Event('blur'));
+  assert.equal(html.classList.contains('sc-linkmode'), false, 'blur drops it');
+  doc.dispatchEvent(new win.MouseEvent('mousemove', { bubbles: true, clientX: 5, clientY: 5, shiftKey: true }));
+  assert.equal(html.classList.contains('sc-linkmode'), true, 'a move with shift down puts it back');
+  doc.dispatchEvent(new win.MouseEvent('mousemove', { bubbles: true, clientX: 6, clientY: 6 }));
+  assert.equal(html.classList.contains('sc-linkmode'), false, 'and a move without it clears a stuck one');
+
+  // An element that already carries an item: a plain click reopens its thread, shift follows the link.
+  // A commented nav bar is exactly what a human then wants to click through.
+  say({ type: 'sidecar:init', items: [{ id: 'c1', element: { sel: '#nav' } }] });
+  sent.length = 0;
+  nav.dispatchEvent(new win.MouseEvent('click', { bubbles: true, cancelable: true, clientX: 5, clientY: 5 }));
+  assert.equal(sent.find(m => m.type === 'sidecar:open').id, 'c1');
+  sent.length = 0;
+  nav.dispatchEvent(new win.MouseEvent('click', { bubbles: true, cancelable: true, clientX: 5, clientY: 5, shiftKey: true }));
+  assert.equal(sent.some(m => m.type === 'sidecar:open'), false, 'shift does not reopen the card');
+  assert.equal(sent.find(m => m.type === 'sidecar:pick').follow, true);
+  dom.window.close();
+});
+
+test('a fragment link reports where it points, for the page to scroll to', () => {
+  // '#flags' scrolls the asset it is already in. The frame is laid out at its full natural height and has
+  // no scrollport of its own, so the scroll belongs to the page and all the frame owes it is a rect.
+  const fragged = POSTER.replace('<footer>© 2026 spktr</footer>', '<footer id="flags">flags</footer>');
+  const { sent, say, dom } = bootFrame(fragged);
+
+  say({ type: 'sidecar:reveal', frag: 'flags' });
+  const at = sent.find(m => m.type === 'sidecar:revealed');
+  assert.ok(at && at.rect && typeof at.rect.top === 'number', "the target, in the frame's own coordinates");
+
+  say({ type: 'sidecar:reveal', frag: 'nothing-here' });
+  assert.equal(sent.some(m => m.type === 'sidecar:revealed'), false,
+    'an id in no element says nothing: that is a broken link in the asset, not a scroll to recover');
   dom.window.close();
 });
 
