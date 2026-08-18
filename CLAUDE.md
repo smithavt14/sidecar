@@ -92,6 +92,25 @@ inlined as the srcdoc's only script. Everything the page needs back out of the f
 size to scale by, per-item rects to dock cards by, picks — crosses a postMessage boundary, because the
 sandbox withholds this page's origin. `docs/adr/0001-asset-frame-isolation.md` has the why.
 
+**An asset does not keep the prose measure, and it has a zoom.** `#doc`'s 908px cap is what prose asked
+for, and a 1600px artboard read inside it is read at half size, so `renderDoc` puts an `asset` class on
+`#doc` and the cap comes off the element that carries it. Nothing breaks out of anything: a breakout
+wrapper would have to reconstruct the column width it was escaping, against a track two draggable
+panels move, and `#doc` already is that column. The header's control then chooses between `fit` (scale
+the canvas into the column, the default, remembered as `sc:assetZoom`) and `100%` (natural size, the
+wrapper scrolling sideways so the page never does). Three things `sizeFrame` keeps true across both:
+the wrapper carries the SCALED height, because a transform does not change layout size; the scroller
+class is toggled before the column is measured, or a fit computed against a width a leftover scrollbar
+narrowed comes out short and stays short; and where the platform draws classic scrollbars the
+horizontal bar sits inside that height, so what it took is measured and given back rather than
+reserved as a guess on every platform.
+
+Both zooms leave anchoring alone, which is what doing this with a transform buys. A click is hit-tested
+by the browser inside the frame and the picker reads `clientX`/`clientY` in the frame's own
+untransformed space, so no sidecar code turns a page coordinate into a frame one. The other direction is
+`framePageRect` and `onFramePick`'s `selRect`, and both multiply by the same `frameScale`; the wrapper's
+horizontal scroll rides along for free, since the iframe's bounding rect already carries it.
+
 ## What sidecar actually promises
 
 **100% local. You own it.** That's the whole pitch — nothing leaves the machine, no account, no
@@ -230,8 +249,8 @@ hover title in the UI.
 - Comments explain *why*, especially where the code looks odd — most of them record a real incident.
   Keep that when you change the surrounding code; delete them when the reason stops being true.
 - Layout preferences (each panel's width, whether it is collapsed, whether the review rail's width was
-  set by hand rather than filled, and the directory panel's sort, one key per folder) persist in
-  `localStorage` under an `sc:` prefix, through the wrapped `uiStore`. Safari in private mode throws
+  set by hand rather than filled, an asset's zoom, and the directory panel's sort, one key per folder)
+  persist in `localStorage` under an `sc:` prefix, through the wrapped `uiStore`. Safari in private mode throws
   on `setItem`, and nothing about a preference is worth an exception on the path that renders the
   review. Document and review state never go there; those are files.
 - The shell is the panel fixed to the window, the document inset past it, and the review rail taking

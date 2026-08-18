@@ -387,6 +387,17 @@
      growing the slack is symmetric margin around the text and never a band on one side of it. */
   #doc { max-width:908px; margin:0 auto; padding:30px 44px 40vh; min-width:0; outline:none;
     caret-color:var(--ink); color:var(--fg); }
+  /* An ASSET is not prose and has no reason to inherit the measure. A 1600px artboard read inside 820
+     of text column is read at half size, and half of a design is a different design — the type is
+     unreadable and the spacing is a guess. So the cap comes off, and the column the two panels leave
+     is the asset's to fill.
+     The cap is lifted on the element that CARRIES it rather than the asset breaking out of it. A
+     breakout wrapper would have to reconstruct the column width it is escaping (negative margins
+     against a track that two independently draggable panels move, plus a breakpoint where both
+     become overlays), and #doc already is that column — there is nothing to escape, only a measure
+     that prose asked for and a picture did not. The gutter narrows with it: the frame draws its own
+     edge, so the 44px reading margin is 40px of scale spent on nothing. */
+  #doc.asset { max-width:none; padding-left:24px; padding-right:24px; }
   #doc:focus, #doc *:focus { outline:none; }
   #doc h1 { font-size:31px; font-weight:600; letter-spacing:-.03em; color:var(--ink); margin:.2em 0 .55em; }
   #doc h2 { font-size:20px; font-weight:600; letter-spacing:-.02em; color:var(--ink);
@@ -441,12 +452,31 @@
      column with a transform (see sizeFrame). The wrapper carries the scaled height, because a
      transform does not change layout size and the page would otherwise scroll to the unscaled one. */
   #doc .asset-wrap { position:relative; margin:10px 0 0; }
+  /* At 100% nothing is scaling the canvas any more, so a design wider than the column overflows for
+     real. The WRAPPER takes that scroll, never the page: a body scrolling sideways moves the header,
+     the rail and every docked card with it. `overscroll-behavior-x` keeps a trackpad swipe that runs
+     out of asset from becoming the browser's back gesture. */
+  #doc .asset-wrap.zoomed { overflow-x:auto; overflow-y:hidden; overscroll-behavior-x:contain;
+    -webkit-overflow-scrolling:touch; }
   #doc iframe.asset-frame { display:block; border:0; transform-origin:top left; background:#fff;
     border-radius:12px; box-shadow:var(--shadow); }
   /* the document column's read-only tell, beside the filename in the header */
   .kindtag { font-size:10.5px; font-weight:600; letter-spacing:.05em; text-transform:uppercase;
     color:var(--muted); background:var(--fill); border-radius:6px; padding:3px 8px; white-space:nowrap; }
   .kindtag:empty { display:none; }
+  /* The asset's zoom. A segmented pair, same shape as the panel's view tabs, because it is the same
+     kind of choice: two states and only one can be true. It sits inside .htitle so the title group's
+     cap bounds it too — outside, a fixed-width control after a capped group runs under the centred
+     presence readout, which is the collision that cap exists to prevent. flex:none, so the path
+     ellipsises around it the way it already does around the kind tag. */
+  .zoomctl { display:flex; flex:none; gap:2px; padding:2px; border-radius:8px; background:var(--fill); }
+  .zoomctl[hidden] { display:none; }
+  .zoomctl button { border:none; background:none; box-shadow:none; border-radius:6px;
+    padding:3px 8px; color:var(--muted); font:600 10.5px 'Geist', ui-sans-serif, sans-serif;
+    letter-spacing:.03em; }
+  .zoomctl button:hover { color:var(--ink); background:none; transform:none; }
+  .zoomctl button[aria-pressed="true"] { background:var(--bg); color:var(--ink);
+    box-shadow:0 1px 2px rgba(20,20,15,.06); }
   #doc table { border-collapse:collapse; } #doc td, #doc th { border:1px solid var(--line-2); padding:6px 11px; font-size:14px; }
   /* a document blockquote is CONTENT, not the agent — keep it monochrome (yellow is reserved) */
   #doc blockquote { border-left:2px solid var(--line-2); margin-left:0; padding-left:14px; color:var(--muted); }
@@ -813,6 +843,11 @@
     .hwrap { padding:0 12px; height:calc(51px + env(safe-area-inset-top));
       padding-top:env(safe-area-inset-top); gap:8px; }
     #status { min-width:0; }
+    /* The zoom control and the kind tag are both asset-only, and at 390px the two of them together
+       squeeze #pwd below its filename — which the title group exists to prevent. The tag is the wider
+       and the more redundant of the two down here (a phone offers no caret to explain the absence of),
+       so it drops its qualifier and the path keeps its name. */
+    .kindtag .ro { display:none; }
     /* The readout is in the flow down here (see .presence below), so it pushes the title rather than
        sitting on top of it, and the desktop bound would only starve a path that is already tight. */
     .htitle { max-width:none; }
@@ -880,6 +915,12 @@
     <div class="htitle">
       <div id="pwd"></div>
       <div id="kind" class="kindtag"></div>
+      <!-- Asset only, and painted by paintZoom. Prose has a measure rather than a zoom, so on a
+           markdown document this is not there at all. -->
+      <div id="zoom" class="zoomctl" role="group" aria-label="Zoom" hidden>
+        <button type="button" data-zoom="fit" aria-pressed="true" title="Scale the asset into the column">fit</button>
+        <button type="button" data-zoom="full" aria-pressed="false" title="Show the asset at its natural size">100%</button>
+      </div>
     </div>
     <div id="presence" class="presence away"></div>
     <div class="spacer"></div>
@@ -1130,7 +1171,10 @@ function applyState(s) {
 // tag beside the filename says "asset" on an HTML document, because the read-only surface is otherwise
 // an unexplained absence: no caret, no toolbar, nothing to blame.
 function renderPwd() {
-  $('kind').textContent = isAsset() ? 'asset · read-only' : '';
+  // Two spans rather than one string: on a phone the qualifier is dropped in CSS so the zoom control
+  // and the filename both fit. Static markup, no interpolation.
+  $('kind').innerHTML = isAsset() ? 'asset<span class="ro"> · read-only</span>' : '';
+  paintZoom();
   const p = state.pwd || FILE || '';
   const i = p.lastIndexOf('/');
   $('pwd').innerHTML = i >= 0
@@ -1184,6 +1228,7 @@ function renderDoc() {
   // markdown path, which would draw its source as text under an editable surface.
   if (state.kind === 'asset') {
     doc.contentEditable = 'false';
+    doc.classList.add('asset');     // drops the prose measure — see #doc.asset
     blocks = [];
     doc.appendChild(buildAssetFrame());
     refreshFrame();
@@ -1191,8 +1236,9 @@ function renderDoc() {
   }
   // Set on every markdown render, not once at boot: switching from an asset to a document in the same
   // view would otherwise leave the read-only surface the asset asked for, with no way to type in a
-  // document that is perfectly editable.
+  // document that is perfectly editable. The measure comes back for the same reason.
   doc.contentEditable = 'true';
+  doc.classList.remove('asset');
   const tokens = marked.lexer(state.markdown);
   blocks = []; let off = 0;
   for (const t of tokens) {
@@ -1308,21 +1354,36 @@ async function refreshFrame() {
 
 // Scale the natural canvas into the document column. A transform rather than a width: an asset is laid
 // out to the pixel (a 1080x1350 poster), so reflowing it to fit would review a different document.
+// Two zooms, and the transform is the whole difference between them (see assetZoom): `fit` scales the
+// canvas down to the column, `100%` leaves it alone and the wrapper scrolls it.
 function sizeFrame() {
   if (!frameEl || !frameNatural || !frameEl.parentElement) return;
-  const avail = frameEl.parentElement.clientWidth;
+  const wrap = frameEl.parentElement, full = assetZoom === 'full';
+  // Toggle the scroller BEFORE measuring. Coming back from 100% the wrapper may still be carrying a
+  // horizontal scrollbar, and a fit computed against a column reported narrower than it is comes out
+  // short and never recovers, because the next fit measures the same wrong width.
+  wrap.classList.toggle('zoomed', full);
+  const avail = wrap.clientWidth;
   // Zero is "layout has not run", never a real column width — `ready` can land while the page is in a
   // hidden pane or background tab, where committing 0 would pin the frame at scale(0) until the next
   // window resize. Retry on a timer: rAF is precisely what a hidden page starves.
   if (!avail) { setTimeout(sizeFrame, 250); return; }
-  frameScale = Math.min(1, avail / Math.max(1, frameNatural.width));
+  frameScale = full ? 1 : Math.min(1, avail / Math.max(1, frameNatural.width));
   frameEl.style.width = frameNatural.width + 'px';
   frameEl.style.height = frameNatural.height + 'px';
   frameEl.style.transform = frameScale < 1 ? 'scale(' + frameScale + ')' : '';
   // A transform does not change layout size, so the wrapper carries the scaled height or the page
   // scrolls to the unscaled one and leaves a screen of blank below a tall poster.
-  frameEl.parentElement.style.height = Math.ceil(frameNatural.height * frameScale) + 'px';
-  // The line above is where an asset first HAS a height. A back into one restores its scroll position
+  const scaled = Math.ceil(frameNatural.height * frameScale);
+  wrap.style.height = scaled + 'px';
+  // Where the platform draws classic scrollbars rather than overlay ones, the horizontal bar is drawn
+  // INSIDE that height and takes the last rows of the asset with it. Measure what it actually took —
+  // zero on macOS, ~15px on Windows — instead of reserving a guess on every platform.
+  if (full) {
+    const bar = wrap.offsetHeight - wrap.clientHeight;
+    if (bar > 0) wrap.style.height = (scaled + bar) + 'px';
+  }
+  // The lines above are where an asset first HAS a height. A back into one restores its scroll position
   // here rather than in openDoc, where the frame is an empty box and every position clamps to zero.
   applyPendingScroll();
 }
@@ -2842,6 +2903,35 @@ const uiStore = {
   get(k, fallback) { try { const v = localStorage.getItem('sc:' + k); return v === null ? fallback : v; } catch { return fallback; } },
   set(k, v) { try { localStorage.setItem('sc:' + k, String(v)); } catch {} },
 };
+// ---------- the asset's zoom ----------
+// How big an asset is drawn is the reader's call, not the column's. `fit` scales the canvas into the
+// document column, which is what an asset has always done and stays the default; `100%` renders it at
+// the size it was designed at and lets the wrapper scroll sideways. Two states rather than a slider,
+// because those are the two questions actually being asked — does it all fit on screen, and what does
+// it really look like — and a percentage in between answers neither.
+//
+// One preference for the tool rather than one per document. Which of the two is useful is decided by
+// the display far more than by the file, and a key per document would have every new asset opening at
+// a default the reader has already overruled on every asset before it. It lives here because a zoom is
+// a layout preference like the two panel widths, and the store is the same.
+let assetZoom = uiStore.get('assetZoom', 'fit') === 'full' ? 'full' : 'fit';
+function setAssetZoom(z) {
+  assetZoom = z === 'full' ? 'full' : 'fit';
+  uiStore.set('assetZoom', assetZoom);
+  paintZoom();
+  // The frame's scale just changed, so every card docked against a rect inside it has moved.
+  if (isAsset()) { sizeFrame(); scheduleDock(); }
+}
+function paintZoom() {
+  const el = $('zoom');
+  if (!el) return;
+  el.hidden = !isAsset();
+  for (const b of el.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.zoom === assetZoom));
+}
+$('zoom').addEventListener('click', (e) => {
+  const b = e.target.closest && e.target.closest('button[data-zoom]');
+  if (b) setAssetZoom(b.dataset.zoom);
+});
 // ---------- the review rail: resizable, collapsible, remembered ----------
 const RAIL_MIN = 280;        // below this a card's diff and its buttons stop fitting side by side
 const RAIL_MAX_FRAC = 0.6;   // and past this the document is the sidebar
