@@ -332,6 +332,14 @@ scroll animation, so every arrow key inside one line would restart one.
 45% rather than the middle follows iA Writer and Ulysses: the eye wants the next few lines under the
 sentence being written, and the exact centre puts as much dead space below it as above.
 
+The caret is read as `focusNode`/`focusOffset` rather than by collapsing `getRangeAt(0)`. A Range is
+normalized to DOCUMENT ORDER, so collapsing one to its end hands back the anchor of a backward
+selection, and Shift+Up scrolled toward the sentence being left behind.
+
+`body.typewriter` puts 58vh under the document while the mode is on. 45% of the window means 55vh of
+space below the caret, `#doc` rests at 40vh (42vh on a phone), and the clamp quietly stopped the last
+line around 58% of the window: the mode's own promise, unreachable in the last paragraph.
+
 Three gates decide when to ask: the caret actually moved (`selectionchange` fires in bursts and on
 things that are not caret moves), the document has focus (typing into a reply box in the rail is not
 writing in the document, and re-centring the page under it drags the box away), and nothing has
@@ -346,7 +354,13 @@ from its mark's rect relative to the rail's, and a scroll moves both, so re-cent
 of the header go, and the column centres in the window. Escape or the same toggle comes back out
 (⌘⇧F either way). The document stays `contenteditable`, because leaving the mode to fix a typo is what
 stops a reading mode being used; what goes is the invitation, so `showTool()` refuses to raise the
-selection toolbar while reading.
+selection toolbar while reading, the composer closes on the way in, and tapping an anchor opens no card.
+
+**An unpainted mark must not be an island.** A `mark.anchor` is `contenteditable="false"` everywhere
+else, which is what makes it a clean tap target for its card. Invisible and untappable it would be an
+anchored sentence the caret could not enter, so `syncMarkEditing()` drops the attribute while reading
+and puts it back on the way out. It runs from both `setReading` and the tail of `markAnchors`, since
+marks are rebuilt on every render.
 
 Two things about how it is built. **Both tracks collapse to zero rather than being removed**: `--nav-track`
 and `--rail-w` already drive the body's inset, the grid's second column, the header's right margin and

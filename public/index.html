@@ -431,6 +431,11 @@
   /* Typewriter's icon carries its own state, since there is no column to watch move: pressed is the
      page's ink against the chrome's grey. */
   #typewriterToggle[aria-pressed="true"] { color:var(--ink); }
+  /* …and the document gets the room its last line needs. 45% of the window means 55vh of space below
+     the caret, and #doc rests at 40vh (42vh on a phone), so the final paragraph topped out at 60% and
+     the clamp ate the difference. Only while the mode is on: 58vh of blank under every document is a
+     tax on reading one. Both breakpoints in one rule, since it outranks either #doc. */
+  body.typewriter #doc { padding-bottom:58vh; }
   /* ---------- the directory panel ----------
      The folder the open document lives in, listed — and the application's frame. Fixed to the window
      rather than sitting in main's grid: full height, its own ground, one hairline down its right
@@ -3393,7 +3398,9 @@ function setReading(on) {
     document.body.classList.remove('reading-animating');
     relayoutDoc();      // the tracks have finished moving; re-measure against the real column
   }, READING_MS + 40);
-  if (on) hideTool();   // a selection can be live at the moment the mode starts
+  // A selection, or a comment composer, can be live at the moment the mode starts.
+  if (on) { hideTool(); hidePopover(); }
+  syncMarkEditing();
   paintReading();
   relayoutDoc();
 }
@@ -3452,6 +3459,10 @@ function setTypewriter(on) {
 }
 function toggleTypewriter() { setTypewriter(!typewriter); }
 function paintTypewriter() {
+  // The body class is what gives the document the room the last line needs (see the CSS): 40vh of
+  // bottom padding caps a final line at 60% of the window, so it could never reach 45% and the clamp
+  // quietly stopped short of the thing the mode promises.
+  document.body.classList.toggle('typewriter', typewriter);
   const btn = $('typewriterToggle');
   if (!btn) return;
   btn.setAttribute('aria-pressed', String(typewriter));
@@ -3465,9 +3476,15 @@ paintTypewriter();
 // answer precisely in the case it is needed (an empty block is one line tall).
 function caretRect() {
   const s = getSelection();
-  if (!s || !s.rangeCount) return null;
-  const r = s.getRangeAt(0).cloneRange();
-  r.collapse(false);
+  if (!s || !s.rangeCount || !s.focusNode) return null;
+  // Built from focusNode/focusOffset rather than by collapsing getRangeAt(0). A Range is normalized to
+  // DOCUMENT ORDER, so collapsing one to its end gives the anchor of a backward selection: extending a
+  // selection upward with Shift+Up scrolled toward the sentence being left behind instead of the line
+  // the caret was on. caretMoved() already keys off the focus; this makes the two agree.
+  const r = document.createRange();
+  r.setStart(s.focusNode, Math.min(s.focusOffset, s.focusNode.nodeType === 3
+    ? s.focusNode.length : s.focusNode.childNodes.length));
+  r.collapse(true);
   const rect = r.getClientRects()[0];
   if (rect && rect.height) return rect;
   const n = r.startContainer;
@@ -4409,6 +4426,17 @@ function markAnchors() {
     try { wrapAnchor(it.anchor.quote, it.anchor.occurrence || 0, it.id); }
     catch (e) { console.error('sidecar: failed to highlight', it.id, e); }
   }
+  syncMarkEditing();
+}
+// A mark is contenteditable:false everywhere else, which is what makes it a clean tap target for its
+// card. In reading mode there is no card to tap and the mark is not painted, so an anchored sentence
+// would be an invisible island the caret could not enter — the one thing the mode promises you can
+// still do. Called from both ends, because marks are rebuilt on every render.
+function syncMarkEditing() {
+  for (const m of $('doc').querySelectorAll('mark.anchor')) {
+    if (isReading()) m.removeAttribute('contenteditable');   // inherit #doc's own editability
+    else m.contentEditable = 'false';
+  }
 }
 // A diagram node whose label IS this item's quote gets the cue. Matched on the label rather than on
 // anything stored in the sidecar, so a node comment stays an ordinary comment on disk — an agent that
@@ -4429,6 +4457,7 @@ function markNodes(quote, id) {
 function pulse(nodes) { nodes.forEach(m => m.classList.add('flash')); setTimeout(() => nodes.forEach(m => m.classList.remove('flash')), 1400); }
 // Tap a highlight in the doc → open its review (sheet on mobile) and flash the matching card.
 $('doc').addEventListener('click', (e) => {
+  if (isReading()) return;   // the rail is not on screen; opening a card would drag it back on
   const m = e.target.closest && e.target.closest('mark.anchor');
   if (m && m.dataset.id) openReview(m.dataset.id);
 });

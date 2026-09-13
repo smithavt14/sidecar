@@ -5081,13 +5081,15 @@ function readingPage() {
   const doc = new JSDOM('<!doctype html><html><body><header><div class="hwrap">'
     + '<button id="readingToggle"></button></div></header></body></html>').window.document;
   const calls = [], timers = [];
-  const page = new Function('document', '$', 'closeNavDrawer', 'toggleSheet', 'hideTool', 'relayoutDoc',
-    'setTimeout', 'clearTimeout',
+  const page = new Function('document', '$', 'closeNavDrawer', 'toggleSheet', 'hideTool', 'hidePopover',
+    'syncMarkEditing', 'relayoutDoc', 'setTimeout', 'clearTimeout',
     READING_MODULE + '\nreturn { setReading, toggleReading, isReading, READING_MS };')(
     doc, (id) => doc.getElementById(id),
     () => calls.push('closeNavDrawer'),
     (v) => calls.push('toggleSheet:' + v),
     () => calls.push('hideTool'),
+    () => calls.push('hidePopover'),
+    () => calls.push('syncMarkEditing'),
     () => calls.push('relayoutDoc'),
     (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
     () => {});
@@ -5130,11 +5132,13 @@ test('the transition is 220ms and the class outlives it', () => {
 test('entering shuts the review overlays and drops a live selection; leaving shuts nothing', () => {
   const page = readingPage();
   page.setReading(true);
-  assert.deepEqual(page.calls, ['closeNavDrawer', 'toggleSheet:false', 'hideTool', 'relayoutDoc'],
-    'the drawer and the sheet belong to the review and cannot be left sitting on top of it');
+  assert.deepEqual(page.calls,
+    ['closeNavDrawer', 'toggleSheet:false', 'hideTool', 'hidePopover', 'syncMarkEditing', 'relayoutDoc'],
+    'the drawer, the sheet and the composer belong to the review and cannot sit on top of it');
   page.calls.length = 0;
   page.setReading(false);
-  assert.deepEqual(page.calls, ['relayoutDoc'], 'coming back out only re-measures');
+  assert.deepEqual(page.calls, ['syncMarkEditing', 'relayoutDoc'],
+    'coming back out hands the marks their tap target back and re-measures');
 });
 
 test('setting the mode it is already in does nothing at all', () => {
@@ -5210,4 +5214,64 @@ test('typewriter does not fight the reader, and only runs on the document', () =
     'a reply box in the rail is not the document, and an asset has no caret');
   assert.match(PAGE, /behavior: reduceMotion\(\) \? 'auto' : 'smooth'/, 'instant under reduced motion');
   assert.match(PAGE, /document\.addEventListener\('selectionchange', onCaretActivity\)/);
+});
+
+// ---- what the second reviewer found on PR 5 ----
+
+test('the caret rect is the FOCUS, not the document-order end of the selection', () => {
+  // A Range is normalized to document order, so collapsing one to its end hands back the ANCHOR of a
+  // backward selection. Shift+Up scrolled toward the sentence being left behind rather than the line
+  // the caret was on.
+  assert.match(PAGE, /const r = document\.createRange\(\);\n\s*r\.setStart\(s\.focusNode, Math\.min\(s\.focusOffset/,
+    'built from focusNode/focusOffset');
+  assert.ok(!/const r = s\.getRangeAt\(0\)\.cloneRange\(\);\n\s*r\.collapse\(false\);/.test(PAGE),
+    'and never by collapsing the live range to its end');
+  assert.match(PAGE, /lastCaret = \{ n: s\.focusNode, o: s\.focusOffset \};/,
+    'the same two fields caretMoved keys off, so the two cannot disagree');
+});
+
+test('typewriter gives the document the room its last line needs', () => {
+  // 45% of the window means 55vh of space below the caret. #doc rests at 40vh (42vh on a phone), so
+  // the final paragraph topped out around 60% and the clamp ate the difference.
+  assert.match(STYLE, /body\.typewriter #doc \{ padding-bottom:58vh; \}/);
+  assert.match(PAGE, /document\.body\.classList\.toggle\('typewriter', typewriter\);/,
+    'and the class follows the preference rather than being set once at boot');
+  // The arithmetic the 58vh is there to satisfy, run through the real module: a 5000px document in a
+  // 900px window, caret on the last line, scrolled from the top.
+  const V = 900, line = 22, H = 5000;
+  const lastLine = (pad) => {
+    const y = H - pad * V - line;                       // the last line's top, in document coordinates
+    return {
+      ideal: Math.round(y + line / 2 - V * Focus.RATIO),
+      got: Focus.target({ caretTop: y, caretHeight: line, viewportH: V, scrollY: 0, maxScroll: H - V }),
+      restsAt: (pad2) => Math.round(((y - Math.min(H - V, y + line / 2 - V * Focus.RATIO)) / V) * 100),
+    };
+  };
+  const tight = lastLine(0.40), roomy = lastLine(0.58);
+  assert.ok(tight.got < tight.ideal, 'at 40vh the clamp stops the last line short of 45%');
+  assert.equal(tight.restsAt(), 58, 'it rests around 58% instead, which is the bug the reviewer found');
+  assert.equal(roomy.got, roomy.ideal, 'at 58vh it gets all the way there');
+});
+
+test('an invisible mark is not an island: reading mode hands its text back to the caret', () => {
+  // A mark is contenteditable:false everywhere else, which is what makes it a tap target for its card.
+  // Unpainted and untappable, that would be an anchored sentence the caret could not enter — the one
+  // thing the mode promises you can still do.
+  assert.match(PAGE, /function syncMarkEditing\(\) \{[\s\S]*?if \(isReading\(\)\) m\.removeAttribute\('contenteditable'\);/);
+  assert.match(PAGE, /catch \(e\) \{ console\.error\('sidecar: failed to highlight', it\.id, e\); \}\n\s*\}\n\s*syncMarkEditing\(\);/,
+    'markAnchors syncs too, because marks are rebuilt on every render');
+  assert.match(PAGE, /\$\('doc'\)\.addEventListener\('click', \(e\) => \{\n\s*if \(isReading\(\)\) return;/,
+    'and tapping one does not drag the rail back on screen');
+});
+
+test('entering reading mode closes the comment composer as well as the toolbar', () => {
+  assert.match(PAGE, /if \(on\) \{ hideTool\(\); hidePopover\(\); \}/,
+    'an open popover would sit over the chrome-free page it was opened from');
+  const page = readingPage();
+  assert.ok(READING_MODULE.includes('hidePopover()'), 'and it is part of the block, not a caller\'s job');
+  page.setReading(true);
+  assert.ok(page.calls.includes('hidePopover'), 'called on the way in');
+  page.calls.length = 0;
+  page.setReading(false);
+  assert.ok(!page.calls.includes('hidePopover'), 'and not on the way out, where there is nothing to close');
 });
