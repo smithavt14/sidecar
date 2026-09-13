@@ -76,6 +76,9 @@ const rawGet = (pathname, host) => new Promise((resolve, reject) => {
 before(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-test-'));
   fs.writeFileSync(path.join(dir, 'doc.md'), DOC);
+  // A root that keeps its own .sidecar state gets its themes inside it (see THEMES_DIR in server.js),
+  // which is the branch worth testing: it is the one where a theme file is also a document.
+  fs.mkdirSync(path.join(dir, '.sidecar'), { recursive: true });
   execSync('git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm init', { cwd: dir });
   proc = spawn('node', [path.join(__dirname, 'server.js'), dir],
     { env: { ...process.env, SIDECAR_PORT: PORT }, stdio: 'pipe' });
@@ -4932,20 +4935,71 @@ const grab = (re, what) => {
   assert.ok(m, `the ${what} block is still findable`);
   return decls(m[1]);
 };
-const LIGHT = grab(/\n {2}:root \{\n([\s\S]*?)\n {2}\}\n/, 'light token');
-const DARK_MEDIA = grab(/:root:not\(\[data-theme="light"\]\) \{\n([\s\S]*?)\n {4}\}/, 'system dark');
-const DARK_ATTR = grab(/\n {2}:root\[data-theme="dark"\] \{\n([\s\S]*?)\n {2}\}\n/, 'chosen dark');
+// The stylesheet's :root carries the LAYOUT tokens and no colour at all: the two panel widths, the
+// measure, the prose size, the six type steps, the three radii and the caps tracking.
+const ROOT = grab(/\n {2}:root \{\n([\s\S]*?)\n {2}\}\n/, 'root token');
+// The palette itself — the SAME file index.html loads in <head> and server.js requires, so what these
+// tests read is what the page paints and what a theme file is validated against.
+const Themes = require('./public/themes.js');
+// What a rule on a light page actually resolves against: paper's colours over :root's sizes. The scale
+// tests below read the sizes out of it and the palette tests read the colours, which is how both halves
+// are asserted against one object the way the browser sees one cascade.
+const LIGHT = { ...ROOT, ...Themes.BUILTIN.paper.tokens };
+const DARK_ATTR = Themes.BUILTIN.ink.tokens;
+const BUILTINS = Object.entries(Themes.BUILTIN);
 
-test('the two dark blocks are one palette written twice, and cannot drift apart', () => {
-  assert.deepEqual(DARK_ATTR, DARK_MEDIA,
-    'the system-preference copy and the explicit-choice copy declare the same tokens at the same values');
-  assert.ok(Object.keys(DARK_ATTR).length > 30, 'and it is the whole palette, not a handful');
+test('every built-in declares every token, and nothing that is not one', () => {
+  // The palette used to be declared three times in CSS and this test's whole job was keeping the copies
+  // identical. It is declared once per theme now, so the job is that a theme is COMPLETE: a built-in
+  // with a token missing would fall back to paper's for that one value and read as a bug in whatever
+  // rule happened to use it.
+  assert.equal(Themes.TOKENS.length, 50, 'the token list is the palette, not a subset of it');
+  assert.equal(BUILTINS.length, 8, 'four light, four dark');
+  for (const [id, t] of BUILTINS) {
+    assert.ok(['light', 'dark'].includes(t.scheme), `${id} says which way round it is`);
+    assert.ok(typeof t.name === 'string' && t.name, `${id} has a name to show in the menu`);
+    for (const k of Themes.TOKENS) {
+      assert.ok(k in t.tokens, `${id} declares ${k}`);
+      assert.ok(Themes.validValue(t.tokens[k]), `${id}'s ${k} passes the same grammar a user's file does`);
+    }
+    for (const k of Object.keys(t.tokens)) assert.ok(Themes.TOKENS.includes(k), `${id}'s ${k} is a real token`);
+  }
+  // The grammar takes any comma-separated run of numbers, because that is what a shadow is. A COLOUR
+  // function is narrower, and a generated palette got this wrong: an alpha of 0 came out as
+  // `rgba(253,248,234,)`, which every browser drops on the floor and no test could see.
+  for (const [id, t] of BUILTINS) {
+    for (const [k, v] of Object.entries(t.tokens)) {
+      for (const fn of v.match(/(?:rgba?|hsla?)\([^()]*\)/g) || []) {
+        const args = fn.slice(fn.indexOf('(') + 1, -1).split(/[,/\s]+/).filter(Boolean);
+        assert.ok(args.length === 3 || args.length === 4, `${id}'s ${k} has ${args.length} arguments in ${fn}`);
+        for (const a of args) assert.match(a, /^-?[\d.]+%?$/, `${id}'s ${k}: ${a} is a number`);
+      }
+    }
+  }
+  assert.equal(BUILTINS.filter(([, t]) => t.scheme === 'light').length, 4);
+  assert.equal(Themes.DEFAULT.light, 'paper');
+  assert.equal(Themes.DEFAULT.dark, 'ink');
+  assert.deepEqual(Themes.ORDER.slice().sort(), Object.keys(Themes.BUILTIN).sort(),
+    'the menu order lists every built-in and nothing else');
 });
 
-test('every colour token has a dark value, and the two that must not move do not move', () => {
-  // The layout tokens carry no colour and are the same in every theme, so they are the exceptions.
-  // The type scale (--t-*), the radius scale (--r-*) and the caps tracking join them for the same
-  // reason --doc-space-* and --measure are already here: a size is a size in both themes.
+test('the three things that do not move between themes do not move in any of the eight', () => {
+  // YELLOW = THE AGENT, one hex everywhere: an agent that changed colour with the room would stop being
+  // a convention. An artboard is paper, because an asset is someone's own design built for a white
+  // page. Both were rules about two themes and are now the price of admission for any theme.
+  for (const [id, t] of BUILTINS) {
+    assert.equal(t.tokens['--yellow'], '#ffeb00', `${id} keeps the agent's yellow`);
+    assert.equal(t.tokens['--on-yellow'], '#2b2a20', `${id} keeps the ink that sits on it`);
+    assert.equal(t.tokens['--asset-canvas'], '#ffffff', `${id} keeps an artboard white`);
+    assert.match(t.tokens['--anchor-wash'], /^rgba\(255,235,0,/, `${id}'s anchor wash is the agent's`);
+    assert.match(t.tokens['--flash-fill'], /^rgba\(255,235,0,/, `${id}'s jump flash is too`);
+  }
+});
+
+test('every colour token has a dark value, and layout stays out of the palette', () => {
+  // The layout tokens carry no colour and are the same in every theme, so they live on :root and must
+  // not appear in a theme. The type scale (--t-*), the radius scale (--r-*) and the caps tracking join
+  // --doc-space-* and --measure there for the same reason: a size is a size in both themes.
   const LAYOUT = new Set(['--spring-press', '--rail-w', '--nav-w', '--nav-track', '--track-caps',
     '--prose-size', '--prose-floor']);
   const isLayout = (k) => LAYOUT.has(k) || k.startsWith('--doc-space-') || k === '--measure'
@@ -4955,50 +5009,285 @@ test('every colour token has a dark value, and the two that must not move do not
     assert.ok(k in DARK_ATTR, `${k} has a dark value`);
   }
   for (const k of Object.keys(DARK_ATTR)) assert.ok(k in LIGHT, `${k} is a real token, not a dark-only stray`);
-  // YELLOW = THE AGENT, one hex everywhere. An artboard is paper in both themes.
-  assert.equal(LIGHT['--yellow'], '#ffeb00');
-  assert.equal(DARK_ATTR['--yellow'], '#ffeb00');
-  assert.equal(DARK_ATTR['--on-yellow'], LIGHT['--on-yellow'], 'text on solid yellow stays dark');
-  assert.equal(DARK_ATTR['--asset-canvas'], '#ffffff');
-});
-
-test('neither ground is pure, and the dark one is genuinely dark', () => {
-  // iA Writer's rule, asserted rather than trusted: no #ffffff page under black ink, no #000000 page
-  // under white ink. --bg is the only place the page's own ground is set.
-  assert.notEqual(LIGHT['--ink'], '#000000');
-  assert.notEqual(DARK_ATTR['--bg'], '#000000');
-  assert.notEqual(DARK_ATTR['--ink'], '#ffffff');
-  const lum = (hex) => {
-    const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
-      .map(c => c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-  };
-  const contrast = (a, b) => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
-  assert.ok(lum(DARK_ATTR['--bg']) < 0.03, 'the dark ground is a ground, not a mid grey');
-  assert.ok(contrast(DARK_ATTR['--fg'], DARK_ATTR['--bg']) > 7, 'body copy clears AAA on the dark ground');
-  assert.ok(contrast(LIGHT['--fg'], LIGHT['--bg']) > 7, 'and still does on the light one');
-  // --shell is a surface of its own in both directions: one step off the page, never equal to it.
-  assert.notEqual(DARK_ATTR['--shell'], DARK_ATTR['--bg']);
-  assert.ok(lum(DARK_ATTR['--shell']) > lum(DARK_ATTR['--bg']), 'and on dark it steps LIGHTER');
-});
-
-test('no colour is hard-coded outside the palette', () => {
-  // The whole point of the second palette is that one edit moves the theme. A hex dropped into a rule
-  // is a thing that cannot follow it, so the stylesheet is scanned for them with the token blocks
-  // removed. Two literals are allowed and both are named here: a mask reads only alpha, and a shadow
-  // cast on the lightbox's own scrim never touches the page.
-  let rest = STYLE.replace(/\/\*[\s\S]*?\*\//g, '');
-  for (const re of [/\n {2}:root \{\n[\s\S]*?\n {2}\}\n/,
-                    /@media \(prefers-color-scheme: dark\) \{\n {4}:root:not\(\[data-theme="light"\]\) \{\n[\s\S]*?\n {4}\}\n {2}\}/,
-                    /\n {2}:root\[data-theme="dark"\] \{\n[\s\S]*?\n {2}\}\n/]) {
-    const before = rest.length;
-    rest = rest.replace(re, '');
-    assert.ok(rest.length < before, 'a token block was found and removed before the scan');
+  for (const k of Object.keys(ROOT)) assert.ok(isLayout(k), `${k} is on :root, so it had better be layout`);
+  for (const [id, t] of BUILTINS) {
+    for (const k of Object.keys(t.tokens)) assert.ok(!isLayout(k), `${id} does not carry the layout token ${k}`);
   }
+});
+
+const lum = (hex) => {
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map(c => c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+const contrast = (a, b) => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
+
+test('no built-in ground is pure, and every dark one is genuinely dark', () => {
+  // iA Writer's rule, asserted rather than trusted: no #ffffff page under black ink, no #000000 page
+  // under white ink. It was a claim about paper and ink; every built-in answers to it now.
+  for (const [id, t] of BUILTINS) {
+    assert.notEqual(t.tokens['--ink'], '#000000', `${id}'s ink is not pure black`);
+    assert.notEqual(t.tokens['--ink'], '#ffffff', `${id}'s ink is not pure white`);
+    assert.notEqual(t.tokens['--bg'], '#000000', `${id}'s ground is not pure black`);
+    assert.ok(contrast(t.tokens['--fg'], t.tokens['--bg']) > 7, `${id}'s body copy clears AAA on its own ground`);
+    assert.ok(contrast(t.tokens['--muted'], t.tokens['--bg']) > 3, `${id}'s secondary text is still readable`);
+    // --shell is a surface of its own in both directions: one step off the page, never equal to it.
+    assert.notEqual(t.tokens['--shell'], t.tokens['--bg'], `${id}'s panel is a surface, not the page`);
+    if (t.scheme === 'dark') {
+      assert.ok(lum(t.tokens['--bg']) < 0.03, `${id}'s ground is a ground, not a mid grey`);
+      assert.ok(lum(t.tokens['--shell']) > lum(t.tokens['--bg']), `${id}'s panel steps LIGHTER`);
+    } else {
+      assert.ok(lum(t.tokens['--bg']) > 0.7, `${id} is a light theme and reads like one`);
+    }
+  }
+  // The high-contrast pair earns its name against the pair it sits beside.
+  assert.ok(contrast(Themes.BUILTIN.contrast.tokens['--fg'], Themes.BUILTIN.contrast.tokens['--bg'])
+    > contrast(LIGHT['--fg'], LIGHT['--bg']), 'contrast out-contrasts paper');
+  assert.ok(contrast(Themes.BUILTIN['contrast-dark'].tokens['--fg'], Themes.BUILTIN['contrast-dark'].tokens['--bg'])
+    > contrast(DARK_ATTR['--fg'], DARK_ATTR['--bg']), 'and contrast dark out-contrasts ink');
+});
+
+test('no colour is hard-coded in the stylesheet at all', () => {
+  // The whole point of moving the palette into themes.js is that one file decides every colour. A hex
+  // dropped into a rule is a thing no theme can move, so the stylesheet is scanned for them with the
+  // one remaining token block removed. Two literals are allowed and both are named here: a mask reads
+  // only alpha, and a shadow cast on the lightbox's own scrim never touches the page.
+  let rest = STYLE.replace(/\/\*[\s\S]*?\*\//g, '');
+  const before = rest.length;
+  rest = rest.replace(/\n {2}:root \{\n[\s\S]*?\n {2}\}\n/, '');
+  assert.ok(rest.length < before, 'the token block was found and removed before the scan');
   const ALLOWED = ['#000 22px', '#000 22px', 'rgba(0,0,0,.45)'];
   const found = rest.match(/#[0-9a-f]{3,8}\b[^;,)]*|rgba?\([0-9.,\s]+\)/gi) || [];
   const stray = found.filter(f => !ALLOWED.includes(f.trim()));
   assert.deepEqual(stray, [], 'every colour in a rule comes from a token');
+  // And the dark palette is gone from the CSS rather than merely unused: a second copy of it here is a
+  // second thing to keep in step with themes.js.
+  assert.doesNotMatch(STYLE, /:root\[data-theme="dark"\] \{/, 'no dark token block survives in the CSS');
+  assert.doesNotMatch(STYLE, /prefers-color-scheme/, 'and no media query answers the question either');
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+   A THEME FILE IS SOMETHING A STRANGER WROTE
+   Every value in one ends up inside a custom property that rules all over the
+   page read, so the validator is a security boundary rather than a courtesy.
+   It is a parser, not a filter: a value is a hex, an rgb()/hsl(), a length or
+   a bare keyword, in any comma- or space-separated combination. Anything else
+   is not a value, which is why nothing below needs a blocklist to fail.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+test('the value grammar takes colours, lengths and shadows', () => {
+  for (const v of ['#fff', '#ffeb00', '#ffffffaa', 'rgba(20,20,15,.08)', 'rgb(255 255 0 / 50%)',
+    'hsl(45,100%,50%)', 'transparent', 'currentColor', '0px', '99px', '.06em', '50%',
+    '0 1px 2px rgba(20,20,15,.05), 0 10px 30px -20px rgba(20,20,15,.35)',
+    '0 0 0 3px rgba(255,255,255,.14)']) {
+    assert.ok(Themes.validValue(v), `${v} is a value`);
+  }
+});
+
+test('the validator refuses a value that is trying to be something else', () => {
+  const bad = [
+    'url(https://tracker.example/p.gif)',                 // the one function worth naming: it fetches
+    'url("data:image/svg+xml,<svg/>")',
+    'image-set("a.png" 1x)',
+    'red; } body { display:none } .x {',                  // escaping the declaration
+    '#fff</style><script>alert(1)</script>',              // escaping the element
+    '#fff" onload="alert(1)',
+    'expression(alert(1))',
+    'rgba(0,0,0,.5) /* */ url(x)',
+    'var(--bg)',                                          // no indirection: a value is a value
+    'attr(data-x)',
+    '',
+    '   ',
+    123,
+    null,
+    { toString() { return '#fff'; } },
+  ];
+  for (const v of bad) assert.equal(Themes.validValue(v), false, `${String(v)} is not a value`);
+  assert.equal(Themes.validValue('#fff '.repeat(60)), false, 'nor a wall of them');
+});
+
+test('a theme file is an object with a name, a scheme and tokens', () => {
+  assert.match(Themes.validate('a string').error, /JSON object/);
+  assert.match(Themes.validate(null).error, /JSON object/);
+  assert.match(Themes.validate([{ name: 'x' }]).error, /JSON object/, 'an array is not an object');
+  assert.match(Themes.validate({ name: 'x', scheme: 'light' }).error, /tokens/);
+  assert.match(Themes.validate({ name: 'x', scheme: 'light', tokens: [] }).error, /tokens/);
+  assert.match(Themes.validate({ name: 'x', scheme: 'beige', tokens: {} }).error, /light.*dark/);
+  assert.match(Themes.validate({ name: '<script>', scheme: 'light', tokens: {} }).error, /name/);
+  assert.match(Themes.validate({ name: 'x', scheme: 'light', tokens: { '--bg': 'url(x)' } }).error,
+    /--bg is not a colour/, 'a bad value names the token, since a human is editing this file');
+  // Unknown tokens are DROPPED rather than fatal: a token renamed in a later version must not turn
+  // every theme on somebody's disk into an error.
+  const ok = Themes.validate({ name: 'mine', scheme: 'dark', tokens: { '--bg': '#101010', '--nope': 'url(x)' } });
+  assert.equal(ok.error, undefined);
+  assert.deepEqual(ok.theme, { name: 'mine', scheme: 'dark', tokens: { '--bg': '#101010' } });
+});
+
+test('a theme with three colours in it is a whole palette by the time it is applied', () => {
+  // Missing tokens fall back to the built-in of the SAME scheme, which is what makes the format worth
+  // hand-editing: a file that changes the ground and the ink is a theme.
+  const t = { name: 'mine', scheme: 'dark', tokens: { '--bg': '#101010' } };
+  const r = Themes.resolve(t);
+  assert.equal(Object.keys(r).length, Themes.TOKENS.length);
+  assert.equal(r['--bg'], '#101010', 'what the file said');
+  assert.equal(r['--fg'], Themes.BUILTIN.ink.tokens['--fg'], 'and ink for everything it did not');
+  assert.equal(Themes.resolve({ scheme: 'light', tokens: {} })['--fg'], Themes.BUILTIN.paper.tokens['--fg']);
+  // resolve is also the last gate: a value that got past the file (it did not) cannot reach the page.
+  assert.equal(Themes.resolve({ scheme: 'light', tokens: { '--bg': 'url(x)' } })['--bg'], '#ffffff');
+});
+
+test('applying a theme writes inline properties, the scheme and color-scheme', () => {
+  const doc = new JSDOM('<!doctype html><html><body></body></html>').window.document;
+  Themes.apply(doc.documentElement, Themes.BUILTIN['slate-dark']);
+  const style = doc.documentElement.getAttribute('style');
+  for (const k of Themes.TOKENS) {
+    assert.equal(doc.documentElement.style.getPropertyValue(k),
+      Themes.BUILTIN['slate-dark'].tokens[k], k + ' is on the element');
+  }
+  assert.equal(doc.documentElement.getAttribute('data-theme'), 'dark',
+    'the RESOLVED scheme, which is what the wordmark inversion reads');
+  assert.match(style, /color-scheme: ?dark/, 'and native controls follow');
+  assert.doesNotMatch(style, /url\(|<|>/, 'nothing reaches the attribute that was not a token value');
+  Themes.apply(doc.documentElement, Themes.BUILTIN.sepia);
+  assert.equal(doc.documentElement.getAttribute('data-theme'), 'light', 'and it moves back');
+  assert.equal(doc.documentElement.style.getPropertyValue('--bg'), Themes.BUILTIN.sepia.tokens['--bg']);
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+   THE THEMES DIRECTORY
+   The fixture root keeps a `.sidecar` directory, so the server puts its themes
+   inside it — which is the branch that also makes a theme file openable in
+   sidecar. The XDG fallback is asserted against its own server below, because
+   the one thing a test must never do is write into somebody's real home.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+// realpathSync, because the server canonicalizes its root at boot and macOS puts /private in front of
+// every /var/folders temp dir. Comparing the two spellings is how this read as a bug in the location.
+const themesDir = () => path.join(fs.realpathSync(dir), '.sidecar', 'themes');
+const writeTheme = (name, body) => fs.writeFileSync(path.join(themesDir(), name),
+  typeof body === 'string' ? body : JSON.stringify(body, null, 2));
+
+test('the themes directory sits beside the root\'s own .sidecar state', async () => {
+  const d = await fetchRetry(`${BASE}/api/themes`).then(j);
+  assert.equal(d.dir, themesDir(), 'inside the served root, because this root keeps a .sidecar');
+  assert.ok(fs.existsSync(d.dir), 'and it exists, so there is somewhere to put a file');
+});
+
+test('the api lists a theme file, and hands back the path that opens it', async () => {
+  writeTheme('midnight.json', { name: 'midnight', scheme: 'dark', tokens: { '--bg': '#0b0c14' } });
+  const d = await fetchRetry(`${BASE}/api/themes`).then(j);
+  const t = d.themes.find(x => x.id === 'user:midnight.json');
+  assert.ok(t, 'the file is listed under an id that cannot collide with a built-in');
+  assert.equal(t.name, 'midnight');
+  assert.equal(t.scheme, 'dark');
+  assert.deepEqual(t.tokens, { '--bg': '#0b0c14' }, 'only what the file actually said');
+  assert.equal(t.rel, path.join('.sidecar', 'themes', 'midnight.json'),
+    'under the served root, so the page can open it as a document');
+});
+
+test('a file that is not a theme is reported rather than swallowed', async () => {
+  writeTheme('broken.json', '{ not json');
+  writeTheme('hostile.json', { name: 'hostile', scheme: 'light', tokens: { '--bg': 'url(https://x/p.gif)' } });
+  writeTheme('array.json', [1, 2, 3]);
+  const d = await fetchRetry(`${BASE}/api/themes`).then(j);
+  const err = (f) => (d.errors.find(e => e.file === f) || {}).error;
+  assert.match(err('broken.json'), /not valid JSON/);
+  assert.match(err('hostile.json'), /--bg is not a colour/, 'the token is named, since a human is editing it');
+  assert.match(err('array.json'), /JSON object/);
+  for (const f of ['broken.json', 'hostile.json', 'array.json']) {
+    assert.ok(!d.themes.some(t => t.id === 'user:' + f), f + ' is not offered as a theme');
+    fs.unlinkSync(path.join(themesDir(), f));
+  }
+});
+
+test('customize writes a copy of the theme and never overwrites the last one', async () => {
+  const body = { name: 'sepia', scheme: 'light', tokens: Themes.BUILTIN.sepia.tokens };
+  const r = await post('/api/themes', body).then(j);
+  assert.equal(r.id, 'user:sepia-custom.json');
+  assert.equal(r.rel, path.join('.sidecar', 'themes', 'sepia-custom.json'));
+  const written = JSON.parse(fs.readFileSync(r.file, 'utf8'));
+  assert.equal(written.name, 'sepia');
+  assert.equal(Object.keys(written.tokens).length, Themes.TOKENS.length,
+    'every token spelled out, so the file a human opens is the whole palette');
+  assert.equal(written.tokens['--yellow'], '#ffeb00');
+  // A second customize is a second file, because the first one is somebody's evening of tuning.
+  const again = await post('/api/themes', body).then(j);
+  assert.equal(again.id, 'user:sepia-custom-2.json');
+  fs.unlinkSync(again.file);
+});
+
+test('the write route is the same door a file on disk goes through', async () => {
+  const bad = await post('/api/themes', { name: 'x', scheme: 'light', tokens: { '--bg': 'url(x)' } });
+  assert.equal(bad.status, 400);
+  assert.match((await j(bad)).error, /--bg is not a colour/);
+  assert.equal((await post('/api/themes', { name: 'x' })).status, 400);
+  assert.equal((await post('/api/themes', [1, 2])).status, 400);
+  // A name that is a path is a name: the slug it lands under has no separators left in it.
+  const r = await post('/api/themes', { name: 'a b', scheme: 'light', tokens: {} }).then(j);
+  assert.equal(path.basename(r.file), 'a-b-custom.json');
+  assert.equal(path.dirname(r.file), themesDir(), 'and it lands in the themes directory, nowhere else');
+  fs.unlinkSync(r.file);
+  assert.equal((await post('/api/themes', { name: '../../etc/pwn', scheme: 'light', tokens: {} })).status, 400,
+    'a name full of separators is refused as a name before it is ever a path');
+});
+
+test('a theme file under the root opens in sidecar, as a fenced code block', async () => {
+  const rel = path.join('.sidecar', 'themes', 'midnight.json');
+  const s = await fetchRetry(`${BASE}/api/state?path=${encodeURIComponent(rel)}`).then(j);
+  assert.equal(s.kind, 'markdown', 'so the viewer builds the surface it knows how to edit');
+  assert.match(s.markdown, /^```json\n\{/, 'the bytes arrive inside a fence');
+  assert.match(s.markdown, /\n```\n$/);
+  // Saving it writes the JSON back out, fence removed, and the hash the client holds still matches.
+  const edited = s.markdown.replace('#0b0c14', '#141c0b');
+  const r = await put('/api/save', { path: rel, content: edited, baseHash: s.hash });
+  assert.equal(r.status, 200);
+  const raw = fs.readFileSync(path.join(dir, rel), 'utf8');
+  assert.match(raw, /^\{/, 'what lands on disk is JSON, not markdown');
+  assert.equal(JSON.parse(raw).tokens['--bg'], '#141c0b');
+  assert.equal((await j(r)).hash, sha_of('```json\n' + raw.trim() + '\n```\n'), 'and the next baseHash matches');
+  // The optimistic lock still bites on a stale save.
+  assert.equal((await put('/api/save', { path: rel, content: edited, baseHash: s.hash })).status, 409);
+});
+
+test('a .json that is not in the themes directory is still not a document', async () => {
+  fs.writeFileSync(path.join(dir, 'notatheme.json'), '{}');
+  const r = await fetchRetry(`${BASE}/api/state?path=notatheme.json`);
+  assert.equal(r.status, 400, 'or every doc.md.sidecar.json in the tree would be a document');
+  const d = await fetchRetry(`${BASE}/api/dir?path=`).then(j);
+  assert.ok(!d.docs.some(x => x.rel.endsWith('.json')), 'and the folder panel lists none of them');
+  fs.unlinkSync(path.join(dir, 'notatheme.json'));
+});
+
+test('with no .sidecar in the root, themes live under the config directory', async () => {
+  // The default for most installs, and the one place a test must not be casual: it runs against its own
+  // XDG_CONFIG_HOME so nothing is ever written into a real home.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-xdg-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-plain-'));
+  fs.writeFileSync(path.join(root, 'doc.md'), '# Doc\n');
+  const port = PORT + 3;
+  const p = spawn('node', [path.join(__dirname, 'server.js'), root],
+    { env: { ...process.env, SIDECAR_PORT: port, XDG_CONFIG_HOME: home, SIDECAR_THEMES: '' }, stdio: 'pipe' });
+  try {
+    await new Promise((res, rej) => {
+      p.stdout.on('data', (d) => { if (d.toString().includes('ready')) res(); });
+      p.on('exit', () => rej(new Error('server died')));
+      setTimeout(() => rej(new Error('never ready')), 8000);
+    });
+    const d = await fetch(`http://127.0.0.1:${port}/api/themes`).then(j);
+    assert.equal(d.dir, path.join(home, 'sidecar', 'themes'));
+    assert.ok(fs.existsSync(d.dir), 'created at boot, so there is somewhere to put a file');
+    assert.deepEqual(d.themes, []);
+    // Outside the served root there is no path sidecar can serve, so the page is told where it is.
+    const r = await fetch(`http://127.0.0.1:${port}/api/themes`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'ink', scheme: 'dark', tokens: {} }) }).then(j);
+    assert.equal(r.rel, null, 'and the toast prints the path instead of opening it');
+    assert.equal(r.file, path.join(home, 'sidecar', 'themes', 'ink-custom.json'));
+  } finally {
+    p.kill();
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -5397,113 +5686,195 @@ test('a collapsed card shows the agent replying, which is exactly when it is col
     'and reduced motion still cuts the sweep for both');
 });
 
-// The stamp itself. It is a bare IIFE over `localStorage` and `document`, so it can be run with both
-// handed in — which is how the throw an unavailable localStorage raises gets exercised at all.
+// The stamp itself. It is a bare IIFE over `localStorage`, `document` and `Themes`, so it can be run
+// with all three handed in — which is how the throw an unavailable localStorage raises gets exercised
+// at all, and how the real themes.js is what answers rather than a stand-in.
 const STAMP = (() => {
   const m = PAGE.match(/<script>\n([\s\S]*?Theme, before the first paint[\s\S]*?)\n<\/script>/);
   assert.ok(m, 'the pre-paint stamp is still in the page');
   return m[1];
 })();
+const runStamp = (cell) => {
+  const doc = new JSDOM('<!doctype html><html><body></body></html>').window.document;
+  new Function('localStorage', 'document', 'Themes', STAMP)(
+    { getItem: (k) => (k in cell ? cell[k] : null) }, doc, Themes);
+  return doc.documentElement;
+};
 
-test('the theme stamp runs in <head>, before anything the reader could see', () => {
+test('the theme stamp runs in <head>, after themes.js and before anything the reader could see', () => {
+  assert.ok(PAGE.indexOf('src="/themes.js"') < PAGE.indexOf('Theme, before the first paint'),
+    'the palette is loaded before the thing that applies it, or the stamp calls nothing');
   assert.ok(PAGE.indexOf('Theme, before the first paint') < PAGE.indexOf('<style>'),
-    'ahead of the stylesheet, so there is no white frame to repaint');
+    'ahead of the stylesheet, so there is no unpainted frame to repaint');
   assert.ok(PAGE.indexOf('Theme, before the first paint') < PAGE.indexOf('<body>'), 'and inside <head>');
 });
 
-test('the stamp honours a stored light or dark, and nothing else', () => {
-  const run = new Function('localStorage', 'document', STAMP);
-  const stamp = (stored) => {
-    const doc = new JSDOM('<!doctype html><html><body></body></html>').window.document;
-    run({ getItem: () => stored }, doc);
-    return doc.documentElement.getAttribute('data-theme');
-  };
-  assert.equal(stamp('dark'), 'dark', 'a chosen dark is stamped');
-  assert.equal(stamp('light'), 'light', 'and so is a chosen light, which has to beat a dark system');
-  assert.equal(stamp(null), null, 'no preference leaves the attribute off, so the media query answers');
-  assert.equal(stamp('system'), null, 'and so does the explicit system setting');
-  assert.equal(stamp('<script>'), null, 'anything else is not a theme and is ignored rather than echoed');
+test('the stamp puts a stored theme on the page before the first paint', () => {
+  // Nothing stored: paper, which is the palette sidecar shipped with.
+  let el = runStamp({});
+  assert.equal(el.getAttribute('data-theme'), 'light');
+  assert.equal(el.style.getPropertyValue('--bg'), Themes.BUILTIN.paper.tokens['--bg']);
+  // A chosen dark, wearing whatever theme that scheme was given.
+  el = runStamp({ 'sc:theme': 'dark', 'sc:themeDark': 'slate-dark' });
+  assert.equal(el.getAttribute('data-theme'), 'dark');
+  assert.equal(el.style.getPropertyValue('--bg'), Themes.BUILTIN['slate-dark'].tokens['--bg']);
+  assert.equal(el.style.getPropertyValue('--yellow'), '#ffeb00', 'the agent arrives with it');
+  assert.match(el.getAttribute('style'), /color-scheme: ?dark/);
+  // A chosen light beats a dark system, and the LIGHT slot is what it reads.
+  el = runStamp({ 'sc:theme': 'light', 'sc:themeLight': 'sepia', 'sc:themeDark': 'ink' });
+  assert.equal(el.style.getPropertyValue('--bg'), Themes.BUILTIN.sepia.tokens['--bg']);
+  // A theme id that is not a theme falls back to the scheme's default rather than painting nothing.
+  el = runStamp({ 'sc:theme': 'light', 'sc:themeLight': '<script>' });
+  assert.equal(el.style.getPropertyValue('--bg'), Themes.BUILTIN.paper.tokens['--bg']);
+  // A dark theme stored in the light slot is not a light theme: the slot decides the scheme.
+  el = runStamp({ 'sc:theme': 'light', 'sc:themeLight': 'ink' });
+  assert.equal(el.getAttribute('data-theme'), 'light');
+  assert.equal(el.style.getPropertyValue('--bg'), Themes.BUILTIN.paper.tokens['--bg']);
+});
+
+test('a user theme comes back from the cache without a frame of paper', () => {
+  // The stamp cannot read a file, so the page leaves the theme it applied where the stamp will look. It
+  // is re-validated through the same rules the server runs — the cache is the first door with a shorter
+  // walk, not a second door.
+  const cache = (id, tokens) => JSON.stringify({ id, theme: { name: 'mine', scheme: 'dark', tokens } });
+  let el = runStamp({ 'sc:theme': 'dark', 'sc:themeDark': 'user:mine.json',
+    'sc:themeCache:dark': cache('user:mine.json', { '--bg': '#120b1a' }) });
+  assert.equal(el.style.getPropertyValue('--bg'), '#120b1a', 'the file the reader was last wearing');
+  assert.equal(el.style.getPropertyValue('--fg'), Themes.BUILTIN.ink.tokens['--fg'],
+    'and ink underneath it for every token the file did not name');
+  // A cache for a DIFFERENT theme is not this theme.
+  el = runStamp({ 'sc:theme': 'dark', 'sc:themeDark': 'user:mine.json',
+    'sc:themeCache:dark': cache('user:other.json', { '--bg': '#120b1a' }) });
+  assert.equal(el.style.getPropertyValue('--bg'), Themes.BUILTIN.ink.tokens['--bg']);
+  // A cache somebody tampered with goes through validate and is refused, not applied.
+  el = runStamp({ 'sc:theme': 'dark', 'sc:themeDark': 'user:mine.json',
+    'sc:themeCache:dark': cache('user:mine.json', { '--bg': 'url(https://x/p.gif)' }) });
+  assert.equal(el.style.getPropertyValue('--bg'), Themes.BUILTIN.ink.tokens['--bg']);
+  el = runStamp({ 'sc:theme': 'dark', 'sc:themeDark': 'user:mine.json', 'sc:themeCache:dark': 'not json' });
+  assert.equal(el.style.getPropertyValue('--bg'), Themes.BUILTIN.ink.tokens['--bg']);
 });
 
 test('a localStorage that throws costs the page nothing', () => {
-  // Safari in private mode. The catch is the whole reason the stamp is wrapped.
-  const run = new Function('localStorage', 'document', STAMP);
+  // Safari in private mode. The catch is the whole reason the stamp is wrapped — and the page still has
+  // to arrive painted, since the palette is no longer in the stylesheet to fall back on.
   const doc = new JSDOM('<!doctype html><html><body></body></html>').window.document;
-  assert.doesNotThrow(() => run({ getItem() { throw new Error('blocked'); } }, doc));
-  assert.equal(doc.documentElement.getAttribute('data-theme'), null);
+  const run = new Function('localStorage', 'document', 'Themes', STAMP);
+  assert.doesNotThrow(() => run({ getItem() { throw new Error('blocked'); } }, doc, Themes));
+  assert.equal(doc.documentElement.style.getPropertyValue('--bg'), Themes.BUILTIN.paper.tokens['--bg']);
+  assert.equal(doc.documentElement.getAttribute('data-theme'), 'light');
 });
 
-// The page's own theme block — the store it writes through, the cycle, and the stamp it applies —
-// lifted out and run over a jsdom document. Asserting the cycle from the source told us the list had
-// three names in it and nothing about what a third click does, which is how a cycle that could not
-// reach dark passed.
+// The page's own theme block — the store it writes through, the menu, and the two per-scheme choices —
+// lifted out and run over a jsdom document. Asserting the behaviour from the source told us the list had
+// three names in it and nothing about what a third click does, which is how a cycle that could not reach
+// dark once passed.
 const THEME_MODULE = (() => {
-  const m = PAGE.match(/(const uiStore = \{[\s\S]*?applyTheme\(currentTheme\(\)\);)/);
+  const m = PAGE.match(/(const uiStore = \{[\s\S]*?\npaintTheme\(\);)/);
   assert.ok(m, 'the theme block is still one run of source in the page');
   return m[1];
 })();
 
 // `localStorage` and `$` are handed in, so the storage a private-mode Safari gives the page can be
-// handed in too. `document` is a real jsdom one carrying the button paintTheme writes into.
-function themePage({ localStorage, stamped } = {}) {
-  const doc = new JSDOM('<!doctype html><html><body><button id="themeToggle"></button></body></html>').window.document;
-  if (stamped) doc.documentElement.setAttribute('data-theme', stamped);
+// handed in too. `document` is a real jsdom one carrying the control the menu is drawn into.
+function themePage({ localStorage, system } = {}) {
+  const dom = new JSDOM('<!doctype html><html><body><div id="themeCtl">'
+    + '<button id="themeToggle"></button><div class="menu" id="themeMenu" hidden></div></div></body></html>');
+  const doc = dom.window.document;
+  // What the room is set to. jsdom answers false to every media query, so a dark system is stubbed.
+  dom.window.matchMedia = () => ({ matches: system === 'dark', addEventListener() {}, removeEventListener() {} });
   const written = [];
   const cell = new Map();
   const store = localStorage || {
     getItem: (k) => (cell.has(k) ? cell.get(k) : null),
     setItem: (k, v) => { cell.set(k, String(v)); written.push([k, String(v)]); },
   };
-  const page = new Function('document', 'localStorage', '$',
-    THEME_MODULE + '\nreturn { cycleTheme, currentTheme };')(
-    doc, store, (id) => doc.getElementById(id));
-  page.stamp = () => doc.documentElement.getAttribute('data-theme');
+  const page = new Function('document', 'window', 'localStorage', '$', 'Themes',
+    THEME_MODULE + '\nreturn { setThemeMode, setTheme, activeTheme, activeScheme, renderThemeMenu, '
+    + 'toggleThemeMenu, applyTheme, mode: () => themeMode, users: (u) => { userThemes = u; } };')(
+    doc, dom.window, store, (id) => doc.getElementById(id), Themes);
+  page.doc = doc;
+  page.bg = () => doc.documentElement.style.getPropertyValue('--bg');
+  page.scheme = () => doc.documentElement.getAttribute('data-theme');
   page.title = () => doc.getElementById('themeToggle').getAttribute('title');
+  page.items = () => [...doc.querySelectorAll('#themeMenu button')].map(b =>
+    ({ theme: b.dataset.theme, mode: b.dataset.mode, act: b.dataset.act,
+      on: b.getAttribute('aria-checked') === 'true' || b.getAttribute('aria-pressed') === 'true' }));
   page.written = written;
   return page;
 }
 
-test('clicking the toggle cycles system → light → dark → system', () => {
+test('the mode says which way round the page is and the theme says what it wears', () => {
   const page = themePage();
-  assert.equal(page.stamp(), null, 'a fresh install starts on system, which is no attribute at all');
+  assert.equal(page.mode(), 'system', 'a fresh install follows the room');
+  assert.equal(page.bg(), Themes.BUILTIN.paper.tokens['--bg'], 'which jsdom says is a light one');
+  assert.equal(page.title(), 'Theme: system · paper', 'and the button says both halves');
 
-  page.cycleTheme();
-  assert.equal(page.stamp(), 'light');
-  assert.equal(page.title(), 'Theme: light', 'and the button says which one it is on');
-
-  page.cycleTheme();
-  assert.equal(page.stamp(), 'dark');
-
-  page.cycleTheme();
-  assert.equal(page.stamp(), null, 'the third click hands the room back to the system');
-  assert.equal(page.currentTheme(), 'system');
-  assert.deepEqual(page.written, [['sc:theme', 'light'], ['sc:theme', 'dark'], ['sc:theme', 'system']],
-    'one key, written on every step');
+  page.setTheme('sepia');
+  assert.equal(page.bg(), Themes.BUILTIN.sepia.tokens['--bg'], 'a light theme lands on a light page');
+  page.setTheme('slate-dark');
+  assert.equal(page.bg(), Themes.BUILTIN.sepia.tokens['--bg'],
+    'choosing a dark theme by daylight sets tonight, and changes nothing on screen now');
+  page.setThemeMode('dark');
+  assert.equal(page.bg(), Themes.BUILTIN['slate-dark'].tokens['--bg'], 'and there it is');
+  assert.equal(page.scheme(), 'dark');
+  assert.equal(page.title(), 'Theme: slate dark');
+  assert.deepEqual(page.written, [['sc:themeLight', 'sepia'], ['sc:themeDark', 'slate-dark'],
+    ['sc:theme', 'dark']], 'three keys, each written when the thing it holds moved');
 });
 
-test('the cycle starts from what the pre-paint stamp already resolved', () => {
-  const page = themePage({ stamped: 'dark' });
-  assert.equal(page.currentTheme(), 'dark');
-  page.cycleTheme();
-  assert.equal(page.stamp(), null, 'dark comes back to system rather than restarting the list');
+test('system follows the room, and the room decides which of the two choices is on screen', () => {
+  const night = themePage({ system: 'dark' });
+  assert.equal(night.scheme(), 'dark');
+  assert.equal(night.bg(), Themes.BUILTIN.ink.tokens['--bg'], 'ink is what dark defaults to');
+  night.setTheme('sepia');
+  assert.equal(night.bg(), Themes.BUILTIN.ink.tokens['--bg'], 'a light theme chosen at night waits for morning');
+  night.setThemeMode('light');
+  assert.equal(night.bg(), Themes.BUILTIN.sepia.tokens['--bg'], 'an explicit light beats a dark system');
 });
 
-test('a storage that refuses every write still cycles the whole way round', () => {
-  // Safari in private mode: setItem throws and getItem keeps answering null. Deriving the next step
-  // from the store there applied light on the first click and light on every click after it, so dark
-  // and the way back to system could not be reached without a reload.
+test('a storage that refuses every write still applies every choice', () => {
+  // Safari in private mode: setItem throws and getItem keeps answering null. Deriving the next step from
+  // the store there moved once and then stopped forever.
   const page = themePage({ localStorage: { getItem: () => null, setItem() { throw new Error('blocked'); } } });
-  assert.doesNotThrow(() => page.cycleTheme());
-  assert.equal(page.stamp(), 'light');
-  page.cycleTheme();
-  assert.equal(page.stamp(), 'dark', 'dark is reachable with nothing persisted');
-  page.cycleTheme();
-  assert.equal(page.stamp(), null, 'and so is the way back to system');
+  assert.doesNotThrow(() => page.setTheme('contrast'));
+  assert.equal(page.bg(), Themes.BUILTIN.contrast.tokens['--bg']);
+  page.setThemeMode('dark');
+  assert.equal(page.bg(), Themes.BUILTIN.ink.tokens['--bg']);
+  page.setTheme('contrast-dark');
+  assert.equal(page.bg(), Themes.BUILTIN['contrast-dark'].tokens['--bg'], 'and the next one still lands');
 });
 
-test('the toggle is an icon in the header and writes through the one preference store', () => {
-  assert.match(PAGE, /id="themeToggle"[\s\S]{0,200}onclick="cycleTheme\(\)"/, 'the header carries the button');
-  assert.match(PAGE, /uiStore\.set\('theme', t\)/, 'and the choice goes through the one preference store');
+test('the menu lists the built-ins by scheme, the user themes with them, and one action', () => {
+  const page = themePage();
+  page.users({ 'user:mine.json': { name: 'mine', scheme: 'dark', tokens: { '--bg': '#101018' } } });
+  page.renderThemeMenu();
+  const items = page.items();
+  assert.deepEqual(items.filter(i => i.mode).map(i => i.mode), ['system', 'light', 'dark'],
+    'the mode is three icons across the top, where the header button used to cycle');
+  assert.deepEqual(items.filter(i => i.theme).map(i => i.theme),
+    ['paper', 'sepia', 'slate', 'contrast', 'ink', 'sepia-dark', 'slate-dark', 'contrast-dark', 'user:mine.json'],
+    'the light four, then the dark four, and a reader\'s own theme in its own group');
+  assert.equal(items.filter(i => i.act === 'customize').length, 1, 'one action, at the foot');
+  assert.deepEqual(items.filter(i => i.on).map(i => i.mode || i.theme), ['system', 'paper', 'ink'],
+    'the mode, and the theme each scheme is wearing — including the one not on screen');
+  // A swatch is the theme's own ground and ink, which is the only way a menu of names says anything.
+  const sw = page.doc.querySelector('#themeMenu button[data-theme="user:mine.json"] .sw');
+  assert.ok(sw, 'every row carries one');
+  // jsdom hands a colour back as rgb(), which is the same value the browser resolves it to.
+  assert.match(sw.getAttribute('style'), /rgb\(16, ?16, ?24\)|#101018/, 'painted from the theme it stands for');
+  page.setTheme('user:mine.json');
+  assert.deepEqual(page.written, [['sc:themeDark', 'user:mine.json'],
+    ['sc:themeCache:dark', JSON.stringify({ id: 'user:mine.json',
+      theme: Themes.expand({ name: 'mine', scheme: 'dark', tokens: { '--bg': '#101018' } }) })]],
+    'a user theme is chosen like any other, and cached so the next load does not flash');
+});
+
+test('the theme control is an icon and a menu in the header, and writes through the one store', () => {
+  assert.match(PAGE, /id="themeToggle"[\s\S]{0,200}onclick="toggleThemeMenu\(\)"/, 'the header carries the button');
+  assert.match(PAGE, /<div class="menu" id="themeMenu" role="menu" hidden>/, 'and the menu it opens');
+  assert.match(PAGE, /uiStore\.set\('theme', themeMode\)/, 'the mode goes through the one preference store');
+  assert.match(PAGE, /uiStore\.set\(t\.scheme === 'dark' \? 'themeDark' : 'themeLight', id\)/,
+    'and so does which theme wears each scheme');
   assert.ok(!/themeToggle[^>]*>[A-Za-z]/.test(PAGE.match(/<button id="themeToggle"[\s\S]*?<\/button>/)[0]),
     'no label text in the control — an icon and a title, like the two panel toggles beside it');
 });

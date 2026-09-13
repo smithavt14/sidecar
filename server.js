@@ -18,6 +18,10 @@ const Element = require('./lib/element.js');
 // (public/turn.js, loaded there via <script>) so a count computed here and one computed there can
 // never disagree.
 const Turn = require('./public/turn.js');
+// The palette, and the rules a theme file has to pass — the SAME file the page loads in <head>
+// (public/themes.js), so a theme the server accepts is a theme the browser can apply and the two can
+// never disagree about what a token is or what a legal value looks like.
+const Themes = require('./public/themes.js');
 
 // A terminal-style pwd for the doc: absolute path with $HOME collapsed to ~.
 function pwdFor(abs) {
@@ -185,6 +189,96 @@ app.get('/api/files', (req, res) => {
   res.json({ files, defaultFile: rootIsFile ? path.relative(BASE_DIR, ROOT) : null });
 });
 
+// ---------- themes on disk ----------
+// A theme is a file a human owns, in a directory they can find, in a format that is three fields of
+// JSON. Where it lives follows the one convention sidecar already has: state sits beside what it
+// belongs to. A served root that keeps a `.sidecar` directory gets its themes inside it, which makes
+// them versionable with the documents they are read against and — because they are then under the
+// root — openable in sidecar itself. Everything else falls back to the XDG location, since a theme is
+// the reader's rather than the folder's. SIDECAR_THEMES overrides both, the same env family as
+// SIDECAR_AGENT and SIDECAR_HOSTS.
+const THEMES_DIR = (() => {
+  if (process.env.SIDECAR_THEMES) return path.resolve(process.env.SIDECAR_THEMES);
+  const local = path.join(BASE_DIR, '.sidecar');
+  try { if (fs.statSync(local).isDirectory()) return path.join(local, 'themes'); } catch {}
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'sidecar', 'themes');
+})();
+// Created at boot rather than on the first write: the watcher below needs something to watch, and a
+// directory nobody can find is a format nobody can use. A read-only home is not a reason to fail.
+try { fs.mkdirSync(THEMES_DIR, { recursive: true }); } catch {}
+
+// A theme file's id is `user:<filename>`, which keeps a file called paper.json from becoming a second
+// paper in the menu. The filename came off readdir or off a slug, so it goes back through the same
+// kind of containment check a document path does before anything reads or writes it.
+const themeFile = (name) => {
+  const abs = path.resolve(THEMES_DIR, name);
+  if (path.dirname(abs) !== THEMES_DIR) throw new Error('path escapes the themes directory');
+  return abs;
+};
+function readThemes() {
+  const themes = [], errors = [];
+  let names = [];
+  try { names = fs.readdirSync(THEMES_DIR); } catch { return { themes, errors }; }
+  for (const name of names.sort()) {
+    if (!name.endsWith('.json') || name.startsWith('.')) continue;
+    let abs;
+    try { abs = themeFile(name); } catch { continue; }
+    let parsed;
+    try { parsed = JSON.parse(fs.readFileSync(abs, 'utf8')); }
+    catch (e) { errors.push({ file: name, error: 'not valid JSON' }); continue; }
+    const { theme, error } = Themes.validate(parsed);
+    if (error) { errors.push({ file: name, error }); continue; }
+    // `rel` is the document path the page would open it at, and it exists only when the file is under
+    // the served root. Outside it there is no path sidecar can serve, and the page says where it is.
+    const inRoot = abs.startsWith(BASE_DIR + path.sep);
+    themes.push({ id: 'user:' + name, name: theme.name, scheme: theme.scheme, tokens: theme.tokens,
+      file: abs, rel: inRoot ? path.relative(BASE_DIR, abs) : null });
+  }
+  return { themes, errors };
+}
+app.get('/api/themes', (req, res) => res.json({ dir: THEMES_DIR, ...readThemes() }));
+
+// "customize" in the theme menu: the palette on screen, written out as a file. The body is a whole
+// theme and goes through the same validator a file on disk does — a POST is not a shorter path into
+// that directory, it is the same door.
+app.post('/api/themes', (req, res) => {
+  const { theme, error } = Themes.validate(req.body);
+  if (error) return res.status(400).json({ error });
+  // The name the page sends already says 'custom'; the stem is that name, and the suffix is only added
+  // when it is missing, so customizing a custom theme does not land sepia-custom-custom.json.
+  const stem = Themes.slug(theme.name).replace(/-custom$/, '') + '-custom';
+  // A second customize of the same theme must not overwrite the first, which is somebody's evening of
+  // tuning. Take the next free number instead.
+  let name = stem + '.json', abs = themeFile(name);
+  for (let n = 2; fs.existsSync(abs) && n < 100; n++) { name = `${stem}-${n}.json`; abs = themeFile(name); }
+  fs.mkdirSync(THEMES_DIR, { recursive: true });
+  fs.writeFileSync(abs, JSON.stringify(Themes.expand(theme, theme.name), null, 2) + '\n');
+  const inRoot = abs.startsWith(BASE_DIR + path.sep);
+  res.json({ id: 'user:' + name, name: theme.name, scheme: theme.scheme, file: abs,
+    rel: inRoot ? path.relative(BASE_DIR, abs) : null });
+});
+
+/* A theme file is also a DOCUMENT, when it is under the served root — which is the whole point of
+   putting themes beside the documents when a root keeps its own `.sidecar` directory. Editing the
+   palette in the tool the palette paints is the feature, and it needs the file to open.
+   `.json` is not on either extension allowlist and must not be: adding it there would put every
+   `<doc>.sidecar.json` in the file picker. So the exception is exactly these files in exactly this
+   directory, and it is spelled as a path check rather than an extension one.
+   The bytes are wrapped in a ```json fence on the way out and unwrapped on the way back. The viewer
+   renders markdown, and JSON read as markdown is one paragraph whose newlines are gone the first time
+   it saves; inside a fence it is a code block that round-trips through turndown byte for byte. The
+   hash the optimistic lock compares is the FENCED form on both sides, so the client never has to know
+   any of this. A save whose fence the human broke is written through as typed rather than guessed at:
+   it is their file, and readThemes tells them it stopped being JSON. */
+const isTheme = (abs) => path.dirname(abs) === THEMES_DIR && abs.endsWith('.json')
+  && !path.basename(abs).startsWith('.');
+const fenceTheme = (abs, raw) => (isTheme(abs) ? '```json\n' + raw.replace(/\s+$/, '') + '\n```\n' : raw);
+const unfenceTheme = (abs, text) => {
+  if (!isTheme(abs)) return text;
+  const m = String(text).match(/^\s*```(?:json)?\n([\s\S]*?)\n?```\s*$/);
+  return m ? m[1].replace(/\s+$/, '') + '\n' : text;
+};
+
 // ---------- one directory's documents, for the left panel ----------
 // /api/files walks the WHOLE served tree and loads every review on the way — 474 documents in the
 // vault this runs against, which is a payload the panel would then throw nearly all of away. The
@@ -229,10 +323,10 @@ app.get('/api/state', (req, res) => {
   // (a .js, a .png) had the same door open. The kind rides along so the client knows which surface to
   // build, and `markdown` keeps its name for both kinds because every client build reads that field —
   // an asset's raw HTML arrives in it.
-  const kind = cli.docKind(abs);
+  const kind = cli.docKind(abs) || (isTheme(abs) ? 'markdown' : null);
   if (!kind) return res.status(400).json({ error:
     `sidecar reviews markdown and html assets, not ${path.extname(abs) || 'extensionless files'}` });
-  const markdown = fs.readFileSync(abs, 'utf8');
+  const markdown = fenceTheme(abs, fs.readFileSync(abs, 'utf8'));
   const review = loadReview(abs);
   // Only persist when orphan states actually changed — an unconditional write here
   // feeds the fs-watcher, which tells the client to reload, which calls this again: a storm.
@@ -248,13 +342,15 @@ app.get('/api/state', (req, res) => {
 // Assets never reach here. They are read-only in the viewer: no contenteditable, no serialize
 // round-trip, and the agent's own file writes are what change one. The guard is on the route rather
 // than left to the UI, because "the client never sends it" is not a property anything enforces.
-const READ_ONLY = (abs) => cli.docKind(abs) !== 'markdown'
+const READ_ONLY = (abs) => cli.docKind(abs) !== 'markdown' && !isTheme(abs)
   ? `${path.basename(abs)} is not an editable document — assets are read-only in the viewer` : null;
 
 app.put('/api/save', (req, res) => {
   const abs = safePath(req.body.path);
   const ro = READ_ONLY(abs); if (ro) return res.status(400).json({ error: ro });
-  const current = fs.existsSync(abs) ? fs.readFileSync(abs, 'utf8') : '';
+  // The fenced form for a theme file, because that is what the client was handed and what its baseHash
+  // was taken over. Every other document reads its own bytes.
+  const current = fs.existsSync(abs) ? fenceTheme(abs, fs.readFileSync(abs, 'utf8')) : '';
   // Optimistic lock: if the client says what it based its edit on, refuse to clobber a newer file.
   if (req.body.baseHash && sha(current) !== req.body.baseHash) {
     return res.status(409).json({ error: 'file changed on disk since load', hash: sha(current) });
@@ -265,9 +361,11 @@ app.put('/api/save', (req, res) => {
   // normalize incoming CRLF→LF first, then (for a CRLF file) LF→CRLF, so we never emit \r\r\n.
   const crlf = /\r\n/.test(current);   // dominant EOL; brand-new/empty file defaults to LF
   const normalized = req.body.content.replace(/\r\n/g, '\n').replace(/\n/g, crlf ? '\r\n' : '\n');
-  fs.writeFileSync(abs, normalized);
-  // hash is the sha of what we actually wrote, so the client's next baseHash matches on-disk.
-  res.json({ ok: true, hash: sha(normalized) });
+  const written = unfenceTheme(abs, normalized);
+  fs.writeFileSync(abs, written);
+  // hash is the sha of what we actually wrote, so the client's next baseHash matches on-disk. For a
+  // theme file that is the fenced form again, which is the shape the client holds.
+  res.json({ ok: true, hash: sha(fenceTheme(abs, written)) });
 });
 
 app.put('/api/review', (req, res) => {
@@ -449,6 +547,16 @@ chokidar.watch(BASE_DIR, {
   if (!isDoc(p) && !p.endsWith('.sidecar.json')) return;
   const rel = path.relative(BASE_DIR, p.replace(/\.sidecar\.json$/, ''));
   for (const c of clients) c.write(`data: ${JSON.stringify({ event, rel })}\n\n`);
+});
+// The themes directory gets its own watcher, because it is usually not inside the served root and the
+// one above only ever reports documents. A saved edit to a theme file reaches the page on the same
+// stream a document edit does, which is what makes editing a palette in sidecar repaint sidecar. `rel`
+// rides along when the file is under the root, so the open document reloads through the ordinary path.
+chokidar.watch(THEMES_DIR, { ignoreInitial: true, depth: 0 }).on('all', (event, p) => {
+  if (!p.endsWith('.json')) return;
+  const inRoot = p.startsWith(BASE_DIR + path.sep);
+  const msg = JSON.stringify({ event: 'themes', rel: inRoot ? path.relative(BASE_DIR, p) : undefined });
+  for (const c of clients) c.write(`data: ${msg}\n\n`);
 });
 
 // Terminal error handler — thrown errors (safePath escape, corrupt sidecar JSON.parse) become JSON,
