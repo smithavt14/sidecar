@@ -3104,17 +3104,29 @@ const THEME_ICON = {
   light: '<circle cx="10" cy="10" r="3.3"/><path d="M10 2.7v1.7M10 15.6v1.7M2.7 10h1.7M15.6 10h1.7M4.85 4.85 6.05 6.05M13.95 13.95l1.2 1.2M15.15 4.85l-1.2 1.2M6.05 13.95l-1.2 1.2"/>',
   dark: '<path d="M15.9 11.55A6.55 6.55 0 0 1 8.45 4.1a6.55 6.55 0 1 0 7.45 7.45Z"/>',
 };
-function currentTheme() {
+//
+// The live theme is `activeTheme`, and storage is a mirror of it. Safari in private mode throws on
+// setItem while getItem keeps answering null, so a cycle that re-read the store for its next step
+// would apply light, read `system` back on the next click, and apply light again forever: dark and
+// the way home to system both unreachable until a reload. The store decides where the cycle starts
+// and nothing after that.
+let activeTheme = readTheme();
+function readTheme() {
+  // The pre-paint stamp has already run and already resolved the same key, so its answer is taken
+  // first; a `system` install carries no attribute and falls through to the store's own default.
+  const stamped = document.documentElement.dataset.theme;
+  if (THEMES.includes(stamped)) return stamped;
   const t = uiStore.get('theme', 'system');
   return THEMES.includes(t) ? t : 'system';
 }
+function currentTheme() { return activeTheme; }
 function applyTheme(t) {
   if (t === 'system') document.documentElement.removeAttribute('data-theme');
   else document.documentElement.setAttribute('data-theme', t);
   paintTheme(t);
 }
-function setTheme(t) { uiStore.set('theme', t); applyTheme(t); }
-function cycleTheme() { setTheme(THEMES[(THEMES.indexOf(currentTheme()) + 1) % THEMES.length]); }
+function setTheme(t) { activeTheme = t; uiStore.set('theme', t); applyTheme(t); }
+function cycleTheme() { setTheme(THEMES[(THEMES.indexOf(activeTheme) + 1) % THEMES.length]); }
 function paintTheme(t) {
   const btn = $('themeToggle');
   if (!btn) return;

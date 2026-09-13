@@ -4879,13 +4879,75 @@ test('a localStorage that throws costs the page nothing', () => {
   assert.equal(doc.documentElement.getAttribute('data-theme'), null);
 });
 
-test('the toggle cycles system → light → dark and writes one key', () => {
-  // The cycle is a pure function of the list, so it is asserted from the page's own source rather
-  // than from a copy of it here.
-  const m = PAGE.match(/const THEMES = (\[[^\]]*\]);/);
-  assert.ok(m, 'the cycle is still a list');
-  const THEMES = JSON.parse(m[1].replace(/'/g, '"'));
-  assert.deepEqual(THEMES, ['system', 'light', 'dark']);
+// The page's own theme block — the store it writes through, the cycle, and the stamp it applies —
+// lifted out and run over a jsdom document. Asserting the cycle from the source told us the list had
+// three names in it and nothing about what a third click does, which is how a cycle that could not
+// reach dark passed.
+const THEME_MODULE = (() => {
+  const m = PAGE.match(/(const uiStore = \{[\s\S]*?applyTheme\(currentTheme\(\)\);)/);
+  assert.ok(m, 'the theme block is still one run of source in the page');
+  return m[1];
+})();
+
+// `localStorage` and `$` are handed in, so the storage a private-mode Safari gives the page can be
+// handed in too. `document` is a real jsdom one carrying the button paintTheme writes into.
+function themePage({ localStorage, stamped } = {}) {
+  const doc = new JSDOM('<!doctype html><html><body><button id="themeToggle"></button></body></html>').window.document;
+  if (stamped) doc.documentElement.setAttribute('data-theme', stamped);
+  const written = [];
+  const cell = new Map();
+  const store = localStorage || {
+    getItem: (k) => (cell.has(k) ? cell.get(k) : null),
+    setItem: (k, v) => { cell.set(k, String(v)); written.push([k, String(v)]); },
+  };
+  const page = new Function('document', 'localStorage', '$',
+    THEME_MODULE + '\nreturn { cycleTheme, currentTheme };')(
+    doc, store, (id) => doc.getElementById(id));
+  page.stamp = () => doc.documentElement.getAttribute('data-theme');
+  page.title = () => doc.getElementById('themeToggle').getAttribute('title');
+  page.written = written;
+  return page;
+}
+
+test('clicking the toggle cycles system → light → dark → system', () => {
+  const page = themePage();
+  assert.equal(page.stamp(), null, 'a fresh install starts on system, which is no attribute at all');
+
+  page.cycleTheme();
+  assert.equal(page.stamp(), 'light');
+  assert.equal(page.title(), 'Theme: light', 'and the button says which one it is on');
+
+  page.cycleTheme();
+  assert.equal(page.stamp(), 'dark');
+
+  page.cycleTheme();
+  assert.equal(page.stamp(), null, 'the third click hands the room back to the system');
+  assert.equal(page.currentTheme(), 'system');
+  assert.deepEqual(page.written, [['sc:theme', 'light'], ['sc:theme', 'dark'], ['sc:theme', 'system']],
+    'one key, written on every step');
+});
+
+test('the cycle starts from what the pre-paint stamp already resolved', () => {
+  const page = themePage({ stamped: 'dark' });
+  assert.equal(page.currentTheme(), 'dark');
+  page.cycleTheme();
+  assert.equal(page.stamp(), null, 'dark comes back to system rather than restarting the list');
+});
+
+test('a storage that refuses every write still cycles the whole way round', () => {
+  // Safari in private mode: setItem throws and getItem keeps answering null. Deriving the next step
+  // from the store there applied light on the first click and light on every click after it, so dark
+  // and the way back to system could not be reached without a reload.
+  const page = themePage({ localStorage: { getItem: () => null, setItem() { throw new Error('blocked'); } } });
+  assert.doesNotThrow(() => page.cycleTheme());
+  assert.equal(page.stamp(), 'light');
+  page.cycleTheme();
+  assert.equal(page.stamp(), 'dark', 'dark is reachable with nothing persisted');
+  page.cycleTheme();
+  assert.equal(page.stamp(), null, 'and so is the way back to system');
+});
+
+test('the toggle is an icon in the header and writes through the one preference store', () => {
   assert.match(PAGE, /id="themeToggle"[\s\S]{0,200}onclick="cycleTheme\(\)"/, 'the header carries the button');
   assert.match(PAGE, /uiStore\.set\('theme', t\)/, 'and the choice goes through the one preference store');
   assert.ok(!/themeToggle[^>]*>[A-Za-z]/.test(PAGE.match(/<button id="themeToggle"[\s\S]*?<\/button>/)[0]),

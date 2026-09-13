@@ -332,6 +332,12 @@ before the first paint — in `<head>` because a reader who chose dark would oth
 frame on every load. `color-scheme` moves with the palette, so scrollbars, form fields and native
 controls follow without being styled.
 
+**The store says where the cycle starts and the page says where it is.** `activeTheme` is read once at
+boot, from the attribute the stamp left or from the same key, and every click moves it; the write to
+`sc:theme` is a mirror. Safari in private mode throws on `setItem` while `getItem` keeps answering
+null, so a cycle that asked storage for its next step applied light on the first click and light on
+every click after it, with dark and the way back to system unreachable until a reload.
+
 Three things do not move between the themes. **`--yellow` is #ffeb00 in both**, because it is the
 agent's and an agent that changes colour with the room is not a convention any more; `--on-yellow` is
 the dark ink that always sits on it. **`--asset-canvas` is white in both**: an asset is someone's own
