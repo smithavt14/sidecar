@@ -3,6 +3,45 @@
 All notable changes to sidecar. Versions follow [semver](https://semver.org); dates are the day the
 version was tagged.
 
+## 1.11.0 (2026-09-13)
+
+**Sidecar follows the room.** Two themes shipped as one set of tokens declared twice, and the page
+follows the system by default: a warm near-black ground with light grey ink, never pure black on pure
+white in either direction, and the yellow unchanged. A header button cycles system, light and dark,
+stamped on `<html>` before the first paint so a dark reader never sees a white frame. Then the
+palette left the CSS altogether: a theme is a named object of token values in `public/themes.js`, and
+there are eight of them, `paper`, `sepia`, `slate` and `contrast` in light, `ink`, `sepia dark`,
+`slate dark` and `contrast dark`. The picker sets one for each scheme. **customize** writes the
+current theme as JSON into `<root>/.sidecar/themes/` (or `$XDG_CONFIG_HOME/sidecar/themes`), opens it
+in sidecar, and a save reapplies the palette live. `/api/themes` lists and validates them; a value has
+to parse as a colour, length or shadow, so a theme file cannot carry script into a style attribute.
+
+**The reading column has a measure.** Prose ran to a hundred characters a line. It now caps at
+about 66 by default, with narrow, default and wide from a header control, and a prose size of 15,
+16.5, 18 or 20px from another (⌘+, ⌘-, ⌘0 too; the measure is in em, so the line length holds as the
+type grows). Paragraphs get a full line of air, every block sits on one spacing scale derived from
+the body line, and the h2 rule is gone. Chrome moved onto six type sizes and three radii, down from
+seventeen and fourteen, and a test scans every declaration so the scale cannot drift back.
+
+**At rest the page is text and margin.** Presence prints only while an agent is here; the review
+rail folds to a 12px edge when a document has no threads; the folder panel opens collapsed on a `?f=`
+link, and collapsed it is a bare edge with the expand handle and one waiting count, nothing else. The
+hover lift on buttons is opt-in on the few that decide something.
+
+**Cards have three densities.** Full, compact and hidden, from the right end of the rail's tab bar.
+Compact folds a settled thread, or one waiting on the other party, to a pill docked level with its
+anchor; a pill keeps an unsent draft and still shows "claude is replying". Anchors in the prose are a
+soft wash, yellow for the agent's and ink-tinted for yours, and the underline returns on hover.
+
+**Reading mode and typewriter scrolling.** ⌘⇧F hides everything but the prose, Escape brings it back.
+Typewriter keeps the caret at 45% of the window while you edit and stands down when you scroll by
+hand. Both are independent, the way iA Writer and Ulysses draw the line.
+
+**Type-to-format reads the line the caret is on.** Enter splits inside the block wrapper rather than
+opening a new block, so `## ` typed on a second line was matched against the first and never
+converted; the same was true of the block-format toolbar. Both now act on the line you are on. Latent
+since the first release.
+
 ## 1.10.0 (2026-09-07)
 
 **`doctor` says whether the install is current.** Nothing in the package updates itself, and a
