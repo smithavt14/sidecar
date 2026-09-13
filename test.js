@@ -2732,9 +2732,10 @@ test('the page carries no permanent presence label and no empty-rail sentence', 
   assert.doesNotMatch(page, /no active threads/, 'an empty active list draws nothing');
   // The hover pop is opt-in on the decisions, so nothing is left switching it back off.
   assert.doesNotMatch(page, /button:hover \{ transform:scale/, 'the global hover pop is gone');
-  assert.match(page, /\.pop:hover \{ transform:scale\(1\.02\); \}/, 'and lands on .pop instead');
+  assert.match(page, /\.pop:hover:not\(:active\) \{ transform:scale\(1\.02\); \}/,
+    'and lands on .pop instead, yielding to the press so a held button compresses');
   const undo = page.split('\n').filter(l => /:hover/.test(l) && /transform:none/.test(l)).map(l => l.trim());
-  assert.deepEqual(undo, ['button:active, .pop:hover { transform:none; }'],
+  assert.deepEqual(undo, ['button:active, .pop:hover:not(:active) { transform:none; }'],
     'the only hover rule cancelling a transform is the reduced-motion one');
   // The press scale and its spring stay: they are what a button owes the finger.
   assert.match(page, /button:active \{ transform:scale\(\.96\)/, 'the press scale survives');

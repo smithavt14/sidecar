@@ -115,7 +115,9 @@
      under the pointer on every tab, breadcrumb segment, sort chip, zoom control and inbox row in the
      tool, and seven rules existed to take it back off again. Pointer-gated: on touch there is no hover,
      and without the gate the scale sticks after a tap. */
-  @media (hover:hover) and (pointer:fine) { .pop:hover { transform:scale(1.02); } }
+  /* :not(:active) keeps the press below: .pop:hover alone outranks button:active in the cascade, so a
+     pressed button would hold its lift instead of compressing. */
+  @media (hover:hover) and (pointer:fine) { .pop:hover:not(:active) { transform:scale(1.02); } }
   button:active { transform:scale(.96); transition:transform .1s ease-out; }
   /* Dark buttons: a faint light edge so they read as a surface rather than a slab, and a faint white
      wash on hover instead of going darker (going darker on a near-black button reads as nothing). */
@@ -810,7 +812,7 @@
     /* Cards: no travel. The JS also skips the exit wait entirely, so a decision stays instant. */
     .card.leaving { transform:none; transition:opacity .12s ease-out; }
     .card.entering { animation:none; }
-    button:active, .pop:hover { transform:none; }
+    button:active, .pop:hover:not(:active) { transform:none; }
   }
   /* docs is a LINK (leaves the page) — mark it as one so it reads differently from status + actions */
   .doclink::after { content:'\2197'; font-size:.82em; margin-left:2px; opacity:.6; }
