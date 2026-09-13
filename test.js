@@ -5010,3 +5010,204 @@ test('the toggle is an icon in the header and writes through the one preference 
   assert.ok(!/themeToggle[^>]*>[A-Za-z]/.test(PAGE.match(/<button id="themeToggle"[\s\S]*?<\/button>/)[0]),
     'no label text in the control — an icon and a title, like the two panel toggles beside it');
 });
+
+// ---- reading mode and typewriter scrolling ----
+// Two axes, tested apart because they are separate features: what else is on screen, and where the
+// active line sits. The first is a body class and is driven under jsdom; the second is arithmetic and
+// is the pure module public/focus.js.
+
+const Focus = require('./public/focus.js');   // the SAME file index.html loads via <script>
+
+test('the typewriter target puts the caret\'s LINE at 45% of the window', () => {
+  // A 22px line whose top is 700px down an 800px window: its middle is at 711, and 45% of 800 is 360,
+  // so the page has to travel 351px further down.
+  assert.equal(Focus.target({ caretTop: 700, caretHeight: 22, viewportH: 800, scrollY: 1000 }), 1351);
+  // …and back up when the caret is above the line.
+  assert.equal(Focus.target({ caretTop: 100, caretHeight: 22, viewportH: 800, scrollY: 1000 }), 751);
+  assert.equal(Focus.RATIO, 0.45);
+});
+
+test('a tall line and a short one settle in the same place', () => {
+  // The LINE is centred, not its top. A 44px heading and a 22px body line whose middles coincide have
+  // to land on the same scroll position, or an h1 rests visibly lower than the prose under it.
+  const heading = Focus.target({ caretTop: 400, caretHeight: 44, viewportH: 900, scrollY: 500 });
+  const body = Focus.target({ caretTop: 411, caretHeight: 22, viewportH: 900, scrollY: 500 });
+  assert.equal(heading, body);
+});
+
+test('the first and last lines scroll as far as the document allows and no further', () => {
+  // A caret in the opening paragraph cannot sit at 45% of the window: the page would have to scroll
+  // above zero. Clamped, not refused.
+  assert.equal(Focus.target({ caretTop: 60, caretHeight: 22, viewportH: 800, scrollY: 100 }), 0);
+  // And at the bottom, the far end of the scroll range rather than past it.
+  assert.equal(Focus.target({ caretTop: 700, caretHeight: 22, viewportH: 800, scrollY: 1000, maxScroll: 1200 }),
+    1200);
+  // Already parked at the clamp, so there is nothing left to do and the answer is "hold still".
+  assert.equal(Focus.target({ caretTop: 700, caretHeight: 22, viewportH: 800, scrollY: 1200, maxScroll: 1200 }),
+    null);
+});
+
+test('a move smaller than the deadband is not a move', () => {
+  // Every arrow key inside one line would otherwise restart a smooth scroll animation over nothing.
+  const at = (top) => Focus.target({ caretTop: top, caretHeight: 20, viewportH: 1000, scrollY: 0 });
+  assert.equal(at(440), null, 'a pixel out of place is left alone');
+  assert.equal(at(443), null, 'and so is three');
+  assert.ok(at(460) != null, 'a real move is a real move');
+  assert.equal(Focus.DEADBAND, 4);
+});
+
+test('inputs that say nothing produce no scroll', () => {
+  assert.equal(Focus.target(), null);
+  assert.equal(Focus.target({ caretTop: 400, viewportH: 0 }), null, 'a window of no height');
+  assert.equal(Focus.target({ viewportH: 800 }), null, 'no caret rect at all');
+  assert.equal(Focus.target({ caretTop: NaN, viewportH: 800 }), null);
+});
+
+test('the page loads focus.js and computes the target through it', () => {
+  assert.match(PAGE, /<script src="\/focus\.js">/, 'the same file the tests require');
+  assert.match(PAGE, /Focus\.target\(\{/, 'and the page asks it rather than doing the arithmetic inline');
+});
+
+// The reading-mode block, lifted out of the page and run over a jsdom document, the THEME_MODULE
+// pattern. Everything it reaches out to is handed in, including the timers, so the class the
+// animation leaves behind can be asserted rather than waited for.
+const READING_MODULE = (() => {
+  const m = PAGE.match(/(const READING_MS = 220;[\s\S]*?\npaintReading\(\);)/);
+  assert.ok(m, 'the reading-mode block is still one run of source in the page');
+  return m[1];
+})();
+
+function readingPage() {
+  const doc = new JSDOM('<!doctype html><html><body><header><div class="hwrap">'
+    + '<button id="readingToggle"></button></div></header></body></html>').window.document;
+  const calls = [], timers = [];
+  const page = new Function('document', '$', 'closeNavDrawer', 'toggleSheet', 'hideTool', 'relayoutDoc',
+    'setTimeout', 'clearTimeout',
+    READING_MODULE + '\nreturn { setReading, toggleReading, isReading, READING_MS };')(
+    doc, (id) => doc.getElementById(id),
+    () => calls.push('closeNavDrawer'),
+    (v) => calls.push('toggleSheet:' + v),
+    () => calls.push('hideTool'),
+    () => calls.push('relayoutDoc'),
+    (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
+    () => {});
+  page.calls = calls;
+  page.timers = timers;
+  page.classes = () => [...doc.body.classList].sort();
+  page.btn = doc.getElementById('readingToggle');
+  page.settle = () => timers[timers.length - 1].fn();   // the animation class comes off on this timer
+  return page;
+}
+
+test('reading mode is one class on the body, on and back off again', () => {
+  const page = readingPage();
+  assert.deepEqual(page.classes(), [], 'a fresh page is not reading');
+  assert.equal(page.isReading(), false);
+
+  page.setReading(true);
+  assert.deepEqual(page.classes(), ['reading', 'reading-animating']);
+  assert.equal(page.isReading(), true);
+  page.settle();
+  assert.deepEqual(page.classes(), ['reading'], 'the animation class is not left on');
+
+  page.setReading(false);
+  assert.deepEqual(page.classes(), ['reading-animating'], 'and it comes back for the way out');
+  page.settle();
+  assert.deepEqual(page.classes(), []);
+  assert.equal(page.isReading(), false);
+});
+
+test('the transition is 220ms and the class outlives it', () => {
+  const page = readingPage();
+  page.setReading(true);
+  assert.equal(page.READING_MS, 220);
+  assert.ok(page.timers[0].ms > 220, 'the class comes off after the transition, not during it');
+  assert.match(STYLE, /body\.reading-animating main \{ transition:grid-template-columns \.22s ease; \}/);
+  assert.match(STYLE, /prefers-reduced-motion: reduce\) \{\n\s*body\.reading-animating[\s\S]{0,240}transition:none;/,
+    'and a reader who asked for no motion gets the mode without the move');
+});
+
+test('entering shuts the review overlays and drops a live selection; leaving shuts nothing', () => {
+  const page = readingPage();
+  page.setReading(true);
+  assert.deepEqual(page.calls, ['closeNavDrawer', 'toggleSheet:false', 'hideTool', 'relayoutDoc'],
+    'the drawer and the sheet belong to the review and cannot be left sitting on top of it');
+  page.calls.length = 0;
+  page.setReading(false);
+  assert.deepEqual(page.calls, ['relayoutDoc'], 'coming back out only re-measures');
+});
+
+test('setting the mode it is already in does nothing at all', () => {
+  const page = readingPage();
+  page.setReading(true);
+  page.settle();
+  page.calls.length = 0;
+  page.setReading(true);
+  assert.deepEqual(page.calls, [], 'no second relayout, and no animation class for a change that is not one');
+  assert.deepEqual(page.classes(), ['reading']);
+  page.toggleReading();
+  assert.equal(page.isReading(), false);
+});
+
+test('the button is the way back out and says so', () => {
+  const page = readingPage();
+  assert.match(page.btn.getAttribute('title'), /^Reading mode/);
+  assert.equal(page.btn.getAttribute('aria-pressed'), 'false');
+  page.setReading(true);
+  assert.match(page.btn.getAttribute('title'), /^Leave reading mode/);
+  assert.equal(page.btn.getAttribute('aria-pressed'), 'true');
+  assert.equal(page.btn.getAttribute('aria-label'), page.btn.getAttribute('title'));
+  assert.ok(!page.btn.textContent.trim(), 'an icon and a title, no label text');
+});
+
+test('reading mode persists nothing: it is per visit, always off at boot', () => {
+  assert.ok(!/uiStore|localStorage/.test(READING_MODULE),
+    'no store write anywhere in the block: a reload opening on a chromeless page is not a preference');
+  assert.match(PAGE, /let reading = false, readingTimer = null;/, 'and the flag starts false');
+});
+
+test('reading mode collapses both tracks rather than removing them, and keeps its one exit', () => {
+  assert.match(STYLE, /body\.reading, body\.reading\.nav-collapsed \{ --nav-track:0px; --rail-w:0px; \}/,
+    'the two numbers the whole shell already follows, so the panels animate out');
+  assert.match(STYLE, /body\.reading \.hwrap > \*:not\(#readingToggle\):not\(\.spacer\) \{ display:none; \}/,
+    'the header keeps the way out and nothing else');
+  assert.match(STYLE, /body\.reading mark\.anchor \{[^}]*transparent/, 'the marks stop painting');
+  assert.match(STYLE, /body\.reading #seltool \{ display:none; \}/);
+  assert.match(STYLE, /body\.reading #sheetToggle, body\.reading #sheetBackdrop \{ display:none; \}/,
+    'and on a phone the pull-up pill goes with the rest of the review chrome');
+  assert.match(PAGE, /if \(isReading\(\)\) return;/, 'the toolbar is refused in code too, not only in CSS');
+});
+
+test('⌘⇧F toggles reading and Escape leaves it, and neither key was taken', () => {
+  assert.match(PAGE, /\(e\.metaKey \|\| e\.ctrlKey\) && e\.shiftKey && \(e\.key === 'f' \|\| e\.key === 'F'\)/);
+  assert.match(PAGE, /e\.key === 'Escape' && reading && !\$\('lightbox'\)\.classList\.contains\('on'\)/,
+    'the lightbox has its own Escape and a picture is the nearer thing to dismiss');
+  // Every key literal any handler in the page tests, so a new binding cannot quietly shadow one. The
+  // page's other keydown handlers are Alt and Shift over an asset frame, Backspace and Enter inside
+  // the document, and the arrow keys on the two resize grips; `a` is the selection toolbar's Cmd+A.
+  const keys = [...PAGE.matchAll(/e\.key (?:!==|===) '([^']+)'/g)].map(m => m[1]);
+  assert.equal(keys.filter(k => k === 'f' || k === 'F').length, 2, 'f and F are each bound exactly once');
+  assert.ok(!keys.includes('F1'), 'and nothing else in the page is reaching for a function key');
+});
+
+test('typewriter scrolling is a preference, off by default, under sc:typewriter', () => {
+  assert.match(PAGE, /let typewriter = uiStore\.get\('typewriter', ''\) === '1';/,
+    'absent reads as off, through the one store that carries the sc: prefix');
+  assert.match(PAGE, /uiStore\.set\('typewriter', typewriter \? '1' : ''\)/);
+  assert.match(PAGE, /id="typewriterToggle"[\s\S]{0,240}onclick="toggleTypewriter\(\)"/,
+    'the header carries the button beside the theme and the width');
+  const btn = PAGE.match(/<button id="typewriterToggle"[\s\S]*?<\/button>/)[0];
+  assert.ok(!/>[A-Za-z]/.test(btn.replace(/<svg[\s\S]*?<\/svg>/, '')),
+    'no label text in the control: an icon and a title, like every other button in that group');
+});
+
+test('typewriter does not fight the reader, and only runs on the document', () => {
+  assert.match(PAGE, /window\.addEventListener\('wheel', suspendTypewriter, \{ passive: true \}\)/);
+  assert.match(PAGE, /window\.addEventListener\('touchmove', suspendTypewriter, \{ passive: true \}\)/);
+  assert.match(PAGE, /typeSuspended = false;\s+\/\/ the caret moved/,
+    'and the next caret move is what brings it back');
+  assert.match(PAGE, /if \(!typewriter \|\| typeSuspended \|\| isAsset\(\) \|\| !docHasCaret\(\)\) return;/,
+    'a reply box in the rail is not the document, and an asset has no caret');
+  assert.match(PAGE, /behavior: reduceMotion\(\) \? 'auto' : 'smooth'/, 'instant under reduced motion');
+  assert.match(PAGE, /document\.addEventListener\('selectionchange', onCaretActivity\)/);
+});
