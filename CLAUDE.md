@@ -10,7 +10,7 @@ No build step. Twenty-two files carry the whole tool:
 | File | What it is |
 |---|---|
 | `server.js` | HTTP server + fs-watch → SSE. Boots express; dispatches `sidecar <verb>` to the CLI first. |
-| `lib/cli.js` | The agent's entire command surface. Every write verb funnels into one `applyItems()`. Holds the two extension allowlists, `MARKDOWN` and `ASSETS`, and `docKind()` over them. |
+| `lib/cli.js` | The agent's entire command surface. Every write verb funnels into one `applyItems()`. Holds the two extension allowlists, `MARKDOWN` and `ASSETS`, `docKind()` over them, and the one exception to both: `themesDir()` and `isThemeFile()`, which the server asks too. |
 | `lib/review.js` | Load/save/merge the `.sidecar.json`, and the one place the pre-1.7 `.review.*` names still exist. Shared by the server and the CLI so both merge identically. |
 | `lib/element.js` | The element anchor: reference normalization, sel validation, and the Node-side liveness rule. |
 | `lib/assets.js` | Where an attached image lands and what counts as one. Shared by the upload route and `--image`. |
@@ -503,7 +503,18 @@ the file picker — so the exception is a path check against the themes director
 in a ```json fence on the way out and unwrapped on the way back. JSON read as markdown is one paragraph
 whose newlines are gone the first time it saves; inside a fence it is a code block that round-trips through
 turndown byte for byte. The optimistic lock compares the fenced form on both sides, so the client needs to
-know none of this.
+know none of this. The fence takes the FILE's own line ending and the unfencer accepts either, since
+`/api/save` rewrites every newline to the dominant one before the fence comes off: LF-only fence lines
+wrote themselves into a CRLF theme and killed it on the next read.
+
+**`lib/cli.js` owns the check, so the CLI opens exactly what the server does** (`isThemeFile`, beside
+`docKind` and the allowlists it is an exception to). A human comments on a theme in the browser and the
+agent answers with `sidecar reply` — which it could not do while the CLI rejected every `.json`. The CLI is
+handed a path and never knows which root a server is serving, so the root is read off the path
+(`<root>/.sidecar/themes/x.json`) and asked of the same resolution order. Sidecar's own state is excluded by
+name through `SIDECAR_SIBLING` (`lib/review.js`, one spelling shared with the legacy `.review.*` set): a
+theme opened in sidecar grows a review right beside it, and `readThemes` was reporting each of those as a
+theme somebody got wrong.
 
 `/api/themes` lists and validates; the directory is watched and a change pushes a `themes` event on the
 same SSE stream document edits use, carrying `rel` when the file is under the root so one event both
@@ -513,7 +524,10 @@ re-applies the palette and reloads the open document.
 custom property that rules all over the page read, and a custom property is not inert: `url(…)` fetches, and
 a value that escaped its declaration would be writing CSS. So a value is PARSED rather than sanitized — a
 hex, an `rgb()`/`hsl()`, a length or a bare keyword, in any comma- or space-separated combination, which is
-exactly what a colour, a length and a shadow are made of. Anything else is not a value. Unknown token names
+exactly what a colour, a length and a shadow are made of. Anything else is not a value. A colour function
+is parsed the same way down to its arguments (a known name, the right count, every one of them a number or
+a percentage), because a character class that let `rgb()` and `rgba(,,,,)` through refused nothing: the
+browser drops the declaration and the token goes silently missing from the page. Unknown token names
 are dropped rather than fatal (a token renamed later must not break every theme on disk), a bad value
 refuses the whole file by name, and a missing one falls back to the built-in of the same scheme — so the
 smallest useful theme file is a name, a scheme and one colour.

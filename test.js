@@ -1174,6 +1174,36 @@ test('CLI reply appends to a thread without disturbing earlier messages; --resol
   fs.rmSync(d, { recursive: true, force: true });
 });
 
+test('CLI: a theme file is a document, so a comment left on one in the browser can be answered', () => {
+  // The server opens `<root>/.sidecar/themes/*.json` as a document; the CLI rejected every `.json`, so a
+  // human could comment on a theme in the browser and the agent could not read the thread, let alone
+  // reply to it. One predicate answers for both sides now (lib/cli.js isThemeFile).
+  const d = cliDir();
+  const themes = path.join(d, '.sidecar', 'themes');
+  fs.mkdirSync(themes, { recursive: true });
+  const file = path.join(themes, 'midnight.json');
+  fs.writeFileSync(file, JSON.stringify({ name: 'midnight', scheme: 'dark',
+    tokens: { '--bg': '#0b0c14', '--fg': '#e8e8e0' } }, null, 2) + '\n');
+  cli(d, 'comment', file, '--quote', '#0b0c14', '--text', 'Too blue for a ground?');
+  const review = () => JSON.parse(fs.readFileSync(file + '.sidecar.json', 'utf8'));
+  assert.equal(review().items.length, 1, 'the comment lands in a sidecar beside the theme');
+  const id = review().items[0].id;
+  assert.match(cli(d, 'show', file), /Too blue for a ground\?/, 'and show reads it');
+  cli(d, 'reply', file, id, 'Warmed it up.', '--resolve');
+  assert.deepEqual(review().items[0].thread.map(m => m.text), ['Too blue for a ground?', 'Warmed it up.']);
+  assert.equal(review().items[0].status, 'resolved');
+  // A `.json` anywhere else is refused exactly as it was, which is the reason the exception is a path
+  // rather than an extension: adding `.json` to the allowlist makes every sidecar a document.
+  fs.writeFileSync(path.join(d, 'notatheme.json'), '{}');
+  const plain = cliFails(d, 'show', path.join(d, 'notatheme.json'));
+  assert.equal(plain.status, 2);
+  assert.match(plain.stderr, /markdown and html assets/);
+  // And so is a sidecar's own state sitting inside the themes directory.
+  fs.writeFileSync(path.join(themes, 'stray.md.sidecar.json'), '{"schema":1,"items":[]}');
+  assert.equal(cliFails(d, 'show', path.join(themes, 'stray.md.sidecar.json')).status, 2);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
 test('CLI answer inherits the parent anchor and sets replyTo', () => {
   const d = cliDir();
   cli(d, 'comment', 'doc.md', '--quote', 'Success metrics', '--text', 'make this concrete');
@@ -5106,6 +5136,22 @@ test('the validator refuses a value that is trying to be something else', () => 
   assert.equal(Themes.validValue('#fff '.repeat(60)), false, 'nor a wall of them');
 });
 
+test('a colour function is parsed, not pattern-matched at the character level', () => {
+  // The grammar used to accept anything made of digits, commas, percent signs and slashes inside the
+  // parens, which said yes to three things that are not colours. The browser drops each of them, so the
+  // token goes silently missing from a page instead of the file being refused by name.
+  for (const v of ['rgb()', 'rgba(,,,,)', 'hsl(/)', 'rgb(1,2)', 'rgb(1,2,3,4)', 'rgba(1,2,3)',
+    'rgb(1 2 3 4)', 'rgb(a,b,c)', 'hsl(1,2,3,4,5)', 'rgb(1,2,3 / .5 / .2)', 'rgb(1,2,3/)',
+    'lab(50% 40 59)', 'color(display-p3 1 0 0)']) {
+    assert.equal(Themes.validValue(v), false, `${v} is not a colour`);
+  }
+  // Both syntaxes of all four functions, which is what the built-ins and a hand-written file use.
+  for (const v of ['rgb(0,0,0)', 'rgb(255 255 255)', 'rgba(20,20,15,.08)', 'rgb(255 255 0 / 50%)',
+    'hsl(45,100%,50%)', 'hsl(210deg 40% 96%)', 'hsla(0,0%,0%,0.5)', 'hsl(210deg 40% 96% / .4)']) {
+    assert.ok(Themes.validValue(v), `${v} is a colour`);
+  }
+});
+
 test('a theme file is an object with a name, a scheme and tokens', () => {
   assert.match(Themes.validate('a string').error, /JSON object/);
   assert.match(Themes.validate(null).error, /JSON object/);
@@ -5200,6 +5246,30 @@ test('a file that is not a theme is reported rather than swallowed', async () =>
   }
 });
 
+test('sidecar\'s own state beside a theme is not a theme that failed to parse', async () => {
+  // The themes directory sits inside `.sidecar` when the root keeps one, and a theme opened in sidecar
+  // grows a review right beside it. Scanning every non-hidden `*.json` reported each of those as a
+  // broken theme, so commenting on a theme put an error in the theme menu.
+  writeTheme('midnight.json.sidecar.json', { schema: 1, items: [] });
+  writeTheme('midnight.json.sidecar.seen.json', { claude: {} });
+  const d = await fetchRetry(`${BASE}/api/themes`).then(j);
+  for (const f of ['midnight.json.sidecar.json', 'midnight.json.sidecar.seen.json']) {
+    assert.ok(!d.errors.some(e => e.file === f), f + ' is state, not a theme somebody got wrong');
+    assert.ok(!d.themes.some(t => t.id === 'user:' + f));
+    fs.unlinkSync(path.join(themesDir(), f));
+  }
+  assert.ok(d.themes.some(t => t.id === 'user:midnight.json'), 'and the theme beside them still lists');
+});
+
+test('a sidecar file in the themes directory is not a document either', async () => {
+  // The same predicate on the other side: the CLI and the server accept exactly the same files.
+  writeTheme('stray.md.sidecar.json', { schema: 1, items: [] });
+  const rel = path.join('.sidecar', 'themes', 'stray.md.sidecar.json');
+  const r = await fetchRetry(`${BASE}/api/state?path=${encodeURIComponent(rel)}`);
+  assert.equal(r.status, 400);
+  fs.unlinkSync(path.join(themesDir(), 'stray.md.sidecar.json'));
+});
+
 test('customize writes a copy of the theme and never overwrites the last one', async () => {
   const body = { name: 'sepia', scheme: 'light', tokens: Themes.BUILTIN.sepia.tokens };
   const r = await post('/api/themes', body).then(j);
@@ -5214,6 +5284,27 @@ test('customize writes a copy of the theme and never overwrites the last one', a
   const again = await post('/api/themes', body).then(j);
   assert.equal(again.id, 'user:sepia-custom-2.json');
   fs.unlinkSync(again.file);
+});
+
+test('when there is no free number left, customize refuses rather than overwriting one', async () => {
+  // The search for a free name stopped at the bound and then wrote anyway, which made the last numbered
+  // copy the one file customize destroyed instead of adding to.
+  const stem = 'crowded-custom';
+  const names = ['crowded-custom.json'];
+  for (let n = 2; n <= 100; n++) names.push(`${stem}-${n}.json`);
+  for (const n of names) writeTheme(n, { name: 'crowded', scheme: 'light', tokens: {} });
+  const before = names.map(n => fs.readFileSync(path.join(themesDir(), n), 'utf8'));
+  const r = await post('/api/themes', { name: 'crowded', scheme: 'light', tokens: { '--bg': '#010203' } });
+  assert.equal(r.status, 409);
+  assert.match((await j(r)).error, /already in/);
+  names.forEach((n, i) => assert.equal(fs.readFileSync(path.join(themesDir(), n), 'utf8'), before[i],
+    n + ' is untouched, because a refusal writes nothing'));
+  assert.ok(!fs.existsSync(path.join(themesDir(), `${stem}-101.json`)), 'and nothing new appears either');
+  // One free slot is enough: the same request now lands in it.
+  fs.unlinkSync(path.join(themesDir(), `${stem}-50.json`));
+  const ok = await post('/api/themes', { name: 'crowded', scheme: 'light', tokens: { '--bg': '#010203' } }).then(j);
+  assert.equal(ok.id, `user:${stem}-50.json`);
+  for (const n of names) fs.rmSync(path.join(themesDir(), n), { force: true });
 });
 
 test('the write route is the same door a file on disk goes through', async () => {
@@ -5247,6 +5338,43 @@ test('a theme file under the root opens in sidecar, as a fenced code block', asy
   assert.equal((await j(r)).hash, sha_of('```json\n' + raw.trim() + '\n```\n'), 'and the next baseHash matches');
   // The optimistic lock still bites on a stale save.
   assert.equal((await put('/api/save', { path: rel, content: edited, baseHash: s.hash })).status, 409);
+});
+
+test('a CRLF theme file survives open, edit and save', async () => {
+  // /api/save rewrites every newline to the file's own ending before the fence comes off, so a CRLF
+  // theme reached the unfencer with CRLF fence lines — which an LF-only pattern did not match. The
+  // fence was then written into the .json, and the theme was dead on the next read.
+  const raw = JSON.stringify({ name: 'crlf', scheme: 'dark', tokens: { '--bg': '#0b0c14' } }, null, 2)
+    .replace(/\n/g, '\r\n') + '\r\n';
+  fs.writeFileSync(path.join(themesDir(), 'crlf.json'), raw);
+  const rel = path.join('.sidecar', 'themes', 'crlf.json');
+  const s = await fetchRetry(`${BASE}/api/state?path=${encodeURIComponent(rel)}`).then(j);
+  assert.equal(s.kind, 'markdown');
+  assert.match(s.markdown, /^```json\r\n\{/, 'the fence takes the file\'s own line ending');
+  // The client sends what marked and the serializer produce, which is all-LF, plus the edit.
+  const edited = s.markdown.replace(/\r\n/g, '\n').replace('#0b0c14', '#141c0b');
+  const r = await put('/api/save', { path: rel, content: edited, baseHash: s.hash });
+  assert.equal(r.status, 200);
+  const saved = fs.readFileSync(path.join(themesDir(), 'crlf.json'), 'utf8');
+  assert.ok(!/```/.test(saved), 'no fence is written into the file');
+  assert.equal(JSON.parse(saved).tokens['--bg'], '#141c0b', 'and it is still JSON, with the edit in it');
+  assert.ok(saved.includes('\r\n'), 'CRLF endings preserved');
+  assert.ok(!saved.replace(/\r\n/g, '').includes('\n'), 'no lone \\n left, the trailing one included');
+  assert.equal((await j(r)).hash, sha_of('```json\r\n' + saved.replace(/\s+$/, '') + '\r\n```\r\n'),
+    'and the next baseHash matches the fenced form the client holds');
+  // The proof that matters: it is still a theme.
+  const d = await fetchRetry(`${BASE}/api/themes`).then(j);
+  const t = d.themes.find(x => x.id === 'user:crlf.json');
+  assert.ok(t, 'the file is still read as a theme');
+  assert.deepEqual(t.tokens, { '--bg': '#141c0b' });
+  // A second save from the state the client now holds still locks and still round-trips.
+  const s2 = await fetchRetry(`${BASE}/api/state?path=${encodeURIComponent(rel)}`).then(j);
+  assert.equal(s2.hash, (await fetchRetry(`${BASE}/api/state?path=${encodeURIComponent(rel)}`).then(j)).hash);
+  const r2 = await put('/api/save', { path: rel, content: s2.markdown.replace(/\r\n/g, '\n')
+    .replace('#141c0b', '#0c1410'), baseHash: s2.hash });
+  assert.equal(r2.status, 200);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(themesDir(), 'crlf.json'), 'utf8')).tokens['--bg'], '#0c1410');
+  fs.unlinkSync(path.join(themesDir(), 'crlf.json'));
 });
 
 test('a .json that is not in the themes directory is still not a document', async () => {

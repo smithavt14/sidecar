@@ -492,9 +492,40 @@
      is exactly what a colour, a length and a box-shadow are made of. Anything else is not a value.
      `url` is refused by name as well as by shape, because it is the one function worth naming. */
   const HEX = /^#[0-9a-f]{3,8}$/i;
-  const FN = /^(?:rgb|rgba|hsl|hsla)\(\s*[-0-9.,%\s/]*\)$/i;
   const LEN = /^-?(?:\d+\.?\d*|\.\d+)(?:px|em|rem|%)?$/;
   const WORD = /^[a-z]{3,24}$/i;
+
+  /* A colour function is PARSED the same way the rest of a value is, rather than pattern-matched on the
+     characters it is allowed to contain. The character class on its own said yes to `rgb()`,
+     `rgba(,,,,)` and `hsl(/)` — none of them a colour, all of them a declaration the browser drops,
+     which is a token silently missing from the page instead of a file refused by name. So: a known
+     function, the right number of arguments, and every argument a number or a percentage.
+     The four are the whole list, and it is deliberately short. A function nobody named is not a value. */
+  const CHANNELS = { rgb: 3, rgba: 4, hsl: 3, hsla: 4 };
+  const NUM = /^[+-]?(?:\d+\.?\d*|\.\d+)$/;
+  const PCT = /^[+-]?(?:\d+\.?\d*|\.\d+)%$/;
+  // A hue carries an angle unit in the modern syntax and none in the legacy one, so it is the one
+  // argument that takes a unit; every other channel is a number or a percentage.
+  const ANGLE = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:deg|grad|rad|turn)?$/;
+  const numeric = (t) => NUM.test(t) || PCT.test(t);
+  function validFn(part) {
+    const m = /^([a-z]+)\(([^()]*)\)$/i.exec(part);
+    if (!m) return false;
+    const fn = m[1].toLowerCase();
+    if (!Object.prototype.hasOwnProperty.call(CHANNELS, fn)) return false;
+    // `rgb(r g b / a)` — the modern syntax splits its alpha off with a slash, and carries at most one.
+    const halves = m[2].trim().split('/');
+    if (halves.length > 2) return false;
+    const alpha = halves.length === 2 ? halves[1].trim() : null;
+    if (alpha !== null && !numeric(alpha)) return false;
+    const head = halves[0].trim();
+    if (!head) return false;
+    // Comma-separated (legacy) or space-separated (modern); an empty argument survives neither split as
+    // anything a number matches, which is what refuses `rgba(,,,,)`.
+    const args = head.split(/\s*,\s*|\s+/);
+    if (args.length !== (alpha === null ? CHANNELS[fn] : 3)) return false;
+    return args.every((a, i) => (i === 0 && fn.charAt(0) === 'h' ? ANGLE.test(a) : numeric(a)));
+  }
   function validValue(v) {
     if (typeof v !== 'string') return false;
     const s = v.trim();
@@ -508,7 +539,7 @@
     // separators, while a stray `)` or a nested call falls out as a part that matches nothing.
     const parts = s.match(/[a-z]+\([^()]*\)|[^\s,]+/gi) || [];
     if (!parts.length || parts.length > 24) return false;
-    return parts.every((p) => HEX.test(p) || FN.test(p) || LEN.test(p)
+    return parts.every((p) => HEX.test(p) || validFn(p) || LEN.test(p)
       || (WORD.test(p) && p.toLowerCase() !== 'url'));
   }
   // A name is shown in a menu and slugified into a filename, so it is letters, digits and separators.

@@ -197,15 +197,16 @@ app.get('/api/files', (req, res) => {
 // root — openable in sidecar itself. Everything else falls back to the XDG location, since a theme is
 // the reader's rather than the folder's. SIDECAR_THEMES overrides both, the same env family as
 // SIDECAR_AGENT and SIDECAR_HOSTS.
-const THEMES_DIR = (() => {
-  if (process.env.SIDECAR_THEMES) return path.resolve(process.env.SIDECAR_THEMES);
-  const local = path.join(BASE_DIR, '.sidecar');
-  try { if (fs.statSync(local).isDirectory()) return path.join(local, 'themes'); } catch {}
-  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'sidecar', 'themes');
-})();
+// The resolution order itself lives in lib/cli.js beside the extension allowlists, because the CLI runs
+// it too: a theme file is a document on both sides or on neither, and `isTheme` below is the same
+// predicate the CLI's resolveFile asks.
+const THEMES_DIR = cli.themesDir(BASE_DIR);
 // Created at boot rather than on the first write: the watcher below needs something to watch, and a
 // directory nobody can find is a format nobody can use. A read-only home is not a reason to fail.
 try { fs.mkdirSync(THEMES_DIR, { recursive: true }); } catch {}
+// How many copies of one theme customize will number before it refuses. A hundred is well past anyone's
+// evening of tuning and short of a loop that hunts for a free name forever.
+const CUSTOM_LIMIT = 100;
 
 // A theme file's id is `user:<filename>`, which keeps a file called paper.json from becoming a second
 // paper in the menu. The filename came off readdir or off a slug, so it goes back through the same
@@ -215,14 +216,21 @@ const themeFile = (name) => {
   if (path.dirname(abs) !== THEMES_DIR) throw new Error('path escapes the themes directory');
   return abs;
 };
+// Is this path a theme file — which is the same question as whether it opens as a document, and is
+// answered in lib/cli.js so the CLI's own verbs answer it identically (see isThemeFile there).
+const isTheme = (abs) => cli.isThemeFile(abs);
 function readThemes() {
   const themes = [], errors = [];
   let names = [];
   try { names = fs.readdirSync(THEMES_DIR); } catch { return { themes, errors }; }
   for (const name of names.sort()) {
-    if (!name.endsWith('.json') || name.startsWith('.')) continue;
     let abs;
     try { abs = themeFile(name); } catch { continue; }
+    // The same predicate that decides whether a path opens as a document, which is also what keeps
+    // sidecar's OWN state out of the list: the themes directory sits inside a `.sidecar` folder when the
+    // root keeps one, and a `doc.md.sidecar.json` or a `.sidecar.seen.json` beside a theme is not a
+    // theme that failed to parse. Reporting it as one put an error in the menu for a file nobody wrote.
+    if (!isTheme(abs)) continue;
     let parsed;
     try { parsed = JSON.parse(fs.readFileSync(abs, 'utf8')); }
     catch (e) { errors.push({ file: name, error: 'not valid JSON' }); continue; }
@@ -248,9 +256,16 @@ app.post('/api/themes', (req, res) => {
   // when it is missing, so customizing a custom theme does not land sepia-custom-custom.json.
   const stem = Themes.slug(theme.name).replace(/-custom$/, '') + '-custom';
   // A second customize of the same theme must not overwrite the first, which is somebody's evening of
-  // tuning. Take the next free number instead.
+  // tuning. Take the next free number instead — and when there is no free number left, say so and write
+  // nothing. The bound used to stop the search and then write anyway, which made the hundredth copy the
+  // one case where customize destroyed a file instead of adding one.
   let name = stem + '.json', abs = themeFile(name);
-  for (let n = 2; fs.existsSync(abs) && n < 100; n++) { name = `${stem}-${n}.json`; abs = themeFile(name); }
+  for (let n = 2; fs.existsSync(abs); n++) {
+    if (n > CUSTOM_LIMIT) return res.status(409).json({ error:
+      `${stem}.json and ${CUSTOM_LIMIT - 1} numbered copies of it are already in ${THEMES_DIR}. ` +
+      `Rename or delete some before customizing this theme again.` });
+    name = `${stem}-${n}.json`; abs = themeFile(name);
+  }
   fs.mkdirSync(THEMES_DIR, { recursive: true });
   fs.writeFileSync(abs, JSON.stringify(Themes.expand(theme, theme.name), null, 2) + '\n');
   const inRoot = abs.startsWith(BASE_DIR + path.sep);
@@ -270,13 +285,29 @@ app.post('/api/themes', (req, res) => {
    hash the optimistic lock compares is the FENCED form on both sides, so the client never has to know
    any of this. A save whose fence the human broke is written through as typed rather than guessed at:
    it is their file, and readThemes tells them it stopped being JSON. */
-const isTheme = (abs) => path.dirname(abs) === THEMES_DIR && abs.endsWith('.json')
-  && !path.basename(abs).startsWith('.');
-const fenceTheme = (abs, raw) => (isTheme(abs) ? '```json\n' + raw.replace(/\s+$/, '') + '\n```\n' : raw);
+// The file's own line ending, the same question /api/save already asks of a document before it writes
+// one. A theme file has to be asked it TWICE — once to fence it and once to unfence it — because the
+// fence lines are bytes sidecar adds, and LF fences around a CRLF body made the round trip lossy in
+// the one direction nobody looks at: the file still parsed, so the damage showed up as a diff.
+const eolOf = (s) => (/\r\n/.test(s) ? '\r\n' : '\n');
+const fenceTheme = (abs, raw) => {
+  if (!isTheme(abs)) return raw;
+  const eol = eolOf(raw);
+  return '```json' + eol + raw.replace(/\s+$/, '') + eol + '```' + eol;
+};
+// Tolerant of both line endings and of trailing whitespace on either fence line. It has to be: /api/save
+// rewrites every newline to the file's dominant ending before this runs, so a CRLF theme reaches here
+// with CRLF fences — and an LF-only pattern then matched nothing, wrote the fence into the .json, and
+// killed the theme on the next read.
+const FENCE = /^\s*```[ \t]*(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n?[ \t]*```\s*$/;
 const unfenceTheme = (abs, text) => {
   if (!isTheme(abs)) return text;
-  const m = String(text).match(/^\s*```(?:json)?\n([\s\S]*?)\n?```\s*$/);
-  return m ? m[1].replace(/\s+$/, '') + '\n' : text;
+  const m = String(text).match(FENCE);
+  if (!m) return text;
+  const body = m[1].replace(/\s+$/, '');
+  // The trailing newline is the file's own, not an LF glued onto a CRLF file. The body answers when it
+  // has more than one line; a one-line theme takes the answer from the fenced form around it.
+  return body + eolOf(/\r\n/.test(body) ? body : String(text));
 };
 
 // ---------- one directory's documents, for the left panel ----------
