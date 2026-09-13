@@ -5089,6 +5089,113 @@ test('the page reads and writes the density through that store and that guard', 
     'nothing reaches storage around the store');
 });
 
+/* ────────────────────────────────────────────────────────────────────────────
+   WHAT A COLLAPSED CARD STILL OWES THE THREAD
+   A pill is a card with its body taken away, and two things that were living in
+   that body have to outlive it: the reply the human has typed and not sent, and
+   the agent composing an answer right now. Both are true of the THREAD, so
+   neither can be kept in the element that stopped being drawn.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+// One named function lifted out of the page and run with its collaborators handed in, the same way the
+// preference store and the theme stamp are. Each of these is a rule the browser is not needed to judge.
+const CARD_FN = (name, ...deps) => {
+  const m = PAGE.match(new RegExp('function ' + name + '\\([^)]*\\) \\{[\\s\\S]*?\\n\\}'));
+  assert.ok(m, name + ' is still one function in the page');
+  return new Function(...deps, 'return ' + m[0]);
+};
+// A stand-in for a live reply box: the three things noteDraft reads off one, and the card it sits in.
+const replyBox = (id, value) => ({
+  value, selectionStart: value.length, selectionEnd: value.length,
+  closest: () => (id ? { dataset: { id } } : null),
+});
+
+test('an unsent reply is kept against the thread id, not against the textarea', () => {
+  // The bug this is here for: collapsing a card replaced its textarea with a pill, and a capture that
+  // could only read live boxes had nothing to read, so the typed reply was discarded. The map is keyed
+  // by item id and written from the box, which means the box is free to stop existing.
+  const map = new Map();
+  const note = CARD_FN('noteDraft', 'replyDrafts')(map);
+  const card = note(replyBox('c1', 'half a thought'));
+  assert.equal(card.dataset.id, 'c1', 'the card comes back so the caller can name the thread');
+  assert.deepEqual([...map.keys()], ['c1']);
+  assert.deepEqual(map.get('c1'), { value: 'half a thought', start: 14, end: 14 },
+    'the caret rides along, because the restore puts it back');
+  // Emptied by hand is not the same as folded away: one is the human dropping the reply, the other is
+  // the rail drawing less of it. Only the first takes the entry out.
+  note(replyBox('c1', ''));
+  assert.equal(map.size, 0, 'an emptied box clears its draft');
+  assert.equal(note(replyBox(null, 'nowhere')), null, 'a box outside a card names no thread');
+  assert.equal(map.size, 0);
+});
+
+test('the page keeps that map for the page, and clears it only where a draft is genuinely over', () => {
+  assert.match(PAGE, /const replyDrafts = new Map\(\);/, 'one map, page-lifetime');
+  // Captured from every live box on each render, and restored from the MAP rather than from whatever
+  // the last render happened to have on screen.
+  assert.match(PAGE, /for \(const ta of side\.querySelectorAll\('textarea\.reply'\)\) \{\n\s*const card = noteDraft\(ta\);/,
+    'the capture goes through noteDraft');
+  assert.match(PAGE, /for \(const \[id, d\] of replyDrafts\) \{/, 'and the restore walks the map');
+  assert.match(PAGE, /const ta = card && card\.querySelector\('textarea\.reply'\);\n\s*if \(!ta\) continue;/,
+    'a draft with no box on screen is skipped, not dropped');
+  assert.match(PAGE, /noteDraft\(ta\);   \/\/ keep the map level with the box/,
+    'the input events write through it too, so syncFreeze reads the same answer');
+  assert.match(PAGE, /const hot = hasDraft\(id\) \|\| /, 'and a pill holding a draft still holds its place');
+  // The two ends of a draft's life: sent, and belonging to a document that is no longer open.
+  assert.match(PAGE, /input\.value = '';[\s\S]{0,120}\n  replyDrafts\.delete\(id\);/, 'sending clears it');
+  assert.match(PAGE, /replyDrafts\.clear\(\); draftFocus = null;/, 'and resetDocState clears the lot');
+  // One focused box at a time, so a folded draft cannot steal the caret back on a later render.
+  assert.match(PAGE, /let draftFocus = null;/);
+  assert.match(PAGE, /if \(id === draftFocus\) \{ ta\.focus\(\);/);
+});
+
+test('a pill says when it is holding an unsent reply', () => {
+  const pill = (it, draft) => CARD_FN('pillHtml', 'esc', 'Turn', 'hasDraft', 'replyingPill')(
+    String, Turn, () => draft, () => '')(it, it.kind);
+  const it = comment('c1', 'open', msg(AGENT, 'a question'));
+  assert.doesNotMatch(pill(it, false), /draft/, 'nothing to say when there is nothing held');
+  const held = pill(it, true);
+  assert.match(held, /<span class="draft">draft<\/span>/, 'one mono word, so a fold is never a silent loss');
+  assert.match(held, /title="expand \(unsent reply\)"/, 'and the expand control says what expanding gets back');
+  assert.match(STYLE, /\.card\.collapsed \.pill \.draft \{[^}]*color:var\(--ink\)/, 'ink, not the count chip grey');
+});
+
+test('the agent replying is one rule, and both a full card and a pill read it', () => {
+  const mark = (marks) => CARD_FN('replyingMark', 'liveMarks')(() => marks);
+  const it = comment('c1', 'open', msg(HUMAN, 'over to you'));
+  const live = [{ id: 'c1', agent: AGENT }];
+  assert.deepEqual(mark(live)(it), live[0], 'marked, and the human spoke last');
+  assert.equal(mark([{ id: 'c2', agent: AGENT }])(it), null, 'a mark on another thread is not this one');
+  // The moment the reply lands the signal clears here, per thread, without waiting on the server's set.
+  const answered = comment('c1', 'open', msg(HUMAN, 'over to you'), msg(AGENT, 'here'));
+  assert.equal(mark(live)(answered), null, 'the reply is in: nobody is still replying');
+  // Both surfaces are built from that one answer.
+  assert.match(PAGE, /function replyingHtml\(it\) \{\n  const m = replyingMark\(it\);/);
+  assert.match(PAGE, /function replyingPill\(it\) \{\n  const m = replyingMark\(it\);/);
+});
+
+test('a collapsed card shows the agent replying, which is exactly when it is collapsed', () => {
+  // The contract this closes: at compact a human-authored comment rests as a pill precisely because it
+  // is waiting on the agent, which is the whole window a `sidecar wait` presence update covers. A pill
+  // that omitted the signal would drop it in the one state it is most often true.
+  const it = comment('c1', 'open', msg(HUMAN, 'over to you'));
+  assert.equal(Turn.startCollapsed(it, AGENT, 'compact'), true, 'waiting on the agent, so it is a pill');
+  const mark = CARD_FN('replyingMark', 'liveMarks')(() => [{ id: 'c1', agent: AGENT }]);
+  const replyingPill = CARD_FN('replyingPill', 'esc', 'replyingMark')(String, mark);
+  const html = CARD_FN('pillHtml', 'esc', 'Turn', 'hasDraft', 'replyingPill')(
+    String, Turn, () => false, replyingPill)(it, it.kind);
+  assert.match(html, /<span class="replying"><span class="lbl">claude is replying<\/span><\/span>/,
+    'the same label the full card carries, inside the pill');
+  assert.ok(html.indexOf('<span class="replying">') < html.indexOf('</button>'),
+    'inside the button, so it rides the pill rather than adding a row under it');
+  assert.doesNotMatch(replyingPill(it), /<div/, 'a span, because a button holds phrasing content');
+  // One shimmer rule for both, so the reduced-motion fallback comes along unchanged.
+  assert.match(STYLE, /\.card\.collapsed \.pill \.replying \{ display:inline-flex;/);
+  assert.match(STYLE, /\.card\.collapsed \.pill \.replying \.lbl \{ font:inherit;/);
+  assert.match(STYLE, /\.replying \.lbl \{ animation:none; background:none; color:var\(--muted\); \}/,
+    'and reduced motion still cuts the sweep for both');
+});
+
 // The stamp itself. It is a bare IIFE over `localStorage` and `document`, so it can be run with both
 // handed in — which is how the throw an unavailable localStorage raises gets exercised at all.
 const STAMP = (() => {

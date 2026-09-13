@@ -207,6 +207,22 @@ A collapsed card measures about 23px, so **more cards sit level with their own a
 pushed down by a tall neighbour: `dockCards` is unchanged, it just has less height to step over. The
 clip-and-*show more* pass is skipped for a pill, which has no body to clip.
 
+**Two things belong to the thread rather than to the card, so neither can live in the element that
+stopped being drawn.** An unsent reply is the first. It is held in `replyDrafts`, a page-lifetime map
+keyed by item id, written from a live box by `noteDraft` on every input event and on every render, and
+restored into whatever textarea exists at the time. A draft whose card is a pill, or whose density draws
+no cards at all, keeps its place in the map and comes back with the box; folding a card no longer throws
+the reply away, and `syncFreeze` reads the map so a pill holding one still holds its position. The pill
+says so, with one mono word, because a fold that hid a draft silently would be indistinguishable from
+one that dropped it. Sending clears it, and so does `resetDocState`.
+
+The second is **the agent composing an answer**. At compact a human-authored comment rests as a pill
+exactly while it waits on the agent, which is the whole window `sidecar wait`'s presence ping covers, so
+a pill that dropped the signal would drop it where it is most often true. `replyingMark` is the one rule
+and both surfaces read it: `replyingHtml` draws the full card's row, `replyingPill` the same label inside
+the pill (a span, since a button holds phrasing content), sharing the shimmer and its reduced-motion
+fallback. Hidden is the exception, and only because it draws no cards to carry anything.
+
 **The anchor mark is a wash now, not a rule.** `#ffeb00` as a 2px solid underline was the highest-energy
 element on a near-monochrome page and it sat under prose, inside the reading column; Bear's red and iA's
 blue are watermarks (a cursor, a link) and neither draws a line under a sentence. So the colour drops to

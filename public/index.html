@@ -902,6 +902,16 @@
   .card.collapsed .pill .dot { width:7px; height:7px; border-radius:50%; background:var(--ink); flex:none; }
   .card.collapsed.by-agent .pill .dot { background:var(--yellow); box-shadow:0 0 0 1px var(--yellow-ring); }
   .card.collapsed .pill .n { background:var(--chip-n); color:var(--ink-2); border-radius:20px; padding:0 6px; }
+  /* An unsent reply survives the fold (see replyDrafts), so the pill has to say so. Ink rather than the
+     chip grey the count wears: the draft is the human's own text and the one thing on a settled pill
+     that is still owed something. */
+  .card.collapsed .pill .draft { background:var(--fill); color:var(--ink); border-radius:20px; padding:0 6px; }
+  /* Per-thread presence, on a pill. At compact a human's comment is collapsed exactly while it waits on
+     the agent, which is the whole window in which the agent is answering it, so a rail that dropped the
+     signal here would drop it where it is most often true. Same markup and the same shimmer as the full
+     card's row (one rule, one reduced-motion fallback), laid inline instead of on its own line. */
+  .card.collapsed .pill .replying { display:inline-flex; margin:0; padding:0; min-width:0; }
+  .card.collapsed .pill .replying .lbl { font:inherit; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .card.collapsed.archived .pill, .card.collapsed.orphaned .pill { background:var(--card-off); }
   .card.collapsed.orphaned .pill .dot { background:var(--dead); box-shadow:none; }
   /* The flash lands on the pill, since the card itself is now a transparent box the size of one. */
@@ -2633,15 +2643,30 @@ function liveMarks() {
   const now = Date.now();
   return ((state.presence && state.presence.items) || []).filter(m => !m.until || m.until > now);
 }
-// The card row: "<agent> is replying ···". Shown only while the thread's latest message is NOT the
-// marking agent's — the moment the reply lands the row clears here, per thread, even though the
+// Is an agent answering THIS thread right now? Live only while the thread's latest message is NOT the
+// marking agent's. The moment the reply lands the signal clears here, per thread, even though the
 // server-side set only shrinks on the agent's next ping.
-function replyingHtml(it) {
+// Split out of replyingHtml because a collapsed card carries the same signal and the rule for when it
+// is true has to be one function: a pill is what a human's comment wears for the whole window in which
+// the agent is composing an answer to it.
+function replyingMark(it) {
   const m = liveMarks().find(x => x.id === it.id);
-  if (!m) return '';
+  if (!m) return null;
   const last = (it.thread || []).slice(-1)[0];
-  if (last && last.by === m.agent) return '';
-  return `<div class="replying"><span class="lbl">${esc(m.agent)} is replying</span></div>`;
+  if (last && last.by === m.agent) return null;
+  return m;
+}
+// The card row: "<agent> is replying ···".
+function replyingHtml(it) {
+  const m = replyingMark(it);
+  return m ? `<div class="replying"><span class="lbl">${esc(m.agent)} is replying</span></div>` : '';
+}
+// The same label on a pill. A span rather than the row's div, because the pill is a <button> and a
+// button holds phrasing content; the class is the same, so the shimmer and its reduced-motion fallback
+// come from the one rule that draws them on a full card.
+function replyingPill(it) {
+  const m = replyingMark(it);
+  return m ? `<span class="replying"><span class="lbl">${esc(m.agent)} is replying</span></span>` : '';
 }
 // One re-render scheduled at the earliest future expiry (marks or the header state), so stale
 // presence disappears without waiting for the next SSE event. Cleared and re-armed on every render.
@@ -2870,6 +2895,30 @@ function dockCards() {
   list.style.height = cursor + 'px';   // absolute children don't size the parent; the page needs this to scroll
   syncFreeze(list);   // …and now that every card has a final position, pin the one being typed into
 }
+// ---------- unsent replies, for the page's lifetime ----------
+// What a human has typed and not sent, keyed by item id. It is kept OFF the card because the card is
+// not where it is safe: renderSide rebuilds every textarea, a fold at compact replaces the box with a
+// pill, and hidden draws no cards at all. A capture that could only read the boxes on screen lost the
+// reply the moment the reader asked for less of the rail, which is the one moment it must not.
+// Not persisted, for the same reason a manual fold is not: it belongs to this page's session with this
+// document, and resetDocState clears it with everything else the outgoing document owned.
+const replyDrafts = new Map();
+// The one box that had the caret, if any. One variable rather than a flag per draft: only one element
+// can hold focus, and a folded draft carrying a stale `focused` would steal it back on some later render.
+let draftFocus = null;
+// Read one live reply box into the map, or out of it once it has been emptied. Returns the card so the
+// caller can name the thread. Called from the input events as well as from the render capture, so the
+// map is never a render behind the box somebody is typing in (syncFreeze reads it on the same tick).
+function noteDraft(ta) {
+  const card = ta.closest('[data-id]');
+  if (!card) return null;
+  if (ta.value) replyDrafts.set(card.dataset.id, { value: ta.value, start: ta.selectionStart, end: ta.selectionEnd });
+  else replyDrafts.delete(card.dataset.id);
+  return card;
+}
+// Does this thread hold an unsent reply? The pill asks, because a fold that hid a draft without a trace
+// would be indistinguishable from one that dropped it.
+const hasDraft = (id) => replyDrafts.has(id);
 // ---------- freeze: a card being typed into does not move ----------
 // A card is frozen while its reply box has the caret OR holds text not yet sent. Read off the DOM
 // rather than tracked through events, because renderSide rebuilds every textarea via innerHTML and
@@ -2885,7 +2934,9 @@ function syncFreeze(list) {
   for (const card of list.querySelectorAll(':scope > .card[data-id]')) {
     const id = card.dataset.id;
     const ta = card.querySelector('textarea.reply');
-    const hot = !!ta && (ta === active || ta.value.trim() !== '');
+    // A pill has no box and can still be holding a draft, so the map answers where the DOM cannot. A
+    // card carrying unsent text stays where it was put whether or not it is currently showing it.
+    const hot = hasDraft(id) || (!!ta && (ta === active || ta.value.trim() !== ''));
     if (hot && !stability.isPinned(id)) {
       const top = parseFloat(card.style.top);
       if (isFinite(top)) { stability.pin(id, top, lastRank.get(id)); card.classList.add('pinned'); changed = true; }
@@ -2902,7 +2953,9 @@ function syncFreeze(list) {
 // still working in).
 for (const ev of ['focusin', 'focusout', 'input']) {
   $('side').addEventListener(ev, (e) => {
-    if (!e.target.closest || !e.target.closest('textarea.reply')) return;
+    const ta = e.target.closest && e.target.closest('textarea.reply');
+    if (!ta) return;
+    noteDraft(ta);   // keep the map level with the box: syncFreeze reads it on this same tick
     setTimeout(() => { const l = $('side').querySelector('.side-list'); if (l) syncFreeze(l); }, 0);
   });
 }
@@ -2917,12 +2970,14 @@ function renderSide() {
   // Preserve any reply the user is mid-typing. renderSide rebuilds every card via innerHTML, and it
   // fires on our own sidecar writes AND on presence heartbeats — either would otherwise wipe an unsaved
   // reply and its caret out from under them. Capture now, restore after the rebuild (below).
+  // The map outlives the elements: a card that folds to a pill, and a density that draws no cards at
+  // all, take the textarea out of the DOM, so a capture that could only read live boxes was throwing
+  // the reply away at the moment the human asked for less on screen. Only the caret needs the box.
   const active = document.activeElement;
-  const drafts = {};
+  draftFocus = null;
   for (const ta of side.querySelectorAll('textarea.reply')) {
-    if (!ta.value) continue;
-    const card = ta.closest('[data-id]');
-    if (card) drafts[card.dataset.id] = { value: ta.value, focused: ta === active, start: ta.selectionStart, end: ta.selectionEnd };
+    const card = noteDraft(ta);
+    if (card && ta === active && ta.value) draftFocus = card.dataset.id;
   }
   // Draft text and caret were preserved here, but SCROLL was not — so a rebuild
   // kept what you had typed and then moved it off screen, which reads as the
@@ -2977,14 +3032,15 @@ function renderSide() {
   if (Turn.density(railDensity) === 'hidden') { /* no cards */ }
   else if (sideTab === 'active') renderActive(list, activeTop, childSug);
   else renderArchived(list, archivedTop, childSug);
-  // Restore in-progress replies captured before the rebuild (see top of renderSide).
-  for (const id in drafts) {
+  // Restore in-progress replies (see top of renderSide). A draft whose card is not drawn right now, or
+  // is drawn as a pill, keeps its place in the map and comes back with the textarea: nothing is dropped
+  // for want of somewhere to put it.
+  for (const [id, d] of replyDrafts) {
     const card = side.querySelector('.card[data-id="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]');
     const ta = card && card.querySelector('textarea.reply');
     if (!ta) continue;
-    const d = drafts[id];
     ta.value = d.value; autogrow(ta);
-    if (d.focused) { ta.focus(); try { ta.setSelectionRange(d.start, d.end); } catch (_) {} }
+    if (id === draftFocus) { ta.focus(); try { ta.setSelectionRange(d.start, d.end); } catch (_) {} }
   }
   // Mark cards this render is showing for the first time, so a newly arrived comment fades up instead
   // of appearing mid-list. Compared against the ids the LAST render put on screen, not against the
@@ -3163,11 +3219,16 @@ function renderArchived(list, archived, childSug) {
 // for the kind, and the reply count where there is one. No body text, and the preview underneath is
 // painted over the column rather than into it (see .card.collapsed .peek), so a hover costs the layout
 // nothing. The whole pill is the expand control.
+// Two things a pill still has to say, because both are true of the thread rather than of the card and
+// neither survives being drawn nowhere: an unsent reply held for this thread, and the agent composing
+// an answer on it right now. A pill that showed neither would be a quiet place for both to be lost.
 function pillHtml(it, kind) {
   const n = (it.thread || []).length;
   const seen = Turn.peek(it);
-  return `<button class="pill" data-action="unfold" title="expand"><span class="dot"></span>`
-    + `<span class="k">${esc(kind)}</span>${n ? `<span class="n">${n}</span>` : ''}</button>`
+  const draft = hasDraft(it.id);
+  return `<button class="pill" data-action="unfold" title="${draft ? 'expand (unsent reply)' : 'expand'}">`
+    + `<span class="dot"></span><span class="k">${esc(kind)}</span>${n ? `<span class="n">${n}</span>` : ''}`
+    + (draft ? '<span class="draft">draft</span>' : '') + replyingPill(it) + `</button>`
     + (seen ? `<div class="peek"><span>${esc(seen)}</span></div>` : '');
 }
 // Whether an expanded card carries a way back to its pill. Only at compact: `full` is the promise that
@@ -3254,6 +3315,7 @@ async function reply(id, input) {
   // missing the field too, and those cards have to be repliable without being rewritten first.
   (it.thread = it.thread || []).push({ by: state.user, at: new Date().toISOString(), text: input.value.trim() });
   input.value = '';   // clear before any re-render so the capture/restore above doesn't repopulate the sent text
+  replyDrafts.delete(id);   // …and out of the map too, which is what now survives a fold
   const r = await api('PUT', '/api/review', { path: FILE, review: state.review });
   state.review = r.review;
   renderSide();
@@ -3980,6 +4042,8 @@ function resetDocState() {
   // Which threads were folded open is an answer about the outgoing document's items, and an item id is
   // only unique within one review.
   cardFold.clear(); litId = null;
+  // An unsent reply is a reply to one of the outgoing document's threads, so it leaves with them.
+  replyDrafts.clear(); draftFocus = null;
   // Every remembered card position was measured in the OUTGOING document, so it says nothing true
   // about the incoming one: a card held at "where it used to be" would be held somewhere that belongs
   // to another file. Freezes, grace clocks and the seed positions go with it.
