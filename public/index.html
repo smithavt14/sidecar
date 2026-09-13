@@ -27,6 +27,21 @@
     document.documentElement.dataset.measure = m;
     document.documentElement.style.setProperty('--measure', W[m]);
   })();
+  /* The document's type size, before the first paint and for the same reason the theme is: a reader
+     who set 20px and gets one frame of 16.5 watches the whole page reflow on every load. Four steps,
+     the same four the header's control cycles, and the two lists have to stay identical. The stored value
+     is the px number as a string, so retuning a step moves every browser that chose it.
+     The MOBILE floor is not applied here. It belongs to a breakpoint, an inline style beats every
+     media query, and a window dragged across 780px has to re-clamp with no listener watching it. So the
+     floor is --prose-floor in the stylesheet and #doc takes the larger of the two. */
+  (function () {
+    var S = ['15', '16.5', '18', '20'];
+    var p;
+    try { p = localStorage.getItem('sc:proseSize'); } catch (e) {}
+    if (S.indexOf(p) === -1) p = '16.5';
+    document.documentElement.dataset.prose = p;
+    document.documentElement.style.setProperty('--prose-size', p + 'px');
+  })();
 </script>
 <script src="/anchor.js"></script>   <!-- the shared matcher; server requires the same file so both agree on occurrences -->
 <script src="/serialize.js"></script>   <!-- the tight-diff serialize/reindex round-trip; Node tests require the same file -->
@@ -131,19 +146,19 @@
     --rail-w:372px;
     /* The directory panel's width, the same way. Two variables rather than one because the panel has
        a second resting size: --nav-w is the preference the human dragged to, --nav-track is what the
-       grid actually gives it, which collapsing swaps for the icon strip without touching the
+       grid actually gives it, which collapsing swaps for the bare edge without touching the
        preference underneath. */
     --nav-w:248px;
     --nav-track:var(--nav-w);
-    /* The document's vertical scale. One body line is 16.5 × 1.6 = 26.4px, and every gap between two
-       blocks in #doc is a multiple of it. Four steps carry the whole document, which is the point:
-       before this, a paragraph gap, a heading's air and a code block's margin were three unrelated
-       numbers and the page had no rhythm to read by. */
-    --doc-space-0:6px;    /* a quarter line: between two items of one list */
-    --doc-space-1:13px;   /* half a line: under a heading */
-    --doc-space-2:26px;   /* one line: between any two blocks */
-    --doc-space-3:40px;   /* one and a half: above an h2, and around a rule */
-    --doc-space-4:53px;   /* two: above an h1 */
+    /* The document's type size: four steps the header cycles, remembered per browser and stamped on
+       <html> before the first paint (see the script in the head, which holds the same four). This is
+       what a browser with nothing stored reads.
+       The floor is the breakpoint's, not the reader's. #doc is contenteditable, iOS Safari zooms into
+       an editable under 16px and never zooms back, so the phone takes the larger of the two. It is a
+       token in the stylesheet rather than a clamp in the stamp because the stamp writes an inline
+       style, which beats every media query, and a window dragged across 780px has to re-clamp. */
+    --prose-size:16.5px;
+    --prose-floor:0px;
     /* The reading measure: the width of the TEXT, the document's two 44px margins not included. One
        of three the header cycles; the inline script in the head sets it on <html> before the first
        paint, and this is what a browser with nothing stored reads. */
@@ -426,7 +441,7 @@
      Done by overriding --rail-w ON THE BODY rather than with a second grid-template-columns: the
      track, the grip's position and the header's inset are all that one variable, so all three follow
      it, and the width JS wrote on :root is still there for the moment a card arrives.
-     Desktop only, like the folder's icon strip: below the breakpoint the rail is a fixed sheet with no
+     Desktop only, like the folder's collapsed edge: below the breakpoint the rail is a fixed sheet with no
      track to shrink, and hiding its tabs there would leave the pull-up pill opening an empty box. */
   @media (min-width: 781px) {
     body.rail-bare { --rail-w:12px; }
@@ -457,9 +472,9 @@
      clips what is inside.
      Nothing here persists. Reading mode is a thing you are doing right now, not a way you have
      configured the tool, so it always starts off (see setReading: there is no store write). */
-  /* The second selector is not a duplicate: `body.nav-collapsed` pins --nav-track to the 48px strip
-     further down this file, and a single-class rule up here would lose to it on source order, so a
-     reader who had minimized the folder got a 48px band down the left of reading mode. */
+  /* The second selector is not a duplicate: `body.nav-collapsed` pins --nav-track to the collapsed
+     edge further down this file, and a single-class rule up here would lose to it on source order, so
+     a reader who had minimized the folder got a band down the left of reading mode. */
   body.reading, body.reading.nav-collapsed { --nav-track:0px; --rail-w:0px; }
   body.reading #navGrip, body.reading #railGrip, body.reading #navBackdrop { display:none; }
   body.reading #nav, body.reading aside { opacity:0; pointer-events:none; overflow:hidden; }
@@ -520,7 +535,7 @@
     display:flex; align-items:center; justify-content:center; color:var(--faint); border-radius:var(--r-2); }
   #navCollapse:hover, #navExpand:hover { color:var(--ink); background:var(--shell-row); }
   /* Everything under the brand row that is still chrome: the path, then the list's label and its
-     ordering control. Gone when the panel is a strip. */
+     ordering control. Gone when the panel is collapsed. */
   .nav-nav { display:flex; flex-direction:column; gap:2px; padding:11px 8px 4px; }
   /* The breadcrumb is the OPEN DOCUMENT's path, not a trail of where you have clicked, and every
      segment is live. Stepping up a level is clicking a shallower one; coming back down is clicking a
@@ -590,7 +605,6 @@
   .nav-list a .meta { flex:none; margin-left:auto; display:flex; align-items:center; gap:6px;
     font-family:'Geist Mono', ui-monospace, monospace; font-size:var(--t-1); font-weight:400; color:var(--faint); }
   .nav-list a .meta:empty { display:none; }
-  .nav-list a .ini { display:none; }
   .nav-empty { padding:10px; margin:0 8px; color:var(--muted); font-size:var(--t-2); line-height:1.45; }
   /* ---------- the your-turn badge ----------
      The count of items on a document that are waiting on the HUMAN (public/turn.js). Yellow, because
@@ -667,55 +681,44 @@
   /* The panel's own control lives in its header, so the page header carries one only where the panel
      is a drawer and its header is off screen with it. */
   #navToggle, #navExpand { display:none; }
-  /* The strip's own, shown only there (see the collapsed block below). */
+  /* The collapsed edge's own, shown only there (see the collapsed block below). */
   #navStripInbox { display:none; }
-  /* Collapsed is an icon strip and only ever a DESKTOP state: down at the drawer breakpoint the panel
-     is a fixed overlay with no track to shrink, so these rules are scoped rather than undone one by
-     one below — the rail learned that lesson the expensive way. */
+  /* ---------- collapsed: a bare edge ----------
+     It used to be a 48px icon strip: one initial per document, each wearing its own unread dot. That
+     is the folder drawn a second time in a letter nobody can read, and it was the first thing Alex
+     called distracting. Minimizing the folder is a request for the folder to go, so it goes. What is
+     left is the same idea as the review rail at rest: a hairline edge that gets out of the way, one
+     control wider because the way back out has to stay clickable.
+     Two things draw. The expand handle, at the top where an IDE's activity bar puts it, brightening
+     when the pointer is anywhere on the edge. And, only when something in the folder is waiting on
+     you, the count. Nothing else moves, and nothing else is there to.
+     Desktop only: down at the drawer breakpoint the panel is a fixed overlay with no track to shrink,
+     so these rules are scoped rather than undone one by one below. The rail learned that lesson the
+     expensive way. */
   @media (min-width: 781px) {
-    /* 48px, GD's icon rail exactly (3rem). The brand row SURVIVES the collapse — its wordmark goes and
-       its trigger stays, centred — so the way back out is at the top of the strip, where an IDE's
-       activity bar puts it, and the rule under it still lines up with the header's. */
-    body.nav-collapsed { --nav-track:48px; }
+    body.nav-collapsed { --nav-track:34px; }
     body.nav-collapsed #navGrip, body.nav-collapsed .nav-nav { display:none; }
     body.nav-collapsed .nav-brand { padding:0; justify-content:center; }
     body.nav-collapsed .nav-brand .home { display:none; }
     body.nav-collapsed #navCollapse { display:none; }
     body.nav-collapsed #navExpand { display:flex; margin-left:0; }
-    body.nav-collapsed .nav-list { padding:8px 0 0; align-items:center; gap:2px; }
-    /* Each document keeps its click target, as its initial. A strip of blank squares would be a
-       decoration; this one still switches documents, and the title carries the name. */
-    body.nav-collapsed .nav-list a { position:relative; justify-content:center; width:32px; height:32px; padding:0; gap:0; }
-    body.nav-collapsed .nav-list a .nm, body.nav-collapsed .nav-list a .ic { display:none; }
-    body.nav-collapsed .nav-list a .ini { display:block; font-size:var(--t-2); text-transform:uppercase; }
+    /* The list, the inbox and the empty state all go, whichever view the panel was left on. Expanding
+       restores it. */
+    body.nav-collapsed .nav-list, body.nav-collapsed #navInbox,
     body.nav-collapsed .nav-empty { display:none; }
-    /* The badge SURVIVES the collapse, as a corner dot. Minimizing the folder is a request for less
-       chrome, not a request to stop being told which document is waiting on you — and a strip that
-       hides that is a strip you have to expand to check, every time. The number goes (nothing legible
-       fits on a 32px square) and the colour stays, which is the half that carries the meaning. */
-    body.nav-collapsed .nav-list a .meta { position:absolute; top:1px; right:1px; margin:0; gap:0; }
-    body.nav-collapsed .nav-list a .meta .ago { display:none; }
-    body.nav-collapsed .nav-list a .meta .nb.turn { min-width:0; width:7px; height:7px; padding:0;
-      font-size:0; box-shadow:0 0 0 1.5px var(--shell); }
-    body.nav-collapsed .nav-list a .meta .nb.dot { width:5px; height:5px; margin:1px; }
-    /* A strip has no room for the inbox, and no tabs to switch back with (they live in .nav-nav, which
-       the collapse removes). So the strip is always the documents, whatever view the panel was left on;
-       expanding restores it. */
-    body.nav-collapsed #navInbox { display:none; }
-    body.nav-collapsed #navList { display:flex; }
-    /* …and one control that takes the inbox WITH it: the count of what is waiting across the folder is
-       the number the strip most has to keep, and the tab that carried it went with .nav-nav. One
-       32px square under the brand row, the same size as a document's, and clicking it opens the panel
-       on the inbox. The badge is the pill the rail's toggle uses, the other place a number here means
-       "look". */
-    body.nav-collapsed #navStripInbox { position:relative; display:flex; align-self:center;
-      width:32px; height:32px; margin:8px 0 0; padding:0; color:var(--faint); border-radius:var(--r-2); }
-    body.nav-collapsed #navStripInbox:hover { color:var(--ink); background:var(--shell-row); }
-    body.nav-collapsed #navStripInbox .n { position:absolute; top:-1px; right:-3px; min-width:14px;
-      height:14px; padding:0 3px; border-radius:var(--r-pill); background:var(--yellow); color:var(--chip-fg);
-      box-shadow:0 0 0 1.5px var(--shell); font:600 var(--t-1)/14px 'Geist', ui-sans-serif, sans-serif;
-      text-align:center; }
-    body.nav-collapsed #navStripInbox .n:empty { display:none; }
+    /* The pointer anywhere on the edge inks the handle, so a 34px band still says it is a control. */
+    body.nav-collapsed #nav:hover #navExpand { color:var(--ink); }
+    /* The one number the edge keeps: what is waiting on you across the whole folder, the count the
+       inbox tab carried before .nav-nav went. Clicking it opens the panel on the inbox. renderNav
+       hides the button outright at zero (see the [hidden] rule) rather than leaving an empty pill,
+       which would be a control that does nothing. */
+    body.nav-collapsed #navStripInbox { display:flex; align-self:center; width:auto; height:auto;
+      margin:9px 0 0; padding:0; border-radius:var(--r-pill); }
+    body.nav-collapsed #navStripInbox[hidden] { display:none; }
+    body.nav-collapsed #navStripInbox svg { display:none; }
+    body.nav-collapsed #navStripInbox .n { min-width:18px; height:18px; padding:0 5px;
+      border-radius:var(--r-pill); background:var(--yellow); color:var(--on-yellow);
+      font:600 var(--t-1)/18px 'Geist', ui-sans-serif, sans-serif; text-align:center; }
   }
   /* The document itself is the editor: edit rich text in place, no mode switch, no chrome. */
   /* pwd — the document's path, and the content header's title. It sits IN the header now rather than
@@ -736,9 +739,27 @@
      replaces. Counted character by character down a real document at 16.5px, 29em is 479px and 58
      characters, 33em is 545px and 66, and 39em is 644px and 80.
      Centred in its column, because once the rail has stopped growing the slack is symmetric margin
-     around the text and never a band on one side of it. */
-  #doc { max-width:calc(var(--measure) + 88px); margin:0 auto; padding:30px 44px 40vh; min-width:0;
-    outline:none; caret-color:var(--ink); color:var(--fg); font-size:16.5px; line-height:1.6; }
+     around the text and never a band on one side of it.
+     The `em` is also what keeps the measure honest across the four type steps. It resolves against
+     #doc's OWN size, so stepping the type up widens the column and the line still holds 66
+     characters, rather than holding the column still and losing a third of them.
+     --doc-size is the size the document actually draws at: the step the reader chose, floored by the
+     breakpoint. Everything below is a multiple of it, which is what makes one control move the whole
+     document rather than only its body copy. */
+  #doc { --doc-size:max(var(--prose-size), var(--prose-floor));
+    /* The vertical scale. One body line is 1.6 × --doc-size, and every gap between two blocks in #doc
+       is a multiple of it. Four steps carry the whole document: before this, a paragraph gap, a
+       heading's air and a code block's margin were three unrelated numbers and the page had no rhythm
+       to read by. They are declared HERE rather than on :root so the multiplication happens once,
+       against the document's own size, and what every block inherits is already pixels. A gap left in
+       `em` would resolve against the h1 it sits above and open two headings' worth of air. */
+    --doc-space-0:calc(var(--doc-size) * .4);    /* a quarter line: between two items of one list */
+    --doc-space-1:calc(var(--doc-size) * .8);    /* half a line: under a heading */
+    --doc-space-2:calc(var(--doc-size) * 1.6);   /* one line: between any two blocks */
+    --doc-space-3:calc(var(--doc-size) * 2.4);   /* one and a half: above an h2, and around a rule */
+    --doc-space-4:calc(var(--doc-size) * 3.2);   /* two: above an h1 */
+    max-width:calc(var(--measure) + 88px); margin:0 auto; padding:30px 44px 40vh; min-width:0;
+    outline:none; caret-color:var(--ink); color:var(--fg); font-size:var(--doc-size); line-height:1.6; }
   /* An ASSET is not prose and has no reason to inherit the measure. A 1600px artboard read inside 820
      of text column is read at half size, and half of a design is a different design — the type is
      unreadable and the spacing is a guess. So the cap comes off, and the column the two panels leave
@@ -762,14 +783,17 @@
   #doc > * > * { margin:0 0 var(--doc-space-2); }
   /* The first block in the document sits against the padding, never a heading's two lines below it. */
   #doc > :first-child, #doc > :first-child > * { margin-top:0; }
-  #doc h1 { font-size:28px; line-height:1.25; font-weight:600; letter-spacing:-.03em; color:var(--ink);
+  /* The headings are RATIOS of the body, so the whole document steps together: 1.697 / 1.2727 /
+     1.0303 are the 28 / 21 / 17 the reading column was tuned at, over its 16.5. `em` on a font-size
+     resolves against the parent, which is the .block wrapper and so the document's own size. */
+  #doc h1 { font-size:1.697em; line-height:1.25; font-weight:600; letter-spacing:-.03em; color:var(--ink);
     margin:var(--doc-space-4) 0 var(--doc-space-1); }
   /* The rule under an h2 is gone with its 7px of padding. A section break drawn twice (a size jump and
      a line) is one more horizontal in a document that already has tables and a horizontal rule, and
      the space above the heading says the same thing without drawing anything. */
-  #doc h2 { font-size:21px; line-height:1.3; font-weight:600; letter-spacing:-.02em; color:var(--ink);
+  #doc h2 { font-size:1.2727em; line-height:1.3; font-weight:600; letter-spacing:-.02em; color:var(--ink);
     margin:var(--doc-space-3) 0 var(--doc-space-1); }
-  #doc h3 { font-size:17px; line-height:1.35; font-weight:600; letter-spacing:-.01em; color:var(--ink);
+  #doc h3 { font-size:1.0303em; line-height:1.35; font-weight:600; letter-spacing:-.01em; color:var(--ink);
     margin:var(--doc-space-2) 0 var(--doc-space-1); }
   #doc ul, #doc ol { padding-left:var(--doc-space-2); }
   #doc li + li { margin-top:var(--doc-space-0); }
@@ -778,7 +802,7 @@
   #doc li > :last-child { margin-bottom:0; }
   #doc hr { height:0; border:0; border-top:1px solid var(--line); margin:var(--doc-space-3) 0; }
   #doc pre { background:var(--fill); padding:13px 16px; border-radius:var(--r-2); overflow-x:auto;
-    font:14px/1.6 'Geist Mono', ui-monospace, Menlo, monospace; margin:0 0 var(--doc-space-2); }
+    font:.85em/1.6 'Geist Mono', ui-monospace, Menlo, monospace; margin:0 0 var(--doc-space-2); }
   #doc code { background:var(--fill); padding:1px 5px; border-radius:var(--r-1); font-size:.9em;
     font-family:'Geist Mono', ui-monospace, Menlo, monospace; }
   #doc pre code { padding:0; background:none; }
@@ -862,7 +886,7 @@
      overflow itself. */
   #doc table { display:block; width:max-content; max-width:100%; overflow-x:auto;
     border-collapse:collapse; margin:0 0 var(--doc-space-2); }
-  #doc td, #doc th { border:1px solid var(--line-2); padding:7px 11px; font-size:15px; }
+  #doc td, #doc th { border:1px solid var(--line-2); padding:7px 11px; font-size:.909em; }
   /* a document blockquote is CONTENT, not the agent — keep it monochrome (yellow is reserved) */
   #doc blockquote { border-left:2px solid var(--line-2); margin:0 0 var(--doc-space-2);
     padding-left:var(--doc-space-1); color:var(--muted); }
@@ -1196,8 +1220,8 @@
     border-bottom:1.5px solid transparent; }
   .doclink:hover { color:var(--fg); }
   /* Pinned to the panel's foot by the auto margin when the list is short; a long folder scrolls it,
-     which is where a footer belongs in a scrolling column. Gone with the icon strip — 48px fits
-     nothing legible — and gone with the panel itself on the picker screen. */
+     which is where a footer belongs in a scrolling column. Gone with the collapsed edge, which draws
+     nothing but the handle and the count, and gone with the panel itself on the picker screen. */
   .nav-docs { margin:auto 20px 0; padding-top:16px; align-self:flex-start; }
   body.nav-collapsed .nav-docs { display:none; }
   /* right cluster: the orphaned count — the one header number that is actionable (click cycles the
@@ -1322,8 +1346,15 @@
     #pwd { font-size:var(--t-1); }
     /* The gutters are 18px down here, so the cap is the same measure over a narrower margin. On a
        phone the column is the window and nothing binds; on a tablet held wide it still does. */
-    #doc { max-width:calc(var(--measure) + 36px); padding:20px 18px 42vh; font-size:16px; line-height:1.6; }
-    #doc h1 { font-size:25px; } #doc h2 { font-size:19px; } #doc h3 { font-size:16.5px; }
+    #doc { max-width:calc(var(--measure) + 36px); padding:20px 18px 42vh; line-height:1.6; }
+    /* The phone's floor. #doc is contenteditable and iOS Safari zooms into an editable under 16px and
+       never zooms back out, so the smallest of the four steps reads 16 here and the other three are
+       unchanged. --doc-size takes the larger of the two, which is why this is a token rather than a
+       font-size: the vertical scale and the measure are multiples of it and follow on their own. */
+    :root { --prose-floor:16px; }
+    /* The headings close up a little on a phone, so they keep ratios of their own: 25 / 19 / 16.5 over
+       the 16 the column reads there. Still ratios, so all four steps scale. */
+    #doc h1 { font-size:1.5625em; } #doc h2 { font-size:1.1875em; } #doc h3 { font-size:1.0313em; }
     /* The control stays while the three widths still differ. Below 540px the window is narrower than
        the narrowest measure plus its gutters, all three draw the same column, and the button would do
        nothing visible; a tablet at 768px still gets 500, 564 and 660px columns. */
@@ -1433,6 +1464,14 @@
       stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
       <g class="mwb"><path d="M4 4.75v10.5"/><path d="M16 4.75v10.5"/>
       <path d="M7.6 10h4.8" opacity=".45"/></g></svg></button>
+    <!-- The document's type size. Four steps, cycled, and ⌘= / ⌘- / ⌘0 do the same thing from the
+         keyboard, which is where this control actually gets used. Prose only, like the measure it sits
+         beside: an asset has a zoom. -->
+    <button id="proseToggle" class="ghost iconbtn" onclick="cycleProse()"
+      title="Text size" aria-label="Text size"><svg viewBox="0 0 20 20" fill="none"
+      stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M2.4 15.4 6.4 4.8l4 10.6"/><path d="M3.7 11.9h5.4" opacity=".55"/>
+      <path d="M12.3 15.4 14.9 8.6l2.6 6.8"/><path d="M13.2 13.2h3.4" opacity=".55"/></svg></button>
     <!-- Typewriter scrolling: the caret's line held at 45% of the window while you type. A preference,
          remembered, and the icon's ink is its whole state: pressed is the ink, off is the chrome's
          grey, the way the zoom control's pressed half reads. Prose only: paintZoom hides it on an
@@ -1465,7 +1504,7 @@
     <div class="nav-head">
       <!-- The brand row. The wordmark, and the control that minimizes the panel, at the top of the
            frame — the way an IDE's explorer owns its own chrome. Collapsed, the wordmark goes and the
-           trigger stays: the way back out sits at the top of the strip. -->
+           trigger stays: the way back out sits at the top of the collapsed edge. -->
       <div class="nav-brand brand">
         <a href="/" class="home" title="all documents">
           <img class="mark" src="/mark.svg" alt="" aria-hidden="true">
@@ -1482,8 +1521,9 @@
           <rect x="2.5" y="3.75" width="15" height="12.5" rx="2.5"/><path d="M7.1 3.75v12.5"/>
           <path d="M11.4 7.9 13.5 10l-2.1 2.1"/></svg></button>
       </div>
-      <!-- Strip only. The collapse takes .nav-nav and the folder's inbox tab with it, and the count on
-           that tab is what says something is waiting. This keeps it, and opens the panel on the inbox. -->
+      <!-- Collapsed only, and hidden by renderNav at zero. The collapse takes .nav-nav and the folder's
+           inbox tab with it, and the count on that tab is what says something is waiting. The edge keeps
+           the count, as a bare pill, and clicking it opens the panel on the inbox. -->
       <button id="navStripInbox" class="ghost iconbtn" onclick="openInbox()"
         title="Open the inbox" aria-label="Open the inbox"><svg viewBox="0 0 20 20" fill="none"
         stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -3793,6 +3833,8 @@ function paintZoom() {
   el.hidden = !isAsset();
   // The two are opposites and never both apply: prose has a measure, an asset has a zoom.
   const mw = $('measureToggle'); if (mw) mw.hidden = isAsset();
+  // The type size goes with it, for the same reason: an asset is scaled, not set.
+  const ps = $('proseToggle'); if (ps) ps.hidden = isAsset();
   // An asset is read-only and has no caret, so there is no line to hold. It goes with the measure.
   const tw = $('typewriterToggle'); if (tw) tw.hidden = isAsset();
   for (const b of el.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.zoom === assetZoom));
@@ -3911,6 +3953,55 @@ function cycleMeasure() {
   const i = MEASURES.findIndex(x => x[0] === measureName());
   applyMeasure(MEASURES[(i + 1) % MEASURES.length][0]);
 }
+
+// ---------- the document's type size ----------
+// Four steps, cycled from the header and stepped from the keyboard. The same four the inline script in
+// the head knows, because that one runs before the first paint and this one cannot: keep the pairs
+// identical. The stored value is the px number as a string, under `sc:proseSize`.
+//
+// Four rather than a slider, the same reasoning the measure's three carry: how big this document should
+// be is a question a reader answers once. The steps are a ratio apart (1.1 either side of the default)
+// so each click is a change you can see and none of them is a different document.
+//
+// One number moves everything, because #doc derives the rest from it: the vertical scale is a multiple
+// of --doc-size, the headings are ratios of it, and the measure is in `em`, so the column widens with
+// the type and the line still holds 66 characters.
+const PROSE_SIZES = ['15', '16.5', '18', '20'];
+const PROSE_DEFAULT = '16.5';
+const proseSize = () => {
+  const p = document.documentElement.dataset.prose;
+  return PROSE_SIZES.includes(p) ? p : PROSE_DEFAULT;
+};
+function applyProse(px) {
+  const p = PROSE_SIZES.includes(String(px)) ? String(px) : PROSE_DEFAULT;
+  document.documentElement.dataset.prose = p;
+  document.documentElement.style.setProperty('--prose-size', p + 'px');
+  uiStore.set('proseSize', p);
+  // Every line in the document just moved, so every docked card is level with the wrong pixel until it
+  // re-measures. The same call the measure and the rail's drag make, for the same reason.
+  relayoutDoc();
+}
+// Both directions off one function, so the keyboard and the button cannot disagree about the order.
+// The button wraps (it is the only step it has); the keys stop at the ends, which is what a reader
+// pressing ⌘- four times expects.
+function stepProse(dir, wrap) {
+  const i = PROSE_SIZES.indexOf(proseSize());
+  const next = wrap ? (i + dir + PROSE_SIZES.length) % PROSE_SIZES.length
+    : Math.min(PROSE_SIZES.length - 1, Math.max(0, i + dir));
+  applyProse(PROSE_SIZES[next]);
+}
+function cycleProse() { stepProse(1, true); }
+// ⌘= / ⌘+ up, ⌘- down, ⌘0 back to the default, captured so the browser's own zoom does not fire on the
+// same keystroke. iA Writer and every other editor binds these, and a reader who reaches for them and
+// gets the whole application scaled instead has been answered by the wrong thing. Capture rather than
+// bubble because the document is contenteditable and the keys have to be taken before anything in it
+// sees them. `=` is the unshifted key on a US layout and `+` is the shifted one; both mean bigger.
+window.addEventListener('keydown', (e) => {
+  if (!(e.metaKey || e.ctrlKey) || e.altKey || isAsset()) return;
+  if (e.key === '=' || e.key === '+') { e.preventDefault(); stepProse(1, false); return; }
+  if (e.key === '-' || e.key === '_') { e.preventDefault(); stepProse(-1, false); return; }
+  if (e.key === '0') { e.preventDefault(); applyProse(PROSE_DEFAULT); }
+}, true);
 const railCollapsed = () => document.body.classList.contains('rail-collapsed');
 const railBare = () => document.body.classList.contains('rail-bare');
 // Two ways for the rail not to be on screen, one question for the toggle: collapsed is the human's
@@ -4179,7 +4270,10 @@ function renderNav() {
   const waiting = navData.docs.reduce((n, d) => n + (d.turn || 0), 0);
   const waitingLabel = waiting ? (waiting > 9 ? '9+' : String(waiting)) : '';
   $('navInboxCount').textContent = waitingLabel;
-  $('navStripCount').textContent = waitingLabel;   // the same number, for the icon strip
+  $('navStripCount').textContent = waitingLabel;
+  // The collapsed edge draws the count and nothing else, so a zero takes the whole control with it
+  // rather than leaving an empty pill sitting under the handle.
+  $('navStripInbox').hidden = !waiting;
   for (const b of document.querySelectorAll('.nav-tabs button'))
     b.setAttribute('aria-selected', b.dataset.view === navView ? 'true' : 'false');
   const docs = Nav.sort(navData.docs, navSort);
@@ -4197,7 +4291,7 @@ function renderNav() {
     return `<a href="/?f=${encodeURIComponent(d.rel)}" data-rel="${esc(d.rel)}"` +
       `${d.rel === FILE ? ' class="on" aria-current="page"' : ''} title="${esc(d.name)}">` +
       navIcon(d.name) +
-      `<span class="ini">${esc(stem.slice(0, 1))}</span><span class="nm">${esc(stem)}</span>` +
+      `<span class="nm">${esc(stem)}</span>` +
       `<span class="meta">${ago}${navMarker(d)}</span></a>`;
   }).join('') : '<div class="nav-empty">No documents in this folder. The path above is live, in both directions.</div>';
   renderInbox();
@@ -4300,8 +4394,8 @@ function setNavView(view) {
   uiStore.set('navView', navView);
   renderNav();
 }
-// The strip's way into the inbox. Switching the view and expanding the panel are one move from there:
-// the strip has no tab bar to land on, and a count you can see but not follow is a tease.
+// The collapsed edge's way into the inbox. Switching the view and expanding the panel are one move from
+// there: the edge has no tab bar to land on, and a count you can see but not follow is a tease.
 function openInbox() { setNavView('inbox'); toggleNav(true); }
 $('navCrumb').addEventListener('click', (e) => {
   const b = e.target.closest && e.target.closest('button[data-dir]');
@@ -4530,7 +4624,7 @@ function toggleNav(show) {
   paintNavToggle();
 }
 function closeNavDrawer() { document.body.classList.remove('nav-open'); paintNavToggle(); }
-// Three controls, one state. The shell's own (in its header, and in the strip it collapses to) and the
+// Three controls, one state. The shell's own (in its header, and on the edge it collapses to) and the
 // page header's, which exists only where the drawer's header is off screen with the drawer.
 function paintNavToggle() {
   const shown = navIsDrawer() ? navDrawerOpen() : !navCollapsed();
@@ -4595,7 +4689,7 @@ function paintNavToggle() {
 //
 // With no preference on file the default depends on what was ASKED FOR. A URL naming a document is a
 // request to read that document, and 248px of folder listing beside it is the answer to a question
-// nobody asked, so the panel rests as its icon strip, one click from the full list. Arriving with no
+// nobody asked, so the panel rests as its bare edge, one click from the full list. Arriving with no
 // document is the other request, the picker, and there the panel is the point.
 //
 // Three states in the store, not two: `1` collapsed, `''` open, absent never answered. toggleNav

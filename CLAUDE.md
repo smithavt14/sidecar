@@ -507,10 +507,49 @@ code block, an image and the asset frame are boxes rather than prose and a corne
 
 Four tests hold it: every chrome `font-size` and `font:` shorthand names a step, every
 `border-radius` anywhere names a radius, the chrome rests on three line heights (1, 1.45, 1.6) and
-three weights (400, 500, 600), and every uppercase micro-label tracks through `--track-caps`. Two
-literals survive the type scan and both are named in it with a reason: `font-size:0` hides the badge
-number on the folder strip's 7px dot, and the docs link's arrow is `.82em` of whatever word it
-follows.
+three weights (400, 500, 600), and every uppercase micro-label tracks through `--track-caps`. One
+literal survives the type scan and it is named in it with a reason: the docs link's arrow is `.82em`
+of whatever word it follows.
+
+## One number, and the whole document is a multiple of it
+
+The document's size is a preference now: four steps (15, 16.5, 18, 20), `sc:proseSize`, default the
+16.5 the reading column was tuned at. An icon in the header cycles them and ⌘= / ⌘- / ⌘0 step, reset,
+and are captured so the browser's own zoom does not answer instead. It is stamped on `<html>` before
+the first paint by the same inline script that stamps the theme and the measure, which is why the
+script holds its own copy of the four: a reader who set 20px otherwise gets one frame at 16.5 and
+watches the page reflow on every load. Keep the two lists identical.
+
+**Everything else in the document is derived from it**, which is what makes it one control rather than
+a body-copy slider. `#doc` declares `--doc-size`, the vertical scale is `calc(var(--doc-size) * n)`,
+the headings are ratios (1.697 / 1.2727 / 1.0303, which is 28/21/17 over 16.5), and the measure is in
+`em` and resolves against `#doc`'s own size, so the column widens with the type and the line still
+holds its 66 characters. The scale is declared ON `#doc` rather than on `:root` so the multiplication
+happens once, against the document's size: a gap left in `em` would resolve against the h1 it sits
+above and open two headings' worth of air.
+
+**The phone's floor is a token, not a clamp in the stamp.** `#doc` is contenteditable, iOS Safari zooms
+into an editable under 16px and never zooms back, so the mobile block declares `--prose-floor:16px` and
+`--doc-size` takes the larger of the two. The stamp writes an inline style, which beats every media
+query, and a window dragged across 780px has to re-clamp with nothing listening.
+
+Applying a size calls `relayoutDoc()`, for the reason the measure's cycle does: every line in the
+document moved, so every docked card is level with the wrong pixel until it re-measures.
+
+## The collapsed folder is a bare edge
+
+Collapsing the panel used to leave a 48px icon strip: one initial per document, each wearing its own
+unread dot. That is the folder drawn a second time in a letter nobody can read, and it was the first
+thing Alex said was distracting. Minimizing the folder is a request for the folder to go, so it goes.
+
+What is left is 34px carrying two things. The expand handle, at the top where an IDE's activity bar
+puts it, inked when the pointer is anywhere on the edge. And the count of what is waiting on you
+across the folder, the number the inbox tab carried before `.nav-nav` went, which opens the panel on
+the inbox. `renderNav` hides that control outright at zero rather than leaving an empty pill, which
+would be a control that does nothing.
+
+Desktop only, like the review rail's own bare state: below 781px the panel is a drawer with no track
+to shrink.
 
 ## Attached images
 
