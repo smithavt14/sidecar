@@ -35,6 +35,7 @@
 <script src="/doclink.js"></script>   <!-- does a link in the document open IN sidecar; pure string in/out, Node tests require the same file -->
 <script src="/turn.js"></script>   <!-- whose turn is it: the panel's badges and the inbox; server.js requires the same file -->
 <script src="/stability.js"></script>   <!-- freeze / last known position / orphan grace for the docked rail; Node tests require the same file -->
+<script src="/focus.js"></script>   <!-- where the page sits for the caret's line to rest at 45%; pure numbers in/out, Node tests require the same file -->
 <script src="/assetframe.js"></script>   <!-- an .html asset → the sandboxed frame's srcdoc; Node tests require the same file -->
 <script src="/lib/marked/marked.min.js"></script>
 <script src="/lib/dompurify/dist/purify.min.js"></script>   <!-- marked v12 has no sanitizer; scrub its HTML before it hits innerHTML (XSS) -->
@@ -396,6 +397,55 @@
     border-radius:99px; background:var(--yellow); color:var(--on-yellow); box-shadow:0 0 0 1.5px var(--bg);
     font:600 10px/14px 'Geist', ui-sans-serif, sans-serif; text-align:center; }
   #railToggle .n:empty { display:none; }
+  /* ---------- reading mode ----------
+     Two axes, and this is the second one. Typewriter scrolling answers "where does the active line
+     sit"; reading mode answers "what else is on screen", which is the split iA Writer, Ulysses,
+     Typora and Byword all make and the reason it is a separate control rather than a mode that does
+     both. Alex reads a draft straight through before deciding anything on it, and every card, mark,
+     badge and panel in the frame is an invitation to decide something.
+     Both tracks collapse to zero rather than being removed, because a track that stops existing
+     cannot animate: --nav-track and --rail-w already drive the body's inset, the grid's second
+     column, the header's right margin and both grips, so setting the two numbers moves all of it,
+     and `main` interpolates a width where it could not interpolate a missing column. The panels
+     themselves fade out over the same 220ms; they are 0px wide by then, and their own overflow
+     clips what is inside.
+     Nothing here persists. Reading mode is a thing you are doing right now, not a way you have
+     configured the tool, so it always starts off (see setReading: there is no store write). */
+  /* The second selector is not a duplicate: `body.nav-collapsed` pins --nav-track to the 48px strip
+     further down this file, and a single-class rule up here would lose to it on source order, so a
+     reader who had minimized the folder got a 48px band down the left of reading mode. */
+  body.reading, body.reading.nav-collapsed { --nav-track:0px; --rail-w:0px; }
+  body.reading #navGrip, body.reading #railGrip, body.reading #navBackdrop { display:none; }
+  body.reading #nav, body.reading aside { opacity:0; pointer-events:none; overflow:hidden; }
+  body.reading aside { padding-left:0; padding-right:0; }
+  /* The bar keeps its height and its place, so the column does not jump 52px when the mode changes,
+     and it keeps exactly one control: the way back out. Everything else in it belongs to a decision. */
+  body.reading header { background:transparent; border-bottom-color:transparent; }
+  body.reading .hwrap > *:not(#readingToggle):not(.spacer) { display:none; }
+  /* The marks are the review showing through the prose. The rule stays in the DOM, where markAnchors,
+     the click handler and dockCards all still find it. It simply stops painting. */
+  body.reading mark.anchor { border-bottom-color:transparent; background:transparent; box-shadow:none; }
+  body.reading #seltool { display:none; }
+  /* The animation, on for the 260ms either side of the change and never left on: the same rule
+     `rail-animating` follows, and for the same reason: a permanent transition on --rail-w would lag
+     every drag of a grip and every window resize. */
+  body.reading-animating { transition:padding-left .22s ease; }
+  body.reading-animating main { transition:grid-template-columns .22s ease; }
+  body.reading-animating #nav, body.reading-animating aside { transition:opacity .22s ease; }
+  body.reading-animating header { transition:background .22s ease, border-color .22s ease; }
+  @media (prefers-reduced-motion: reduce) {
+    body.reading-animating, body.reading-animating main,
+    body.reading-animating #nav, body.reading-animating aside,
+    body.reading-animating header { transition:none; }
+  }
+  /* Typewriter's icon carries its own state, since there is no column to watch move: pressed is the
+     page's ink against the chrome's grey. */
+  #typewriterToggle[aria-pressed="true"] { color:var(--ink); }
+  /* …and the document gets the room its last line needs. 45% of the window means 55vh of space below
+     the caret, and #doc rests at 40vh (42vh on a phone), so the final paragraph topped out at 60% and
+     the clamp ate the difference. Only while the mode is on: 58vh of blank under every document is a
+     tax on reading one. Both breakpoints in one rule, since it outranks either #doc. */
+  body.typewriter #doc { padding-bottom:58vh; }
   /* ---------- the directory panel ----------
      The folder the open document lives in, listed — and the application's frame. Fixed to the window
      rather than sitting in main's grid: full height, its own ground, one hairline down its right
@@ -1281,6 +1331,12 @@
       min-width:20px; text-align:center; padding:0 6px; font-size:12.5px; }
     #sheetToggle .n:empty { display:none; }
     body.sheet-open #sheetToggle { display:none; }
+    /* Reading mode, down here. The two panels are already overlays rather than tracks, so collapsing
+       --nav-track and --rail-w does nothing and the work is all in what is drawn: the pull-up pill is
+       the last piece of review chrome on the screen and it goes with the rest. setReading shuts the
+       drawer and the sheet before the mode starts, so neither can be left open behind it. */
+    body.reading #sheetToggle, body.reading #sheetBackdrop { display:none; }
+    body.reading aside { transform:translateY(102%); }
   }
 </style>
 </head>
@@ -1327,6 +1383,21 @@
       stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
       <g class="mwb"><path d="M4 4.75v10.5"/><path d="M16 4.75v10.5"/>
       <path d="M7.6 10h4.8" opacity=".45"/></g></svg></button>
+    <!-- Typewriter scrolling: the caret's line held at 45% of the window while you type. A preference,
+         remembered, and the icon's ink is its whole state: pressed is the ink, off is the chrome's
+         grey, the way the zoom control's pressed half reads. Prose only: paintZoom hides it on an
+         asset, which has no caret to hold. -->
+    <button id="typewriterToggle" class="ghost iconbtn" onclick="toggleTypewriter()" aria-pressed="false"
+      title="Typewriter scrolling" aria-label="Typewriter scrolling"><svg viewBox="0 0 20 20" fill="none"
+      stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+      <path d="M5.5 4.6h9" opacity=".4"/><path d="M5.5 7.3h9" opacity=".4"/>
+      <path d="M2.6 10h14.8"/>
+      <path d="M5.5 12.7h9" opacity=".4"/><path d="M5.5 15.4h9" opacity=".4"/></svg></button>
+    <!-- Reading mode: the panels, the rail, the marks and the rest of this bar go, and the column is
+         centred in the window. The button is its own way back out, which is why it is the one control
+         the header keeps while reading (⌘⇧F, or Escape). paintReading swaps the icon. -->
+    <button id="readingToggle" class="ghost iconbtn" onclick="toggleReading()" aria-pressed="false"
+      title="Reading mode"></button>
     <button id="railToggle" class="ghost iconbtn" onclick="toggleRail()" aria-controls="side" aria-expanded="true"
       title="Hide review panel" aria-label="Hide review panel"><svg viewBox="0 0 20 20" fill="none"
       stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -2302,6 +2373,10 @@ $('doc').addEventListener('keydown', (e) => {
 });
 const SELTOOL_HTML = $('seltool').innerHTML;   // captured once — openLinkInput() replaces the buttons with a URL field
 function showTool() {
+  // Reading mode is reading, not reviewing: a selection there is someone re-reading a sentence, and a
+  // toolbar offering to comment on it is the chrome the mode exists to take away. The document is
+  // still editable, so the typo can still be fixed; what is gone is the invitation.
+  if (isReading()) return;
   const st = $('seltool');
   st.innerHTML = SELTOOL_HTML;                  // always rebuild the full button set (the link input never restored itself)
   st.style.display = 'flex';
@@ -3468,6 +3543,181 @@ function paintTheme(t) {
   btn.setAttribute('aria-label', label);
 }
 applyTheme(currentTheme());
+// ---------- reading mode ----------
+// One toggle, and everything that is not the document goes: both panels, the rail's cards, the marks
+// in the prose, the rest of the header. The document stays contenteditable, because catching a typo
+// while reading and having to leave the mode to fix it is the thing that makes a reading mode
+// something you stop using.
+//
+// Nothing is persisted, on purpose, and that is the difference between this and every other
+// preference in the tool. Reading is something you are doing for the next ten minutes; the theme and
+// the page width are how you have set the tool up. A reading mode that survived a reload would have a
+// reader opening a document to a page with no folder, no rail and no explanation.
+//
+// 220ms with a reduced-motion opt-out (see the CSS). The class is added around the change rather than
+// left on, the same way `rail-animating` is: --rail-w and --nav-track also move on every grip drag.
+const READING_MS = 220;
+const READING_ICON = {
+  // A book, open. The way in.
+  off: '<path d="M10 6.2v9.7"/><path d="M10 6.2C8.7 5.1 7 4.6 4.7 4.6H2.9v9.7h1.8c2.3 0 4 .5 5.3 1.6"/>'
+     + '<path d="M10 6.2c1.3-1.1 3-1.6 5.3-1.6h1.8v9.7h-1.8c-2.3 0-4 .5-5.3 1.6"/>',
+  // …and the way out, which is the only control the header keeps while reading.
+  on: '<path d="M5.6 5.6 14.4 14.4"/><path d="M14.4 5.6 5.6 14.4"/>',
+};
+let reading = false, readingTimer = null;
+function isReading() { return reading; }
+function setReading(on) {
+  on = !!on;
+  if (on === reading) return;
+  reading = on;
+  // Both overlays belong to the review, and either one left open would sit on top of a mode whose
+  // whole point is that the review is not on screen.
+  if (on) { closeNavDrawer(); toggleSheet(false); }
+  document.body.classList.add('reading-animating');
+  document.body.classList.toggle('reading', on);
+  clearTimeout(readingTimer);
+  readingTimer = setTimeout(() => {
+    document.body.classList.remove('reading-animating');
+    relayoutDoc();      // the tracks have finished moving; re-measure against the real column
+  }, READING_MS + 40);
+  // A selection, or a comment composer, can be live at the moment the mode starts.
+  if (on) { hideTool(); hidePopover(); }
+  syncMarkEditing();
+  paintReading();
+  relayoutDoc();
+}
+function toggleReading() { setReading(!reading); }
+function paintReading() {
+  const btn = $('readingToggle');
+  if (!btn) return;
+  btn.innerHTML = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" '
+    + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    + READING_ICON[reading ? 'on' : 'off'] + '</svg>';
+  const label = reading ? 'Leave reading mode (Esc)' : 'Reading mode (⌘⇧F)';
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+  btn.setAttribute('aria-pressed', String(reading));
+}
+paintReading();
+
+// ⌘⇧F / Ctrl+Shift+F in, Escape out. Neither is taken: the page's other keydown handlers are Alt and
+// Shift over an asset frame, Backspace and Enter inside the document, and the arrow keys on the two
+// resize grips. Escape only acts while reading AND while the lightbox is shut, since the lightbox has
+// its own Escape and a picture opened from the document is the nearer thing to dismiss.
+window.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'f' || e.key === 'F')) {
+    e.preventDefault(); toggleReading(); return;
+  }
+  if (e.key === 'Escape' && reading && !$('lightbox').classList.contains('on')) {
+    e.preventDefault(); setReading(false);
+  }
+});
+
+// ---------- typewriter scrolling ----------
+// The caret's line held at 45% of the window while you type, so the sentence being written stays where
+// the eye already is instead of climbing to the top of the screen. A preference, remembered, off by
+// default, and independent of reading mode. Two axes, which is the split every writing app makes.
+//
+// Where the page has to go is public/focus.js. What is here is when to ask it:
+//
+//   · the caret MOVED. selectionchange fires on scroll-adjacent things too and fires in bursts, so
+//     the position is compared against the last one and an unchanged caret is not a reason to scroll.
+//   · the document has FOCUS. Typing into a reply box in the rail is not writing in the document, and
+//     re-centring the page under it would drag the box away from the person using it.
+//   · nothing has SUSPENDED it. A wheel or a touch drag means the reader is looking somewhere else on
+//     purpose; re-centring on the next keystroke is what un-suspends it, so scrolling away to check
+//     something and then carrying on reads as one gesture rather than a fight.
+//
+// The scroll is the ordinary page scroll, which is what dockCards already lives on: a card is placed
+// from its mark's rect relative to the rail's, and both move together, so a scroll moves neither.
+let typewriter = uiStore.get('typewriter', '') === '1';
+let typeSuspended = false, typeFrame = 0, lastCaret = null;
+const reduceMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+function setTypewriter(on) {
+  typewriter = !!on;
+  uiStore.set('typewriter', typewriter ? '1' : '');
+  paintTypewriter();
+  if (typewriter) { typeSuspended = false; lastCaret = null; recentreCaret(); }
+}
+function toggleTypewriter() { setTypewriter(!typewriter); }
+function paintTypewriter() {
+  // The body class is what gives the document the room the last line needs (see the CSS): 40vh of
+  // bottom padding caps a final line at 60% of the window, so it could never reach 45% and the clamp
+  // quietly stopped short of the thing the mode promises.
+  document.body.classList.toggle('typewriter', typewriter);
+  const btn = $('typewriterToggle');
+  if (!btn) return;
+  btn.setAttribute('aria-pressed', String(typewriter));
+  const label = 'Typewriter scrolling: ' + (typewriter ? 'on' : 'off');
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+}
+paintTypewriter();
+// A collapsed range at the very start of a block reports no client rect in every engine, so the
+// element around it answers instead. That is the paragraph rather than the line, which is the right
+// answer precisely in the case it is needed (an empty block is one line tall).
+function caretRect() {
+  const s = getSelection();
+  if (!s || !s.rangeCount || !s.focusNode) return null;
+  // Built from focusNode/focusOffset rather than by collapsing getRangeAt(0). A Range is normalized to
+  // DOCUMENT ORDER, so collapsing one to its end gives the anchor of a backward selection: extending a
+  // selection upward with Shift+Up scrolled toward the sentence being left behind instead of the line
+  // the caret was on. caretMoved() already keys off the focus; this makes the two agree.
+  const r = document.createRange();
+  r.setStart(s.focusNode, Math.min(s.focusOffset, s.focusNode.nodeType === 3
+    ? s.focusNode.length : s.focusNode.childNodes.length));
+  r.collapse(true);
+  const rect = r.getClientRects()[0];
+  if (rect && rect.height) return rect;
+  const n = r.startContainer;
+  const el = n && (n.nodeType === 1 ? n : n.parentElement);
+  return el ? el.getBoundingClientRect() : null;
+}
+function docHasCaret() {
+  const d = $('doc'), a = document.activeElement;
+  return !!(d && a && (a === d || d.contains(a)));
+}
+function recentreCaret() {
+  if (!typewriter || typeSuspended || isAsset() || !docHasCaret()) return;
+  const rect = caretRect();
+  if (!rect) return;
+  const top = Focus.target({
+    caretTop: rect.top, caretHeight: rect.height, viewportH: window.innerHeight,
+    scrollY: window.scrollY,
+    maxScroll: document.documentElement.scrollHeight - window.innerHeight,
+  });
+  if (top == null) return;
+  window.scrollTo({ top: top, behavior: reduceMotion() ? 'auto' : 'smooth' });
+}
+// One re-centre per frame however many events arrive: a keypress fires input and selectionchange, and
+// a held arrow key fires both again every repeat.
+function scheduleCaret() {
+  if (typeFrame) return;
+  typeFrame = requestAnimationFrame(() => { typeFrame = 0; recentreCaret(); });
+}
+function caretMoved() {
+  const s = getSelection();
+  if (!s || !s.rangeCount) return false;
+  const was = lastCaret;
+  lastCaret = { n: s.focusNode, o: s.focusOffset };
+  return !was || was.n !== lastCaret.n || was.o !== lastCaret.o;
+}
+function onCaretActivity() {
+  if (!typewriter || !caretMoved()) return;
+  typeSuspended = false;     // the caret moved, so whatever the reader was looking at, they are back
+  scheduleCaret();
+}
+document.addEventListener('selectionchange', onCaretActivity);
+$('doc').addEventListener('input', onCaretActivity);
+const CARET_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter',
+  'Home', 'End', 'PageUp', 'PageDown']);
+$('doc').addEventListener('keyup', (e) => { if (CARET_KEYS.has(e.key)) onCaretActivity(); });
+// Do not fight the reader. A scroll they made themselves holds until the caret next moves; a scroll
+// this code made is not one of these events (scrollTo fires `scroll`, not wheel or touchmove), which
+// is why the suspend hangs off the input devices rather than off the scroll.
+const suspendTypewriter = () => { typeSuspended = true; };
+window.addEventListener('wheel', suspendTypewriter, { passive: true });
+window.addEventListener('touchmove', suspendTypewriter, { passive: true });
 // ---------- the asset's zoom ----------
 // How big an asset is drawn is the reader's call, not the column's. `fit` scales the canvas into the
 // document column, which is what an asset has always done and stays the default; `100%` renders it at
@@ -3493,6 +3743,8 @@ function paintZoom() {
   el.hidden = !isAsset();
   // The two are opposites and never both apply: prose has a measure, an asset has a zoom.
   const mw = $('measureToggle'); if (mw) mw.hidden = isAsset();
+  // An asset is read-only and has no caret, so there is no line to hold. It goes with the measure.
+  const tw = $('typewriterToggle'); if (tw) tw.hidden = isAsset();
   for (const b of el.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.zoom === assetZoom));
 }
 $('zoom').addEventListener('click', (e) => {
@@ -4428,6 +4680,17 @@ function markAnchors() {
     try { wrapAnchor(it.anchor.quote, it.anchor.occurrence || 0, it.id, whoCls(it.by) === 'human'); }
     catch (e) { console.error('sidecar: failed to highlight', it.id, e); }
   }
+  syncMarkEditing();
+}
+// A mark is contenteditable:false everywhere else, which is what makes it a clean tap target for its
+// card. In reading mode there is no card to tap and the mark is not painted, so an anchored sentence
+// would be an invisible island the caret could not enter — the one thing the mode promises you can
+// still do. Called from both ends, because marks are rebuilt on every render.
+function syncMarkEditing() {
+  for (const m of $('doc').querySelectorAll('mark.anchor')) {
+    if (isReading()) m.removeAttribute('contenteditable');   // inherit #doc's own editability
+    else m.contentEditable = 'false';
+  }
 }
 // A diagram node whose label IS this item's quote gets the cue. Matched on the label rather than on
 // anything stored in the sidecar, so a node comment stays an ordinary comment on disk — an agent that
@@ -4448,6 +4711,7 @@ function markNodes(quote, id) {
 function pulse(nodes) { nodes.forEach(m => m.classList.add('flash')); setTimeout(() => nodes.forEach(m => m.classList.remove('flash')), 1400); }
 // Tap a highlight in the doc → open its review (sheet on mobile) and flash the matching card.
 $('doc').addEventListener('click', (e) => {
+  if (isReading()) return;   // the rail is not on screen; opening a card would drag it back on
   const m = e.target.closest && e.target.closest('mark.anchor');
   if (m && m.dataset.id) openReview(m.dataset.id);
 });

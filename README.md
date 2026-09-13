@@ -110,6 +110,12 @@ while you read. `sidecar watchers` lists what is armed and whether each one is s
   text and H1 / H2 / H3.
 - Select text for a floating toolbar: bold, italic (⌘B/⌘I), link, comment.
 
+**Read.** Two controls in the header, and they are independent. **Reading mode** (⌘⇧F, Escape to leave)
+takes away the folder, the review rail, the highlights and the rest of the header, and centres the
+column in the window; the document is still editable, so a typo you spot is still one keystroke away.
+**Typewriter scrolling** holds the line you are writing at 45% of the window instead of letting the
+caret climb to the top. Scroll with the wheel or a finger and it stands aside until you type again.
+
 **Comment.** Select text, then comment. The comment box is draggable, so you can move it off the text you're
 commenting on. Threads reply and resolve. Every open comment or suggestion softly highlights its span in the
 document; tap the highlight to open its card, tap a card's quote to jump to the text. The review rail has two tabs: **active** threads (open, editable) and **archived** threads (settled, read-only), and an icon at the right end of that bar cycles how much of it is drawn: every card full, compact (a thread waiting on you stays full and the rest rest as pills you can click open), or hidden, which clears the rail and the highlights so you can read the draft straight through.
