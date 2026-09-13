@@ -5,6 +5,19 @@
 <title>sidecar</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script>
+  /* Theme, before the first paint. The CSS follows the system on its own; this only stamps a CHOICE,
+     and it has to run here in <head> or a reader who picked dark gets one white frame on every load.
+     Inline, synchronous, and wrapped: Safari in private mode throws on localStorage, and no
+     preference is worth a blank page. The key is `sc:theme`, the same `sc:` prefix every other UI
+     preference uses (see uiStore) — read directly here because uiStore does not exist yet. */
+  (function () {
+    try {
+      var t = localStorage.getItem('sc:theme');
+      if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+    } catch (e) {}
+  })();
+</script>
 <script src="/anchor.js"></script>   <!-- the shared matcher; server requires the same file so both agree on occurrences -->
 <script src="/serialize.js"></script>   <!-- the tight-diff serialize/reindex round-trip; Node tests require the same file -->
 <script src="/flow.js"></script>   <!-- ```flow fences → SVG; pure string in/out, Node tests require the same file -->
@@ -23,18 +36,32 @@
      hairlines + soft depth shadows, no hard offset borders. One rule holds it together —
      YELLOW = THE AGENT. #ffeb00 appears only on claude's presence, its diffs, its anchors, and
      open-item dots. Never on you, never on a primary button. Ink does the work; chrome is lowercase.
-     Source: claude.ai/design "Sidecar Review" spec. */
+     Source: claude.ai/design "Sidecar Review" spec.
+
+     Two themes, one set of names. Every colour in this file comes from a token, and the dark palette
+     redeclares the same tokens rather than adding a parallel set of rules — so a new rule is written
+     once and follows the theme for free. A test scans the stylesheet for a hex that escaped. */
   @font-face { font-family:'Geist'; font-weight:100 900; font-display:swap;
     src:url('/fonts/geist-latin.woff2') format('woff2'), url('/fonts/geist-latin-ext.woff2') format('woff2'); }
   :root {
     --bg:#ffffff;            /* page surface */
     --fill:#faf9f4;          /* recessed wells: code, diffs, icon holders */
+    --card:#ffffff;          /* a RAISED surface: a review card, a menu, a popover, the seltool */
+    --card-off:#fafaf8;      /* a settled one: orphaned, archived */
+    --card-fade:rgba(255,255,255,0);  /* --card at zero alpha, for the clipped card's fade */
     --ink:#141410;           /* headings, structure, your identity */
     --ink-btn:#1b1a15;       /* primary button */
+    --ink-btn-hover:#26251e;
+    --on-ink:#ffffff;        /* text ON the primary button */
+    --on-ink-edge:rgba(255,255,255,.16);      /* its faint edge */
+    --on-ink-edge-strong:rgba(255,255,255,.3);
     --fg:#33332c;            /* body copy */
+    --ink-2:#57574f;         /* quiet chips, mono wells, the crumb's last segment */
+    --ink-3:#6b6b64;         /* the presence readout while claude is here */
     --muted:#8a8a82;         /* labels, secondary */
     --faint:#a3a39b;         /* timestamps, quiet quotes */
     --fainter:#b0b0a8;       /* mono meta, em-dash */
+    --dead:#c2c2ba;          /* a dot with nothing behind it */
     --line:rgba(20,20,15,.08);      /* hairline */
     --line-2:rgba(20,20,15,.14);    /* quote rule, table cell */
     --line-strong:rgba(20,20,15,.16); /* button outline, input */
@@ -46,12 +73,31 @@
     --shell:#f6f5ef;         /* the panel's ground */
     --shell-row:rgba(20,20,15,.05);    /* a row under the pointer */
     --shell-on:rgba(20,20,15,.095);    /* the open document */
-    --yellow:#ffeb00;        /* THE AGENT — nothing else */
+    --yellow:#ffeb00;        /* THE AGENT — nothing else, and the same hex in both themes */
     --yellow-ring:rgba(190,172,0,.65);
     --chip:#fffce0;          /* claude chip tint */
-    --chip-fg:#2b2a20;
-    --dark:#1b1a15;          /* toast surface */
+    --chip-fg:#2b2a20;       /* text ON that tint */
+    --on-yellow:#2b2a20;     /* text on SOLID yellow — dark in both themes, because yellow never moves */
+    --chip-n:#f2f2ee;        /* the monochrome chip: flag, accepted/rejected/resolved, the open count */
+    --chip-n-2:#e4e4dc;      /* its raised sibling: the active tab's count */
+    /* The toast is the one INVERTED surface: ink on light, light on ink. It is the only thing in the
+       tool that flips sides when the theme does. */
+    --toast:#1b1a15;
+    --toast-fg:#faf9f4;
+    --toast-btn:#ffffff;
+    --toast-btn-fg:#141410;
+    --toast-btn-hover:#f0f0ea;
+    --toast-shadow:0 1px 2px rgba(0,0,0,.2), 0 18px 40px -18px rgba(0,0,0,.5);
+    --asset-canvas:#ffffff;  /* an asset's artboard is PAPER, white in both themes (see the frame rule) */
+    --flash-fill:rgba(255,235,0,.32);      /* the jump flash: an anchor, a diagram node */
+    --flash-ring:rgba(255,235,0,.3);
+    --flash-ring-strong:rgba(255,235,0,.55);   /* the card's */
+    --scrim:rgba(20,20,18,.82);      /* the lightbox */
+    --scrim-soft:rgba(20,20,15,.28); /* behind the drawer and the sheet */
     --shadow:0 1px 2px rgba(20,20,15,.05), 0 10px 30px -20px rgba(20,20,15,.35);
+    --shadow-raise:0 1px 2px rgba(20,20,15,.06);   /* the chosen half of a segmented control */
+    --shadow-panel:rgba(20,20,15,.18);   /* colour only: the drawer and the sheet cast it differently */
+    --shadow-pill:rgba(20,20,15,.4);     /* the same, for the pull-up pill */
     --ring:0 0 0 3px rgba(20,20,15,.08);   /* focus — ink-tinted, not yellow (yellow is the agent's) */
     /* Release spring for pressable things. Solved from stiffness 500 / damping 30 / mass 0.6, which is
        zeta 0.87 — it overshoots by 0.4%, so the "pop" is the curve's shape rather than a bounce. A real
@@ -68,10 +114,127 @@
     --nav-track:var(--nav-w);
     color-scheme:light;
   }
+  /* ---------- the dark palette ----------
+     The same tokens, a second time. iA Writer's rule holds in both directions: never pure black on
+     pure white, never pure white on pure black. The ground is the warm near-black --dark was already
+     (#1b1a15's family) and the ink is a warm light grey, so a page of prose reads at the same weight
+     it does on white. Hairlines invert to white at low alpha, --shell steps one lighter than --bg
+     rather than one darker, and the shadows go darker and deeper because a 5% black shadow says
+     nothing on a dark ground. Two things do NOT move: --yellow, which is the agent's and the same
+     hex everywhere, and --asset-canvas, because an artboard is paper.
+
+     Two selectors, one list. The media query follows the system and is what an untouched install
+     gets; the attribute is a choice the human made and wins in both directions, which is why the
+     media rule excludes an explicit `light`. The values below are emitted twice on purpose and a
+     test asserts the two copies are identical. */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:#16150f;
+      --fill:#211f18;
+      --card:#272520;
+      --card-off:#1d1b15;
+      --card-fade:rgba(39,37,32,0);
+      --ink:#e6e4da;
+      --ink-btn:#e6e4da;
+      --ink-btn-hover:#f3f1e7;
+      --on-ink:#16150f;
+      --on-ink-edge:rgba(20,20,15,.2);
+      --on-ink-edge-strong:rgba(20,20,15,.34);
+      --fg:#cdcbc0;
+      --ink-2:#b7b5aa;
+      --ink-3:#a29f95;
+      --muted:#918e83;
+      --faint:#7b786e;
+      --fainter:#6b6860;
+      --dead:#56534a;
+      --line:rgba(255,255,255,.10);
+      --line-2:rgba(255,255,255,.16);
+      --line-strong:rgba(255,255,255,.22);
+      --shell:#1b1a14;
+      --shell-row:rgba(255,255,255,.055);
+      --shell-on:rgba(255,255,255,.10);
+      --yellow:#ffeb00;
+      --yellow-ring:rgba(216,197,28,.75);
+      --chip:#2e2a12;
+      --chip-fg:#efe7bd;
+      --on-yellow:#2b2a20;
+      --chip-n:#27251c;
+      --chip-n-2:#35322a;
+      --toast:#e9e7dd;
+      --toast-fg:#1b1a15;
+      --toast-btn:#16150f;
+      --toast-btn-fg:#f0eee4;
+      --toast-btn-hover:#2a2820;
+      --toast-shadow:0 1px 2px rgba(0,0,0,.3), 0 18px 40px -16px rgba(0,0,0,.75);
+      --asset-canvas:#ffffff;
+      --flash-fill:rgba(255,235,0,.26);
+      --flash-ring:rgba(255,235,0,.26);
+      --flash-ring-strong:rgba(255,235,0,.5);
+      --scrim:rgba(0,0,0,.86);
+      --scrim-soft:rgba(0,0,0,.55);
+      --shadow:0 1px 2px rgba(0,0,0,.45), 0 10px 30px -18px rgba(0,0,0,.9);
+      --shadow-raise:0 1px 2px rgba(0,0,0,.5);
+      --shadow-panel:rgba(0,0,0,.6);
+      --shadow-pill:rgba(0,0,0,.7);
+      --ring:0 0 0 3px rgba(255,255,255,.14);
+      color-scheme:dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg:#16150f;
+    --fill:#211f18;
+    --card:#272520;
+    --card-off:#1d1b15;
+    --card-fade:rgba(39,37,32,0);
+    --ink:#e6e4da;
+    --ink-btn:#e6e4da;
+    --ink-btn-hover:#f3f1e7;
+    --on-ink:#16150f;
+    --on-ink-edge:rgba(20,20,15,.2);
+    --on-ink-edge-strong:rgba(20,20,15,.34);
+    --fg:#cdcbc0;
+    --ink-2:#b7b5aa;
+    --ink-3:#a29f95;
+    --muted:#918e83;
+    --faint:#7b786e;
+    --fainter:#6b6860;
+    --dead:#56534a;
+    --line:rgba(255,255,255,.10);
+    --line-2:rgba(255,255,255,.16);
+    --line-strong:rgba(255,255,255,.22);
+    --shell:#1b1a14;
+    --shell-row:rgba(255,255,255,.055);
+    --shell-on:rgba(255,255,255,.10);
+    --yellow:#ffeb00;
+    --yellow-ring:rgba(216,197,28,.75);
+    --chip:#2e2a12;
+    --chip-fg:#efe7bd;
+    --on-yellow:#2b2a20;
+    --chip-n:#27251c;
+    --chip-n-2:#35322a;
+    --toast:#e9e7dd;
+    --toast-fg:#1b1a15;
+    --toast-btn:#16150f;
+    --toast-btn-fg:#f0eee4;
+    --toast-btn-hover:#2a2820;
+    --toast-shadow:0 1px 2px rgba(0,0,0,.3), 0 18px 40px -16px rgba(0,0,0,.75);
+    --asset-canvas:#ffffff;
+    --flash-fill:rgba(255,235,0,.26);
+    --flash-ring:rgba(255,235,0,.26);
+    --flash-ring-strong:rgba(255,235,0,.5);
+    --scrim:rgba(0,0,0,.86);
+    --scrim-soft:rgba(0,0,0,.55);
+    --shadow:0 1px 2px rgba(0,0,0,.45), 0 10px 30px -18px rgba(0,0,0,.9);
+    --shadow-raise:0 1px 2px rgba(0,0,0,.5);
+    --shadow-panel:rgba(0,0,0,.6);
+    --shadow-pill:rgba(0,0,0,.7);
+    --ring:0 0 0 3px rgba(255,255,255,.14);
+    color-scheme:dark;
+  }
   * { box-sizing: border-box; }
   body { margin:0; font:15px/1.6 'Geist', ui-sans-serif, system-ui, sans-serif; background:var(--bg);
     color:var(--fg); -webkit-font-smoothing:antialiased; }
-  ::selection { background:var(--yellow); color:var(--chip-fg); }
+  ::selection { background:var(--yellow); color:var(--on-yellow); }
   /* The shell: the folder panel is a fixed column down the left of the WINDOW and everything else is
      inset past it. The panel used to be the grid's first track, which meant it started wherever main's
      centred cap happened to put it and ended wherever the tallest document did — a panel floating in
@@ -97,7 +260,17 @@
   .htitle { display:flex; align-items:center; gap:10px; min-width:0; max-width:calc(50% - 92px); }
   .hbrand { display:none; align-items:center; gap:8px; text-decoration:none; color:inherit; }
   body.no-nav .hbrand { display:flex; }
+  /* The mark is an <img>, so its `currentColor` cannot see the page's tokens: an SVG used as an
+     image paints against its own document, where currentColor is always black. A filter is the only
+     hook the page has on an image's pixels, and the mark is one flat colour, so inverting it is
+     exact rather than approximate. brightness trims pure white back to the ink the wordmark uses. */
   .hbrand .mark, .nav-brand .mark { height:20px; width:auto; flex:none; display:block; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .hbrand .mark,
+    :root:not([data-theme="light"]) .nav-brand .mark { filter:invert(1) brightness(.91); }
+  }
+  :root[data-theme="dark"] .hbrand .mark,
+  :root[data-theme="dark"] .nav-brand .mark { filter:invert(1) brightness(.91); }
   .hbrand .wm, .nav-brand .wm { color:var(--ink); font:600 15px 'Geist', ui-sans-serif, sans-serif; letter-spacing:-.02em; }
   .spacer { flex:1; }
   #status { font-size:12.5px; color:var(--faint); min-width:64px; text-align:right; }
@@ -115,9 +288,9 @@
   button:active { transform:scale(.96); transition:transform .1s ease-out; }
   /* Dark buttons: a faint light edge so they read as a surface rather than a slab, and a faint white
      wash on hover instead of going darker (going darker on a near-black button reads as nothing). */
-  button.primary { background:var(--ink-btn); color:#fff; border-color:rgba(255,255,255,.16);
+  button.primary { background:var(--ink-btn); color:var(--on-ink); border-color:var(--on-ink-edge);
     padding:8px 18px; }
-  button.primary:hover { background:#26251e; border-color:rgba(255,255,255,.3); }
+  button.primary:hover { background:var(--ink-btn-hover); border-color:var(--on-ink-edge-strong); }
   button.ghost { border:none; background:none; color:var(--muted); font-weight:500; padding:8px 4px; }
   button.ghost:hover { color:var(--fg); background:none; }
   /* The only icon button in the tool — everything else here is a word. It sits in a row of text
@@ -157,7 +330,7 @@
      what it counts is the agent's notes arriving while the panel was shut. */
   #railToggle { position:relative; }
   #railToggle .n { position:absolute; top:1px; right:-2px; min-width:14px; height:14px; padding:0 3px;
-    border-radius:99px; background:var(--yellow); color:var(--chip-fg); box-shadow:0 0 0 1.5px var(--bg);
+    border-radius:99px; background:var(--yellow); color:var(--on-yellow); box-shadow:0 0 0 1.5px var(--bg);
     font:600 10px/14px 'Geist', ui-sans-serif, sans-serif; text-align:center; }
   #railToggle .n:empty { display:none; }
   /* ---------- the directory panel ----------
@@ -202,13 +375,14 @@
      to survive. The fade is what says there is more to the left rather than leaving a hard cut. */
   #navCrumb { display:flex; flex-wrap:nowrap; align-items:center; justify-content:flex-end;
     gap:0 1px; padding:0 5px; min-width:0; overflow:hidden;
+    /* a MASK: only the alpha is read, so the colour is arbitrary and the same in both themes */
     -webkit-mask-image:linear-gradient(90deg, transparent 0, #000 22px);
     mask-image:linear-gradient(90deg, transparent 0, #000 22px);
     font-family:'Geist Mono', ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10.5px; line-height:1.6; }
   #navCrumb button { flex:none; border:none; background:none; box-shadow:none;
     padding:1px 3px; border-radius:5px; font:inherit; color:var(--faint); white-space:nowrap; }
   #navCrumb button:hover { background:var(--shell-row); color:var(--fg); transform:none; }
-  #navCrumb button.here { color:#57574f; font-weight:600; }
+  #navCrumb button.here { color:var(--ink-2); font-weight:600; }
   #navCrumb .sep { flex:none; color:var(--fainter); }
   /* The list's own label, and its ordering control, on one row. The uppercase micro-label is GD's
      section label (9.5px/700 at .15em, its rail's WORK and ORGANIZATION) — structure stated once,
@@ -225,13 +399,13 @@
      caret, which is what a bare lowercase word sitting on the panel's ground could never say. */
   #navSort { position:relative; flex:none; }
   #navSort .sortbtn { display:flex; align-items:center; gap:5px; max-width:112px;
-    border:1px solid var(--line-2); background:var(--bg); box-shadow:none;
+    border:1px solid var(--line-2); background:var(--card); box-shadow:none;
     color:var(--fg); font:500 11.5px 'Geist', ui-sans-serif, sans-serif; padding:2px 6px; border-radius:7px; }
   #navSort .sortbtn:hover { background:var(--fill); border-color:var(--line-strong); color:var(--ink); transform:none; }
   #navSort .sortbtn #navSortLabel { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   #navSort .sortbtn .car { flex:none; font-size:8px; opacity:.5; }
   #navSort .menu { position:absolute; top:calc(100% + 5px); right:0; left:auto; min-width:132px; z-index:6;
-    background:var(--bg); border:1px solid var(--line-2); border-radius:10px; box-shadow:var(--shadow);
+    background:var(--card); border:1px solid var(--line-2); border-radius:10px; box-shadow:var(--shadow);
     padding:4px; display:flex; flex-direction:column; gap:1px; }
   #navSort .menu[hidden] { display:none; }
   #navSort .menu button { display:block; width:100%; text-align:left; white-space:nowrap; border:none;
@@ -269,7 +443,7 @@
      The same pill as #railToggle's unread count, which is the other place a number means "look here". */
   .nav-list a .meta .nb { flex:none; }
   .nav-list a .meta .nb.turn { min-width:16px; height:16px; padding:0 4px; border-radius:99px;
-    background:var(--yellow); color:var(--chip-fg); box-shadow:0 0 0 1px var(--yellow-ring);
+    background:var(--yellow); color:var(--on-yellow); box-shadow:0 0 0 1px var(--yellow-ring);
     font:600 10px/16px 'Geist', ui-sans-serif, sans-serif; text-align:center; }
   .nav-list a .meta .nb.dot { width:6px; height:6px; margin:0 5px; border-radius:50%;
     background:var(--fainter); }
@@ -283,10 +457,10 @@
     border:none; background:none; box-shadow:none; border-radius:7px; padding:4px 8px; color:var(--muted);
     font:500 12px 'Geist', ui-sans-serif, sans-serif; }
   .nav-tabs button:hover { color:var(--ink); transform:none; }
-  .nav-tabs button[aria-selected="true"] { background:var(--bg); color:var(--ink); font-weight:600;
-    box-shadow:0 1px 2px rgba(20,20,15,.06); }
+  .nav-tabs button[aria-selected="true"] { background:var(--card); color:var(--ink); font-weight:600;
+    box-shadow:var(--shadow-raise); }
   .nav-tabs .n { min-width:15px; height:15px; padding:0 4px; border-radius:99px; background:var(--yellow);
-    color:var(--chip-fg); font:600 9.5px/15px 'Geist', ui-sans-serif, sans-serif; text-align:center; }
+    color:var(--on-yellow); font:600 9.5px/15px 'Geist', ui-sans-serif, sans-serif; text-align:center; }
   .nav-tabs .n:empty { display:none; }
   /* ---------- the inbox ----------
      Every open item in the folder, grouped under the document it is on. A row has to be recognisable
@@ -303,7 +477,7 @@
   .ib-doc .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .ib-doc .n { flex:none; margin-left:auto; letter-spacing:0; font-size:10px; color:var(--faint); }
   .ib-item { display:block; width:100%; text-align:left; border:none; box-shadow:none;
-    background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:6px 9px 7px;
+    background:var(--card); border:1px solid var(--line); border-radius:8px; padding:6px 9px 7px;
     margin-top:2px; color:var(--fg); font:400 12.5px/1.45 'Geist', ui-sans-serif, sans-serif; }
   .ib-item:hover { border-color:var(--line-strong); transform:none; }
   /* Your turn reads as the agent's yellow, same as the badge and the same as a card's chip. Everything
@@ -426,7 +600,7 @@
   .fl-scroll { overflow-x:auto; overflow-y:hidden; overscroll-behavior-x:contain;
     -webkit-overflow-scrolling:touch; }
   .fl { display:block; max-width:100%; height:auto; margin:0 auto; }
-  .fl-box { fill:#fff; stroke:var(--line-strong); stroke-width:1.25; }
+  .fl-box { fill:var(--card); stroke:var(--line-strong); stroke-width:1.25; }
   .fl-label { font:13px/1 'Geist', ui-sans-serif, system-ui, sans-serif; fill:var(--ink); text-anchor:middle; }
   .fl-edge { stroke:var(--line-2); stroke-width:1.5; fill:none; }
   .fl-head { fill:var(--line-2); }
@@ -439,7 +613,7 @@
   /* an open comment on a node: the same yellow that marks the agent's anchors in prose */
   .fl-node.anchored .fl-box { stroke:var(--yellow-ring); stroke-width:2; }
   /* the flash on jump. `box-shadow` does nothing inside SVG, so this is the fill instead */
-  .fl-node.flash .fl-box { fill:rgba(255,235,0,.32); stroke:var(--yellow-ring); stroke-width:2.5; }
+  .fl-node.flash .fl-box { fill:var(--flash-fill); stroke:var(--yellow-ring); stroke-width:2.5; }
   .fl-errors { margin-top:8px; text-align:center; font:12px/1.5 'Geist Mono', ui-monospace, Menlo, monospace;
     color:var(--muted); }
   /* the one thing that tells you the boxes are live; hidden on touch, where hover doesn't exist */
@@ -458,7 +632,10 @@
      out of asset from becoming the browser's back gesture. */
   #doc .asset-wrap.zoomed { overflow-x:auto; overflow-y:hidden; overscroll-behavior-x:contain;
     -webkit-overflow-scrolling:touch; }
-  #doc iframe.asset-frame { display:block; border:0; transform-origin:top left; background:#fff;
+  /* The artboard is PAPER: white in both themes. An asset is someone's own design and usually
+     paints its own ground; a dark backing would show through the gaps in one built for white and
+     change the thing being reviewed. */
+  #doc iframe.asset-frame { display:block; border:0; transform-origin:top left; background:var(--asset-canvas);
     border-radius:12px; box-shadow:var(--shadow); }
   /* the document column's read-only tell, beside the filename in the header */
   .kindtag { font-size:10.5px; font-weight:600; letter-spacing:.05em; text-transform:uppercase;
@@ -475,8 +652,8 @@
     padding:3px 8px; color:var(--muted); font:600 10.5px 'Geist', ui-sans-serif, sans-serif;
     letter-spacing:.03em; }
   .zoomctl button:hover { color:var(--ink); background:none; transform:none; }
-  .zoomctl button[aria-pressed="true"] { background:var(--bg); color:var(--ink);
-    box-shadow:0 1px 2px rgba(20,20,15,.06); }
+  .zoomctl button[aria-pressed="true"] { background:var(--card); color:var(--ink);
+    box-shadow:var(--shadow-raise); }
   #doc table { border-collapse:collapse; } #doc td, #doc th { border:1px solid var(--line-2); padding:6px 11px; font-size:14px; }
   /* a document blockquote is CONTENT, not the agent — keep it monochrome (yellow is reserved) */
   #doc blockquote { border-left:2px solid var(--line-2); margin-left:0; padding-left:14px; color:var(--muted); }
@@ -493,9 +670,11 @@
   .block { position:relative; }
   .block > :first-child { margin-top:.4em; } .block > :last-child { margin-bottom:.4em; }
   /* persistent cue: an open item softly underlines its span in the agent's yellow, tappable */
-  mark.anchor { background:transparent; border-bottom:2px solid var(--yellow); padding:0 1px; cursor:pointer;
-    transition:background .15s ease; border-radius:1px; }
-  mark.anchor.flash { background:rgba(255,235,0,.32); box-shadow:0 0 0 3px rgba(255,235,0,.3); }
+  /* `color:inherit` is load-bearing: the UA paints <mark> as marktext, which is black, so an
+     anchored span in a dark document went black-on-dark without it. */
+  mark.anchor { background:transparent; color:inherit; border-bottom:2px solid var(--yellow); padding:0 1px;
+    cursor:pointer; transition:background .15s ease; border-radius:1px; }
+  mark.anchor.flash { background:var(--flash-fill); box-shadow:0 0 0 3px var(--flash-ring); }
   /* The rail scrolls WITH the page rather than in its own scroll box. That's what lets a card sit level
      with the text it's about (see dockCards): two independent scrollers can't stay aligned without a
      scroll handler, and one shared scroll context needs none. The mobile sheet below re-adds its own
@@ -511,9 +690,9 @@
     padding:7px 11px; border-radius:8px; display:inline-flex; align-items:center; gap:6px; box-shadow:none; }
   .tab:hover { background:var(--fill); color:var(--fg); }
   .tab.on { color:var(--ink); background:var(--fill); }
-  .tab .tc { font-size:11px; font-weight:600; background:#eeeee8; color:#57574f; border-radius:20px;
+  .tab .tc { font-size:11px; font-weight:600; background:var(--chip-n); color:var(--ink-2); border-radius:20px;
     padding:0 6px; min-width:17px; text-align:center; }
-  .tab.on .tc { background:#e4e4dc; }
+  .tab.on .tc { background:var(--chip-n-2); }
   .side-list { display:flex; flex-direction:column; gap:8px; }
   /* ---------- the full-height rail (desktop) ----------
      The rail is the frame's right column now, the folder panel mirrored: it runs the full height of
@@ -557,16 +736,16 @@
   .card .cbody { position:relative; }
   .side-list.docked .card.clipped .cbody { overflow:hidden; }
   .side-list.docked .card.clipped .cbody::after { content:''; position:absolute; left:0; right:0; bottom:0;
-    height:44px; pointer-events:none; background:linear-gradient(to bottom, rgba(255,255,255,0), var(--bg)); }
+    height:44px; pointer-events:none; background:linear-gradient(to bottom, var(--card-fade), var(--card)); }
   .side-list .card .more { display:none; }
   .side-list.docked .card.has-more .more { display:block; width:100%; text-align:center; margin:7px 0 0;
     padding:2px 0; border:0; background:none; box-shadow:none; cursor:pointer;
     font:600 12px 'Geist', ui-sans-serif, sans-serif; color:var(--muted); }
   .side-list.docked .card.has-more .more:hover { color:var(--ink); background:none; }
   /* review card — no border; a soft depth shadow lifts it off the rail */
-  .card { background:var(--bg); border-radius:14px; padding:15px 16px; font-size:13px; box-shadow:var(--shadow);
+  .card { background:var(--card); border-radius:14px; padding:15px 16px; font-size:13px; box-shadow:var(--shadow);
     transition:box-shadow .2s ease, background .2s ease; }
-  .card.flash { box-shadow:var(--shadow), 0 0 0 3px rgba(255,235,0,.55); }
+  .card.flash { box-shadow:var(--shadow), 0 0 0 3px var(--flash-ring-strong); }
   /* A decided card leaves toward the document it was anchored to, which is where the change just
      landed. Short, because the list rebuild is waiting on it. */
   .card.leaving { opacity:0; transform:translateX(-10px); transition:opacity .18s ease-out, transform .18s ease-out; }
@@ -576,7 +755,7 @@
   .card.entering { animation:cardIn .22s ease-out; }
   /* orphaned: the anchor text is gone — greyed surface, muted identity. The background transition on
      .card above carries this, so an item going orphaned under you fades rather than blinks. */
-  .card.orphaned { background:#fafaf8; }
+  .card.orphaned { background:var(--card-off); }
   /* identity — the agent is a yellow chip (its color); the human is an ink dot + name. Classed
      .agent / .human, not by literal name, so any SIDECAR_USER / SIDECAR_AGENT colors correctly. */
   .card .who { font-weight:600; display:inline-flex; align-items:center; }
@@ -586,21 +765,21 @@
     box-shadow:0 0 0 1px var(--yellow-ring); }
   .who.human { gap:6px; font-size:13px; color:var(--ink); }
   .who.human::before { content:''; width:8px; height:8px; border-radius:50%; background:var(--ink); }
-  .card.orphaned .who.agent { color:#57574f; background:#f2f2ee; }
-  .card.orphaned .who.agent::before { background:#c2c2ba; box-shadow:none; }
+  .card.orphaned .who.agent { color:var(--ink-2); background:var(--chip-n); }
+  .card.orphaned .who.agent::before { background:var(--dead); box-shadow:none; }
   /* kind label — quiet uppercase text, not a bordered badge */
   .card .badge { font-size:10.5px; font-weight:600; letter-spacing:.03em; text-transform:uppercase;
     color:var(--muted); margin-left:8px; }
   .card .badge.suggestion { color:var(--muted); }
   /* flag = "look here" from you — monochrome chip (yellow is the agent's, never yours) */
-  .card .badge.flag { background:#f4f4f1; color:#57574f; border-radius:20px; padding:2px 9px;
+  .card .badge.flag { background:var(--chip-n); color:var(--ink-2); border-radius:20px; padding:2px 9px;
     margin-left:8px; letter-spacing:.02em; }
   .card .badge.orphaned { color:var(--muted); }
   /* final-status chips on archived cards — monochrome, quiet */
   .card .badge.accepted, .card .badge.rejected, .card .badge.resolved {
-    background:#f4f4f1; color:#57574f; border-radius:20px; padding:2px 9px; letter-spacing:.02em; }
+    background:var(--chip-n); color:var(--ink-2); border-radius:20px; padding:2px 9px; letter-spacing:.02em; }
   /* archived card — settled, recessed; a flex header so the decided-time sits at the right */
-  .card.archived { background:#fafaf8; }
+  .card.archived { background:var(--card-off); }
   .card.archived .quote { cursor:default; }
   .card .chead { display:flex; align-items:center; }
   /* the anchored span the card refers to — a yellow left-rule (the agent's), quiet quoted text */
@@ -647,14 +826,15 @@
     border:1px solid var(--line-2); cursor:zoom-in; background:var(--fill); }
   /* full-size view of an attached image — click anywhere or Esc to dismiss */
   #lightbox { position:fixed; inset:0; z-index:60; display:none; place-items:center; padding:24px;
-    background:rgba(20,20,18,.82); cursor:zoom-out; }
+    background:var(--scrim); cursor:zoom-out; }
   #lightbox.on { display:grid; }
+  /* the shadow sits on the scrim rather than on the page, so it is the same black in both themes */
   #lightbox img { max-width:100%; max-height:100%; border-radius:10px; box-shadow:0 20px 60px rgba(0,0,0,.45); }
   /* word-level diff — mono well; deletions strike out muted, insertions carry the agent's yellow */
   .diffbox { font:12.5px/1.6 'Geist Mono', ui-monospace, Menlo, monospace; background:var(--fill); border-radius:10px;
-    padding:10px 12px; margin:9px 0; white-space:pre-wrap; word-break:break-word; color:#57574f; }
+    padding:10px 12px; margin:9px 0; white-space:pre-wrap; word-break:break-word; color:var(--ink-2); }
   .diffbox del { color:var(--faint); text-decoration:line-through; }
-  .diffbox ins { background:var(--yellow); color:var(--chip-fg); text-decoration:none; border-radius:3px; padding:0 2px; }
+  .diffbox ins { background:var(--yellow); color:var(--on-yellow); text-decoration:none; border-radius:3px; padding:0 2px; }
   .row { display:flex; gap:8px; margin-top:11px; align-items:center; }
   .row.spread { justify-content:space-between; }
   .row .spacer { flex:1; }
@@ -666,7 +846,7 @@
   .reply::placeholder { color:var(--faint); }
   .reply:focus { outline:none; border-color:var(--ink-btn); box-shadow:var(--ring); }
   /* floating selection toolbar — a soft light card; hover fills grey (your actions stay monochrome) */
-  #seltool { position:absolute; display:none; z-index:30; background:var(--bg); border:1px solid var(--line-2);
+  #seltool { position:absolute; display:none; z-index:30; background:var(--card); border:1px solid var(--line-2);
     border-radius:10px; box-shadow:var(--shadow); padding:4px; align-items:center; gap:1px;
     flex-wrap:wrap; max-width:calc(100vw - 16px); }
   #seltool button { background:none; border:none; box-shadow:none; color:var(--fg); padding:6px 11px;
@@ -677,7 +857,7 @@
   #seltool .fmt-btn { display:inline-flex; align-items:center; gap:3px; }
   #seltool .fmt-btn .car { font-size:9px; opacity:.55; }
   #seltool .fmt-menu { position:absolute; top:calc(100% + 5px); left:0; z-index:1;
-    background:var(--bg); border:1px solid var(--line-2); border-radius:10px; box-shadow:var(--shadow);
+    background:var(--card); border:1px solid var(--line-2); border-radius:10px; box-shadow:var(--shadow);
     padding:4px; display:flex; flex-direction:column; gap:1px; min-width:132px; }
   #seltool .fmt-menu[hidden] { display:none; }
   #seltool .fmt-menu button { display:block; width:100%; text-align:left; white-space:nowrap; }
@@ -686,7 +866,7 @@
   #seltool input { background:var(--bg); border:1px solid var(--line-2); color:var(--fg); border-radius:7px;
     font:inherit; font-size:13px; padding:6px 10px; width:230px; outline:none; }
   #seltool input:focus { border-color:var(--ink-btn); box-shadow:var(--ring); }
-  #popover { position:absolute; display:none; z-index:31; background:var(--bg); border:1px solid var(--line-2);
+  #popover { position:absolute; display:none; z-index:31; background:var(--card); border:1px solid var(--line-2);
     border-radius:12px; box-shadow:var(--shadow); padding:13px; width:300px; }
   /* drag handle — grab this to move the comment box off the text you're commenting on */
   #popover .po-head { display:flex; align-items:center; justify-content:space-between; gap:8px;
@@ -701,19 +881,21 @@
   #popover textarea::placeholder { color:var(--faint); }
   #popover textarea:focus { border-color:var(--ink-btn); box-shadow:var(--ring); }
   #popover .row { justify-content:flex-end; }
-  /* toast — the one dark surface; light action buttons (your decisions stay monochrome) */
+  /* toast — the one INVERTED surface, and the only thing here that swaps sides with the theme:
+     ink-on-light in light, light-on-ink in dark. Its action buttons invert with it. */
   /* Enters and leaves by the same edge it lives on. `display` can't transition, so visibility carries
      the hiding and the transform/opacity carry the motion — translateX(-50%) has to stay inside every
      transform or the centering snaps. */
-  #banner { visibility:hidden; position:fixed; bottom:18px; left:50%; background:var(--dark);
-    color:#faf9f4; padding:13px 18px; border-radius:12px; z-index:40; font-size:13.5px;
-    box-shadow:0 1px 2px rgba(0,0,0,.2), 0 18px 40px -18px rgba(0,0,0,.5);
+  #banner { visibility:hidden; position:fixed; bottom:18px; left:50%; background:var(--toast);
+    color:var(--toast-fg); padding:13px 18px; border-radius:12px; z-index:40; font-size:13.5px;
+    box-shadow:var(--toast-shadow);
     opacity:0; transform:translate(-50%, 12px);
     transition:opacity .2s ease-out, transform .2s ease-out, visibility 0s linear .2s; }
   #banner.open { visibility:visible; opacity:1; transform:translate(-50%, 0);
     transition:opacity .2s ease-out, transform .2s ease-out, visibility 0s; }
-  #banner button { margin-left:10px; background:#fff; color:var(--ink); border:none; font-size:12.5px; padding:6px 12px; }
-  #banner button:hover { background:#f0f0ea; }
+  #banner button { margin-left:10px; background:var(--toast-btn); color:var(--toast-btn-fg); border:none;
+    font-size:12.5px; padding:6px 12px; }
+  #banner button:hover { background:var(--toast-btn-hover); }
   /* quiet docs link — a text link, never a CTA. It sits in the folder panel's foot now: app-level
      chrome belongs to the frame, and the header carries only the open document's things. */
   .doclink { color:var(--muted); font-size:13px; font-weight:500; text-decoration:none;
@@ -735,7 +917,7 @@
   .presence { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); pointer-events:none;
     display:flex; align-items:center; gap:6px; font-size:12.5px; white-space:nowrap; }
   .presence .dot { width:7px; height:7px; border-radius:50%; flex:none; }
-  .presence.here { color:#6b6b64; font-weight:500; }
+  .presence.here { color:var(--ink-3); font-weight:500; }
   .presence.here .dot { background:var(--yellow); box-shadow:0 0 0 1px var(--yellow-ring); }
   .presence.away { color:var(--muted); font-weight:500; }
   .presence.away .dot { background:transparent; border:1.5px solid var(--line-strong); }
@@ -783,7 +965,7 @@
   #filelist { padding:48px 40px; max-width:760px; margin:0 auto; }
   #filelist .h { font-size:22px; font-weight:600; letter-spacing:-.02em; color:var(--ink); margin:0 0 4px; }
   #filelist .sub { font-size:13.5px; color:var(--muted); margin:0 0 26px; }
-  #filelist .sub code { font-family:'Geist Mono', ui-monospace, monospace; font-size:12.5px; color:#57574f; }
+  #filelist .sub code { font-family:'Geist Mono', ui-monospace, monospace; font-size:12.5px; color:var(--ink-2); }
   #filelist a { display:flex; align-items:center; gap:12px; padding:14px 12px; border-bottom:1px solid var(--line);
     text-decoration:none; color:var(--ink); border-radius:9px; }
   #filelist a:hover { background:var(--fill); }
@@ -792,9 +974,9 @@
   #filelist a .sp { flex:1; }
   #filelist a .ago { font-size:11.5px; color:var(--faint); font-family:'Geist Mono', ui-monospace, monospace;
     white-space:nowrap; }
-  #filelist a .none { font-size:12px; color:#c2c2ba; min-width:20px; text-align:center; }
+  #filelist a .none { font-size:12px; color:var(--dead); min-width:20px; text-align:center; }
   /* open-count pill — grey chip carrying a single yellow dot (the agent has notes waiting) */
-  .count { display:inline-flex; align-items:center; gap:6px; background:#f6f6f2; color:#57574f;
+  .count { display:inline-flex; align-items:center; gap:6px; background:var(--chip-n); color:var(--ink-2);
     border-radius:20px; font-size:12px; padding:3px 10px; font-weight:600; }
   .count::before { content:''; width:6px; height:6px; border-radius:50%; background:var(--yellow);
     box-shadow:0 0 0 1px var(--yellow-ring); }
@@ -831,8 +1013,8 @@
       padding-top:env(safe-area-inset-top); }
     /* The shadow arrives with the drawer. Left on permanently it reaches back across the 2% of travel
        the closed panel keeps off screen and paints a grey seam down the edge of every document. */
-    body.nav-open #nav { transform:translateX(0); box-shadow:12px 0 40px rgba(20,20,15,.18); }
-    #navBackdrop { display:block; position:fixed; inset:0; background:rgba(20,20,15,.28); z-index:46;
+    body.nav-open #nav { transform:translateX(0); box-shadow:12px 0 40px var(--shadow-panel); }
+    #navBackdrop { display:block; position:fixed; inset:0; background:var(--scrim-soft); z-index:46;
       opacity:0; pointer-events:none; transition:opacity .26s; }
     body.nav-open #navBackdrop { opacity:1; pointer-events:auto; }
     #doc pre { max-width:100%; }
@@ -868,7 +1050,7 @@
          cards can dock to their anchors, but the sheet genuinely is its own scrolling surface. */
       position:fixed; left:0; right:0; bottom:0; top:auto; height:76vh; overflow-y:auto;
       border-left:none; border-top:1px solid var(--line); border-radius:22px 22px 0 0;
-      background:var(--bg); box-shadow:0 -12px 40px rgba(20,20,15,.18);
+      background:var(--bg); box-shadow:0 -12px 40px var(--shadow-panel);
       transform:translateY(102%); transition:transform .26s ease-out; z-index:46;
       padding:22px 16px calc(env(safe-area-inset-bottom) + 20px); gap:0;
     }
@@ -879,16 +1061,16 @@
     .tabs { top:-22px; }
     body.sheet-open aside { transform:translateY(0); }
 
-    #sheetBackdrop { display:block; position:fixed; inset:0; background:rgba(20,20,15,.28); z-index:45;
+    #sheetBackdrop { display:block; position:fixed; inset:0; background:var(--scrim-soft); z-index:45;
       opacity:0; pointer-events:none; transition:opacity .26s; }
     body.sheet-open #sheetBackdrop { opacity:1; pointer-events:auto; }
 
     /* the pull-up pill — ink surface, the open-item count in the agent's yellow */
     #sheetToggle { display:inline-flex; align-items:center; gap:8px; position:fixed;
       right:16px; bottom:calc(env(safe-area-inset-bottom) + 16px); z-index:44;
-      background:var(--ink-btn); color:#fff; border:none; box-shadow:0 8px 20px -6px rgba(20,20,15,.4);
+      background:var(--ink-btn); color:var(--on-ink); border:none; box-shadow:0 8px 20px -6px var(--shadow-pill);
       border-radius:99px; padding:11px 18px; font-weight:600; font-size:14px; }
-    #sheetToggle .n { background:var(--yellow); color:var(--chip-fg); border-radius:99px;
+    #sheetToggle .n { background:var(--yellow); color:var(--on-yellow); border-radius:99px;
       min-width:20px; text-align:center; padding:0 6px; font-size:12.5px; }
     #sheetToggle .n:empty { display:none; }
     body.sheet-open #sheetToggle { display:none; }
@@ -925,6 +1107,10 @@
     <div id="presence" class="presence away"></div>
     <div class="spacer"></div>
     <div id="turn" class="turn"></div>
+    <!-- system → light → dark, and back. The icon and the title carry it; there is no label, the
+         same way the two panel toggles beside it have none. -->
+    <button id="themeToggle" class="ghost iconbtn" onclick="cycleTheme()" title="Theme: system"
+      aria-label="Theme: system"></button>
     <button id="railToggle" class="ghost iconbtn" onclick="toggleRail()" aria-controls="side" aria-expanded="true"
       title="Hide review panel" aria-label="Hide review panel"><svg viewBox="0 0 20 20" fill="none"
       stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -2903,6 +3089,42 @@ const uiStore = {
   get(k, fallback) { try { const v = localStorage.getItem('sc:' + k); return v === null ? fallback : v; } catch { return fallback; } },
   set(k, v) { try { localStorage.setItem('sc:' + k, String(v)); } catch {} },
 };
+
+// ---------- the theme ----------
+// Three states, one button: system, light, dark. `system` is the absence of the attribute, which is
+// what lets the media query in the stylesheet answer — so an untouched install follows the OS and
+// keeps following it when the OS flips mid-session, with no listener here. A choice stamps
+// `data-theme` on <html> and beats the media query in both directions.
+//
+// The stamp itself happens in <head>, before anything paints; this half owns the button, the cycle
+// and the write. Both read the same `sc:theme` key.
+const THEMES = ['system', 'light', 'dark'];
+const THEME_ICON = {
+  system: '<rect x="2.5" y="4.25" width="15" height="9.5" rx="2"/><path d="M7.25 17h5.5"/><path d="M10 13.75V17"/>',
+  light: '<circle cx="10" cy="10" r="3.3"/><path d="M10 2.7v1.7M10 15.6v1.7M2.7 10h1.7M15.6 10h1.7M4.85 4.85 6.05 6.05M13.95 13.95l1.2 1.2M15.15 4.85l-1.2 1.2M6.05 13.95l-1.2 1.2"/>',
+  dark: '<path d="M15.9 11.55A6.55 6.55 0 0 1 8.45 4.1a6.55 6.55 0 1 0 7.45 7.45Z"/>',
+};
+function currentTheme() {
+  const t = uiStore.get('theme', 'system');
+  return THEMES.includes(t) ? t : 'system';
+}
+function applyTheme(t) {
+  if (t === 'system') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', t);
+  paintTheme(t);
+}
+function setTheme(t) { uiStore.set('theme', t); applyTheme(t); }
+function cycleTheme() { setTheme(THEMES[(THEMES.indexOf(currentTheme()) + 1) % THEMES.length]); }
+function paintTheme(t) {
+  const btn = $('themeToggle');
+  if (!btn) return;
+  btn.innerHTML = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" '
+    + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + THEME_ICON[t] + '</svg>';
+  const label = 'Theme: ' + t;
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+}
+applyTheme(currentTheme());
 // ---------- the asset's zoom ----------
 // How big an asset is drawn is the reader's call, not the column's. `fit` scales the canvas into the
 // document column, which is what an asset has always done and stays the default; `100%` renders it at

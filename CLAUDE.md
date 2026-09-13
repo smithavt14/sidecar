@@ -273,8 +273,8 @@ hover title in the UI.
 - Comments explain *why*, especially where the code looks odd — most of them record a real incident.
   Keep that when you change the surrounding code; delete them when the reason stops being true.
 - Layout preferences (each panel's width, whether it is collapsed, whether the review rail's width was
-  set by hand rather than filled, an asset's zoom, and the directory panel's sort, one key per folder)
-  persist in `localStorage` under an `sc:` prefix, through the wrapped `uiStore`. Safari in private mode throws
+  set by hand rather than filled, an asset's zoom, the directory panel's sort one key per folder, and
+  the theme) persist in `localStorage` under an `sc:` prefix, through the wrapped `uiStore`. Safari in private mode throws
   on `setItem`, and nothing about a preference is worth an exception on the path that renders the
   review. Document and review state never go there; those are files.
 - The shell is the panel fixed to the window, the document inset past it, and the review rail taking
@@ -312,6 +312,39 @@ hover title in the UI.
   asset frame's sandbox flag set being exactly `allow-scripts` (asserted against the whole served
   page, which is why no comment in `public/index.html` spells the same-origin flag), and the
   assembled srcdoc carrying no script but the picker.
+
+## Two themes, one set of names
+
+Every colour in `public/index.html` comes from a custom property on `:root`, and dark mode redeclares
+those same properties rather than adding rules of its own. So a rule written once follows the theme,
+and the palette is the only place a colour is chosen. A test scans the stylesheet with the token
+blocks removed and fails on any hex or `rgb()` left in a rule; the two that are allowed are named in
+it, both theme-neutral (a mask reads only alpha, and the lightbox's shadow falls on its own scrim).
+
+The palette is declared twice, under `@media (prefers-color-scheme: dark) :root:not([data-theme="light"])`
+and under `:root[data-theme="dark"]`. The media query is what an untouched install follows, and it
+keeps following the system when the system flips mid-session with nothing listening. The attribute is
+a choice the human made and beats the system in both directions, which is why the media rule excludes
+an explicit `light`. A test asserts the two copies declare the same tokens at the same values.
+
+`sc:theme` holds `system`, `light` or `dark`, and an inline script in `<head>` stamps `data-theme`
+before the first paint — in `<head>` because a reader who chose dark would otherwise get one white
+frame on every load. `color-scheme` moves with the palette, so scrollbars, form fields and native
+controls follow without being styled.
+
+Three things do not move between the themes. **`--yellow` is #ffeb00 in both**, because it is the
+agent's and an agent that changes colour with the room is not a convention any more; `--on-yellow` is
+the dark ink that always sits on it. **`--asset-canvas` is white in both**: an asset is someone's own
+design, usually built for paper, and a dark backing would show through the parts it does not paint
+and change the thing being reviewed. **The toast inverts**, and it is the only surface that does:
+ink-on-light in light, light-on-ink in dark.
+
+The rest follows iA Writer's rule in both directions: never pure black on pure white, never pure white
+on pure black. The dark ground is the warm near-black the toast already was, the ink is a warm light
+grey, hairlines become white at low alpha, `--shell` steps one lighter than `--bg` rather than one
+darker, and the shadows go darker and deeper, since a 5% black shadow says nothing on a dark ground.
+One image needs help the tokens cannot give: `mark.svg` is an `<img>`, so its `currentColor` paints
+against its own document and is always black; dark mode inverts it with a filter.
 
 ## Attached images
 
