@@ -2686,6 +2686,61 @@ test('inbox does not mutate the documents it is given', () => {
   assert.deepEqual(items.map(i => i.id), ['c1', 'c2'], 'the caller keeps its own order');
 });
 
+// ---------- the rail's resting shape (Turn.rail) ----------
+// index.html's renderSide hands this the two counts it has already sorted out, and turns 'bare' into
+// body.rail-bare: a 12px hairline track, no tab bar, nothing drawn. So these are the cases that decide
+// whether the review column is on screen at all before the human has done anything.
+
+test('a document with nothing open and nothing archived rests as a hairline', () => {
+  assert.equal(Turn.rail(0, 0), 'bare');
+});
+
+test('a document with everything settled keeps its tab bar', () => {
+  // The archive is a click away and the count on the tab is the only thing saying so, so the rail
+  // stays. What goes is the sentence that used to sit under the tabs explaining the emptiness.
+  assert.equal(Turn.rail(0, 1), 'tabs');
+  assert.equal(Turn.rail(0, 12), 'tabs');
+});
+
+test('one open thread is enough to bring the whole rail back', () => {
+  assert.equal(Turn.rail(1, 0), 'full', 'the first card expands it');
+  assert.equal(Turn.rail(1, 3), 'full');
+  assert.equal(Turn.rail(9, 9), 'full');
+});
+
+test('the rail rests bare on the counts a real empty review produces', () => {
+  // Wired end to end rather than asserted on literals: a review whose items are all settled is the
+  // 'tabs' case, and one with no items at all is the 'bare' case, counted the way renderSide counts.
+  const settled = { schema: 1, items: [comment('c1', 'resolved', msg(AGENT, 'x')), sug('s1', 'accepted')] };
+  const live = Turn.of(settled, AGENT);
+  assert.equal(live.open, 0, 'nothing live');
+  assert.equal(Turn.rail(live.open, settled.items.length - live.open), 'tabs');
+  const empty = { schema: 1, items: [] };
+  const none = Turn.of(empty, AGENT);
+  assert.equal(Turn.rail(none.open, empty.items.length - none.open), 'bare');
+});
+
+// ---------- what the page shows at rest (public/index.html) ----------
+// Asserted against the file the same way the sandbox flag is: these are single literal strings whose
+// absence IS the feature, and each one was on screen on a clean document before anybody acted.
+
+test('the page carries no permanent presence label and no empty-rail sentence', () => {
+  const page = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+  // The readout is empty unless an agent is watching, working or replying.
+  assert.doesNotMatch(page, /waiting for claude/, 'no "waiting for claude" anywhere');
+  assert.doesNotMatch(page, /'sent to claude'/, 'and no permanent handoff label in the header');
+  assert.doesNotMatch(page, /no active threads/, 'an empty active list draws nothing');
+  // The hover pop is opt-in on the decisions, so nothing is left switching it back off.
+  assert.doesNotMatch(page, /button:hover \{ transform:scale/, 'the global hover pop is gone');
+  assert.match(page, /\.pop:hover \{ transform:scale\(1\.02\); \}/, 'and lands on .pop instead');
+  const undo = page.split('\n').filter(l => /:hover/.test(l) && /transform:none/.test(l)).map(l => l.trim());
+  assert.deepEqual(undo, ['button:active, .pop:hover { transform:none; }'],
+    'the only hover rule cancelling a transform is the reduced-motion one');
+  // The press scale and its spring stay: they are what a button owes the finger.
+  assert.match(page, /button:active \{ transform:scale\(\.96\)/, 'the press scale survives');
+  assert.match(page, /--spring-press:/, 'and so does the spring token');
+});
+
 // ---------- which links open IN sidecar (public/doclink.js) ----------
 // The SAME file index.html loads via <script>. Three callers ask it the question — the document's two
 // click handlers and the asset frame's pick — so every case below is a case all three follow.

@@ -107,11 +107,15 @@
     transition:background .15s ease, border-color .15s ease, box-shadow .15s ease,
                transform .2s var(--spring-press); }
   button:hover { background:var(--fill); }
-  /* Lift on hover, compress on press, spring back on release. The press uses a plain fast ease-out on
-     the way DOWN (a spring there fights the finger) and the spring only on the way back up, which is
-     where the pop lives. Hover lift is pointer-gated: on touch there is no hover, and without the gate
-     the scale sticks after a tap. */
-  @media (hover:hover) and (pointer:fine) { button:hover { transform:scale(1.02); } }
+  /* Compress on press, spring back on release. The press uses a plain fast ease-out on the way DOWN (a
+     spring there fights the finger) and the spring only on the way back up, which is where the pop
+     lives. That half is on every button, because every button is pressed.
+     The hover LIFT is opt-in, and only the moves that decide something carry it: accept and reject on a
+     card, send in the comment popover, the selection toolbar. On `button` at large it put a 2% jump
+     under the pointer on every tab, breadcrumb segment, sort chip, zoom control and inbox row in the
+     tool, and seven rules existed to take it back off again. Pointer-gated: on touch there is no hover,
+     and without the gate the scale sticks after a tap. */
+  @media (hover:hover) and (pointer:fine) { .pop:hover { transform:scale(1.02); } }
   button:active { transform:scale(.96); transition:transform .1s ease-out; }
   /* Dark buttons: a faint light edge so they read as a surface rather than a slab, and a faint white
      wash on hover instead of going darker (going darker on a near-black button reads as nothing). */
@@ -153,6 +157,24 @@
      the two panels is two independent decisions. */
   body.rail-collapsed main { grid-template-columns: minmax(0,1fr); }
   body.rail-collapsed aside, body.rail-collapsed #railGrip { display:none; }
+  /* ---------- the rail at rest ----------
+     A document with nothing open and nothing archived has no review to show, and 372px of white
+     carrying two tabs and one grey sentence was the biggest thing on the page before anyone had done
+     anything. So the track rests as a 12px hairline edge, the tab bar goes, and the document takes the
+     width back. #doc's measure is capped and auto-margined, so it re-centres on its own.
+     Done by overriding --rail-w ON THE BODY rather than with a second grid-template-columns: the
+     track, the grip's position and the header's inset are all that one variable, so all three follow
+     it, and the width JS wrote on :root is still there for the moment a card arrives.
+     Desktop only, like the folder's icon strip: below the breakpoint the rail is a fixed sheet with no
+     track to shrink, and hiding its tabs there would leave the pull-up pill opening an empty box. */
+  @media (min-width: 781px) {
+    body.rail-bare { --rail-w:12px; }
+    body.rail-bare aside { padding-left:0; padding-right:0; }
+    body.rail-bare .tabs, body.rail-bare #railGrip { display:none; }
+    /* The track animates across this one change and nowhere else. Left on `main` permanently the same
+       transition would lag every drag of the grip and every window resize, which move --rail-w too. */
+    body.rail-animating main { transition:grid-template-columns .22s ease; }
+  }
   /* The rail's toggle: an icon button in the header chrome. Its badge is the agent's yellow, because
      what it counts is the agent's notes arriving while the panel was shut. */
   #railToggle { position:relative; }
@@ -207,19 +229,18 @@
     font-family:'Geist Mono', ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10.5px; line-height:1.6; }
   #navCrumb button { flex:none; border:none; background:none; box-shadow:none;
     padding:1px 3px; border-radius:5px; font:inherit; color:var(--faint); white-space:nowrap; }
-  #navCrumb button:hover { background:var(--shell-row); color:var(--fg); transform:none; }
+  #navCrumb button:hover { background:var(--shell-row); color:var(--fg); }
   #navCrumb button.here { color:#57574f; font-weight:600; }
   #navCrumb .sep { flex:none; color:var(--fainter); }
-  /* The list's own label, and its ordering control, on one row. The uppercase micro-label is GD's
-     section label (9.5px/700 at .15em, its rail's WORK and ORGANIZATION) — structure stated once,
-     quietly, so the filenames below it are the only thing competing for the eye. */
-  .nav-sect { display:flex; align-items:center; gap:8px; padding:9px 5px 3px; }
+  /* The list's ordering control, on a row of its own. It used to share the row with an uppercase
+     DOCUMENTS micro-label, borrowed from a rail that has two sections to tell apart (GD's WORK and
+     ORGANIZATION). This panel has one: the files view is the only thing the label ever sat over, and
+     the tab above it already reads `files`. A section label naming the only section is decoration. */
+  .nav-sect { display:flex; align-items:center; justify-content:flex-end; gap:8px; padding:9px 5px 3px; }
   /* `hidden` is how the two views are switched, and a `display` set anywhere in this file beats the
      browser's own `[hidden] { display:none }` — which is why both of the things it hides say so
      themselves. The list stayed on screen under the inbox until they did. */
   .nav-sect[hidden], .nav-list[hidden] { display:none; }
-  .nav-label { flex:1; min-width:0; font:700 9.5px 'Geist', ui-sans-serif, sans-serif;
-    letter-spacing:.15em; text-transform:uppercase; color:var(--muted); }
   /* the sort switcher — a menu, not three tabs: at 248px three labels have nowhere to sit, and the
      one that is chosen is the one worth reading. It is drawn as a CONTROL: an outlined chip with a
      caret, which is what a bare lowercase word sitting on the panel's ground could never say. */
@@ -227,7 +248,7 @@
   #navSort .sortbtn { display:flex; align-items:center; gap:5px; max-width:112px;
     border:1px solid var(--line-2); background:var(--bg); box-shadow:none;
     color:var(--fg); font:500 11.5px 'Geist', ui-sans-serif, sans-serif; padding:2px 6px; border-radius:7px; }
-  #navSort .sortbtn:hover { background:var(--fill); border-color:var(--line-strong); color:var(--ink); transform:none; }
+  #navSort .sortbtn:hover { background:var(--fill); border-color:var(--line-strong); color:var(--ink); }
   #navSort .sortbtn #navSortLabel { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   #navSort .sortbtn .car { flex:none; font-size:8px; opacity:.5; }
   #navSort .menu { position:absolute; top:calc(100% + 5px); right:0; left:auto; min-width:132px; z-index:6;
@@ -237,7 +258,7 @@
   #navSort .menu button { display:block; width:100%; text-align:left; white-space:nowrap; border:none;
     background:none; box-shadow:none; padding:7px 9px; border-radius:7px; color:var(--fg);
     font:500 12.5px 'Geist', ui-sans-serif, sans-serif; }
-  #navSort .menu button:hover { background:var(--fill); transform:none; }
+  #navSort .menu button:hover { background:var(--fill); }
   #navSort .menu button[aria-checked="true"] { font-weight:600; color:var(--ink); background:var(--fill); }
   .nav-list { display:flex; flex-direction:column; gap:1px; padding:0 8px; }
   /* An icon-led row, GD's rail item measured across: 13.5px label, a 16px glyph, 2.5px of horizontal
@@ -282,7 +303,7 @@
   .nav-tabs button { flex:1; display:flex; align-items:center; justify-content:center; gap:5px;
     border:none; background:none; box-shadow:none; border-radius:7px; padding:4px 8px; color:var(--muted);
     font:500 12px 'Geist', ui-sans-serif, sans-serif; }
-  .nav-tabs button:hover { color:var(--ink); transform:none; }
+  .nav-tabs button:hover { color:var(--ink); }
   .nav-tabs button[aria-selected="true"] { background:var(--bg); color:var(--ink); font-weight:600;
     box-shadow:0 1px 2px rgba(20,20,15,.06); }
   .nav-tabs .n { min-width:15px; height:15px; padding:0 4px; border-radius:99px; background:var(--yellow);
@@ -299,13 +320,13 @@
   .ib-doc { display:flex; align-items:center; gap:6px; width:100%; padding:4px 9px; border:none;
     background:none; box-shadow:none; border-radius:7px; color:var(--muted); text-align:left;
     font:700 9.5px 'Geist', ui-sans-serif, sans-serif; letter-spacing:.13em; text-transform:uppercase; }
-  .ib-doc:hover { background:var(--shell-row); color:var(--ink); transform:none; }
+  .ib-doc:hover { background:var(--shell-row); color:var(--ink); }
   .ib-doc .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .ib-doc .n { flex:none; margin-left:auto; letter-spacing:0; font-size:10px; color:var(--faint); }
   .ib-item { display:block; width:100%; text-align:left; border:none; box-shadow:none;
     background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:6px 9px 7px;
     margin-top:2px; color:var(--fg); font:400 12.5px/1.45 'Geist', ui-sans-serif, sans-serif; }
-  .ib-item:hover { border-color:var(--line-strong); transform:none; }
+  .ib-item:hover { border-color:var(--line-strong); }
   /* Your turn reads as the agent's yellow, same as the badge and the same as a card's chip. Everything
      else stays on the page's ground: open, and not yours to move.
      `ib-turn` rather than a bare `turn`, which the header's open/orphaned cluster already owns as a
@@ -335,6 +356,8 @@
   /* The panel's own control lives in its header, so the page header carries one only where the panel
      is a drawer and its header is off screen with it. */
   #navToggle, #navExpand { display:none; }
+  /* The strip's own, shown only there (see the collapsed block below). */
+  #navStripInbox { display:none; }
   /* Collapsed is an icon strip and only ever a DESKTOP state: down at the drawer breakpoint the panel
      is a fixed overlay with no track to shrink, so these rules are scoped rather than undone one by
      one below — the rail learned that lesson the expensive way. */
@@ -369,6 +392,19 @@
        expanding restores it. */
     body.nav-collapsed #navInbox { display:none; }
     body.nav-collapsed #navList { display:flex; }
+    /* …and one control that takes the inbox WITH it: the count of what is waiting across the folder is
+       the number the strip most has to keep, and the tab that carried it went with .nav-nav. One
+       32px square under the brand row, the same size as a document's, and clicking it opens the panel
+       on the inbox. The badge is the pill the rail's toggle uses, the other place a number here means
+       "look". */
+    body.nav-collapsed #navStripInbox { position:relative; display:flex; align-self:center;
+      width:32px; height:32px; margin:8px 0 0; padding:0; color:var(--faint); border-radius:7px; }
+    body.nav-collapsed #navStripInbox:hover { color:var(--ink); background:var(--shell-row); }
+    body.nav-collapsed #navStripInbox .n { position:absolute; top:-1px; right:-3px; min-width:14px;
+      height:14px; padding:0 3px; border-radius:99px; background:var(--yellow); color:var(--chip-fg);
+      box-shadow:0 0 0 1.5px var(--shell); font:600 10px/14px 'Geist', ui-sans-serif, sans-serif;
+      text-align:center; }
+    body.nav-collapsed #navStripInbox .n:empty { display:none; }
   }
   /* The document itself is the editor: edit rich text in place, no mode switch, no chrome. */
   /* pwd — the document's path, and the content header's title. It sits IN the header now rather than
@@ -474,7 +510,7 @@
   .zoomctl button { border:none; background:none; box-shadow:none; border-radius:6px;
     padding:3px 8px; color:var(--muted); font:600 10.5px 'Geist', ui-sans-serif, sans-serif;
     letter-spacing:.03em; }
-  .zoomctl button:hover { color:var(--ink); background:none; transform:none; }
+  .zoomctl button:hover { color:var(--ink); background:none; }
   .zoomctl button[aria-pressed="true"] { background:var(--bg); color:var(--ink);
     box-shadow:0 1px 2px rgba(20,20,15,.06); }
   #doc table { border-collapse:collapse; } #doc td, #doc th { border:1px solid var(--line-2); padding:6px 11px; font-size:14px; }
@@ -730,17 +766,22 @@
   .turn { font-size:12.5px; color:var(--faint); display:flex; align-items:center; gap:5px; white-space:nowrap; }
   .turn:empty { display:none; }
   .turn .orphan { color:var(--fg); border-bottom:1.5px solid var(--yellow); cursor:pointer; }
-  /* center of the navbar: the shared "are we in the room together?" readout — here ↔ waiting. The
-     header spans only the document column now, so the centre it takes is the centre of the PROSE. */
+  /* center of the navbar: the readout for the agent being in the room. The header spans only the
+     document column now, so the centre it takes is the centre of the PROSE, which is why it says
+     nothing at rest. A document nobody was watching used to name that absence at the optical centre of
+     the page, permanently, as the first thing the eye landed on. The element stays in the DOM at all
+     times so its arrival moves nothing around it; it is EMPTY whenever no agent is watching, and
+     `:empty` takes the mobile pill's own padding with it. */
   .presence { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); pointer-events:none;
     display:flex; align-items:center; gap:6px; font-size:12.5px; white-space:nowrap; }
+  .presence:empty { display:none; }
   .presence .dot { width:7px; height:7px; border-radius:50%; flex:none; }
   .presence.here { color:#6b6b64; font-weight:500; }
   .presence.here .dot { background:var(--yellow); box-shadow:0 0 0 1px var(--yellow-ring); }
-  .presence.away { color:var(--muted); font-weight:500; }
-  .presence.away .dot { background:transparent; border:1.5px solid var(--line-strong); }
-  .presence.sent { color:var(--muted); font-weight:500; }            /* review handed off — a settled, filled dot */
-  .presence.sent .dot { background:var(--muted); box-shadow:none; }
+  /* It fades UP rather than appearing. `arriving` is set by renderPresence only on the render that
+     fills an empty slot, so a 15-second heartbeat re-rendering the same state does not re-animate. */
+  @keyframes presIn { from { opacity:0; } to { opacity:1; } }
+  .presence.arriving { animation:presIn .2s ease-out; }
   @keyframes presPulse { 0%,100%{opacity:.35} 50%{opacity:1} }
   .presence.working .dot { animation:presPulse 1.4s ease-in-out infinite; }
   /* Per-thread presence: the card the agent is answering right now. Just the label, plain body
@@ -762,12 +803,14 @@
     #banner { transition:opacity .15s ease-out, visibility 0s linear .15s; transform:translate(-50%, 0); }
     #banner.open { transition:opacity .15s ease-out, visibility 0s; transform:translate(-50%, 0); }
     .presence.working .dot { animation:none; opacity:.6; }
+    /* the readout still arrives, it just arrives at once */
+    .presence.arriving { animation:none; }
     /* the label drops the shimmer for static muted text — still legible, just not moving */
     .replying .lbl { animation:none; background:none; color:var(--muted); }
     /* Cards: no travel. The JS also skips the exit wait entirely, so a decision stays instant. */
     .card.leaving { transform:none; transition:opacity .12s ease-out; }
     .card.entering { animation:none; }
-    button:active, button:hover { transform:none; }
+    button:active, .pop:hover { transform:none; }
   }
   /* docs is a LINK (leaves the page) — mark it as one so it reads differently from status + actions */
   .doclink::after { content:'\2197'; font-size:.82em; margin-left:2px; opacity:.6; }
@@ -922,7 +965,8 @@
         <button type="button" data-zoom="full" aria-pressed="false" title="Show the asset at its natural size">100%</button>
       </div>
     </div>
-    <div id="presence" class="presence away"></div>
+    <!-- Empty until an agent is watching, working or replying. See renderPresence. -->
+    <div id="presence" class="presence"></div>
     <div class="spacer"></div>
     <div id="turn" class="turn"></div>
     <button id="railToggle" class="ghost iconbtn" onclick="toggleRail()" aria-controls="side" aria-expanded="true"
@@ -959,6 +1003,13 @@
           <rect x="2.5" y="3.75" width="15" height="12.5" rx="2.5"/><path d="M7.1 3.75v12.5"/>
           <path d="M11.4 7.9 13.5 10l-2.1 2.1"/></svg></button>
       </div>
+      <!-- Strip only. The collapse takes .nav-nav and the folder's inbox tab with it, and the count on
+           that tab is what says something is waiting. This keeps it, and opens the panel on the inbox. -->
+      <button id="navStripInbox" class="ghost iconbtn" onclick="openInbox()"
+        title="Open the inbox" aria-label="Open the inbox"><svg viewBox="0 0 20 20" fill="none"
+        stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M2.5 12.2h4.1l1.1 1.9h4.6l1.1-1.9h4.1"/>
+        <path d="M4.7 4.2 2.5 12.2v3.6h15v-3.6l-2.2-8H4.7Z"/></svg><span class="n" id="navStripCount"></span></button>
       <div class="nav-nav">
         <!-- Two ways to read the same folder: what is IN it, and what is still open across it. A
              segmented pair rather than two buttons, because they are one choice and only one can be
@@ -969,7 +1020,6 @@
         </div>
         <div id="navCrumb"></div>
         <div class="nav-sect" id="navSect">
-          <span class="nav-label" id="navListLabel">documents</span>
           <div id="navSort">
             <button class="sortbtn" onclick="toggleSortMenu()" aria-haspopup="true" aria-expanded="false"
               title="Sort the folder"><span id="navSortLabel">spine</span><span class="car">▾</span></button>
@@ -997,7 +1047,7 @@
 <div id="filelist" style="display:none"></div>
 <div id="seltool">
   <div class="fmt">
-    <button data-op="fmt-toggle" class="fmt-btn" title="Text style">¶<span class="car">▾</span></button>
+    <button data-op="fmt-toggle" class="fmt-btn pop" title="Text style">¶<span class="car">▾</span></button>
     <div class="fmt-menu" hidden>
       <button data-op="p">¶&nbsp;&nbsp;text</button>
       <button data-op="h1">heading 1</button>
@@ -1006,11 +1056,11 @@
     </div>
   </div>
   <span class="tsep"></span>
-  <button data-op="bold" title="Bold (⌘B)"><b>B</b></button>
-  <button data-op="italic" title="Italic (⌘I)"><i>I</i></button>
+  <button class="pop" data-op="bold" title="Bold (⌘B)"><b>B</b></button>
+  <button class="pop" data-op="italic" title="Italic (⌘I)"><i>I</i></button>
   <span class="tsep"></span>
-  <button data-op="link">link</button>
-  <button data-op="comment">comment</button>
+  <button class="pop" data-op="link">link</button>
+  <button class="pop" data-op="comment">comment</button>
 </div>
 <div id="popover"></div>
 <div id="banner"></div>
@@ -2132,7 +2182,7 @@ function openComment() {
     <textarea id="pobody" placeholder="comment… or paste an image"></textarea>
     <div class="row">${imgBtn('id="poImage"')}<span class="spacer"></span>
     <button class="ghost" id="poCancel">cancel</button>
-    <button class="primary" id="poSubmit">comment</button></div>`;
+    <button class="primary pop" id="poSubmit">comment</button></div>`;
   popoverAt();
   makeDraggable(po, $('poHead'));   // drag the header to move it off the text you're commenting on
   const ta = $('pobody'); ta.focus();
@@ -2558,6 +2608,9 @@ function renderSide() {
   lastRank = stable;
   activeTop.sort((a, b) => stable.get(a.id) - stable.get(b.id));
   $('sheetCount').textContent = activeTop.length || '';   // mobile pull-up pill count = open items
+  // What the rail has to hold decides what shape it rests in (Turn.rail). Before the rebuild, so the
+  // track and the cards move together rather than a frame apart.
+  noteRailRest(activeTop.length, archivedTop.length);
 
   side.innerHTML = '';
   // Tabbed rail: active threads (open, editable) ↔ archived threads (settled, read-only).
@@ -2584,7 +2637,7 @@ function renderSide() {
   markAnchors();   // refresh the in-doc highlight cues to match the current items
   dockCards();     // …then place each card level with the mark markAnchors just laid down (order matters)
   renderTurn();    // right cluster: open / orphaned counts
-  renderPresence();// center: claude is here ↔ waiting for claude
+  renderPresence();// center: the agent, while it is here
   noteRailTraffic();// and the collapsed rail's "something arrived" badge
   navSelfUpdate(); // and the panel's badge for this document, which a resolve just changed
   scheduleOrphanFlip();// …and the one timer that ends a grace window nothing else would end
@@ -2616,10 +2669,11 @@ function markEntering(side) {
 }
 // ACTIVE tab — open threads, fully interactive (accept/reject, reply, resolve). This is the working surface.
 function renderActive(list, top, childSug) {
-  if (!top.length) {
-    list.innerHTML = `<div class="empty">no active threads.<br>select text in the document to start one.</div>`;
-    return;
-  }
+  // Nothing open draws nothing. The rail is either a hairline edge (no archive either, so this column
+  // is 12px wide and there is nowhere to put a sentence) or a tab bar whose `active 0` already says
+  // it. The sentence that used to sit here told a reader who had just opened a clean document that
+  // they could select text, every time they opened one.
+  if (!top.length) return;
   for (const it of top) {
     const el = document.createElement('div');
     // Two authorities can call an item orphaned and the card shows either. The store's status comes from
@@ -2660,8 +2714,8 @@ function renderActive(list, top, childSug) {
       // forged decision one click away instead of one flag away. Accept stays the only primary: send is
       // the secondary move on a card whose job is a decision.
       actions = `<div class="row"><textarea class="reply" rows="1" placeholder="reply…" oninput="autogrow(this)" data-action="reply"></textarea></div>
-                 <div class="row"><button class="primary" data-action="accept">accept</button>
-                 <button data-action="reject">reject</button>
+                 <div class="row"><button class="primary pop" data-action="accept">accept</button>
+                 <button class="pop" data-action="reject">reject</button>
                  ${imgBtn('data-action="image"')}<span class="spacer"></span>
                  <button data-action="send">send</button></div>`;
     } else {
@@ -2760,22 +2814,30 @@ function renderTurn() {
   el.innerHTML = orphaned
     ? `<span class="orphan" data-action="orphans" title="text moved or changed — re-anchor or resolve">${orphaned} orphaned</span>` : '';
 }
-// Center of the navbar — the shared "are we in the room together right now?" readout. Lit while a
-// `sidecar wait` is heartbeating presence; falls back to "waiting for claude" when no agent is watching.
+// Center of the navbar: the readout for the agent being in the room. Lit while a `sidecar wait` is
+// heartbeating presence, and EMPTY otherwise.
+//
+// It used to carry a state for every absence too: one naming the agent as away whenever nothing was
+// watching, and one for the review having been handed off. Both sat at the optical centre of the page
+// permanently, and `session.done` is never cleared, so the second was a label a document wore for the
+// rest of its life. A readout that is always saying something says nothing, and what is worth the
+// centre of the page is the agent arriving. So the live states print and every other state is silence.
+let presenceShown = false;
 function renderPresence() {
   const el = $('presence'); if (!el) return;
-  // Expired on our clock reads as away — a killed agent's last "working" ping must not glow forever.
+  // Expired on our clock reads as nobody: a killed agent's last "working" ping must not glow forever.
   const live = state.presence && (!state.presence.until || state.presence.until > Date.now());
   const st = live && state.presence.state;
   schedulePresenceExpiry();
-  const done = !!(state.review.session && state.review.session.done);
-  let cls, txt;
+  let cls = '', txt = '';
   if (st === 'working') { cls = 'here working'; txt = 'claude is working…'; }   // Alex acted; I'm composing
   else if (st === 'watching') { cls = 'here'; txt = 'claude is here'; }          // watching; ball in Alex's court
-  else if (done) { cls = 'sent'; txt = 'sent to claude'; }                       // review handed off, not "waiting"
-  else { cls = 'away'; txt = 'waiting for claude'; }
-  el.className = 'presence ' + cls;
+  if (!txt) { el.className = 'presence'; el.innerHTML = ''; presenceShown = false; return; }
+  // `arriving` only on the render that fills an empty slot: the heartbeat re-renders this every 15s,
+  // and re-running the fade on each one would make the readout blink for as long as the agent is here.
+  el.className = 'presence ' + cls + (presenceShown ? '' : ' arriving');
   el.innerHTML = '<span class="dot"></span><span class="lbl">' + txt + '</span>';
+  presenceShown = true;
 }
 // Header orphan cue → open the sidebar and flash the orphaned cards (the doc-side fix for §6a: orphaned
 // items have no in-doc highlight, so they must never go silently missing).
@@ -2937,11 +2999,13 @@ const RAIL_MIN = 280;        // below this a card's diff and its buttons stop fi
 const RAIL_MAX_FRAC = 0.6;   // and past this the document is the sidebar
 const DOC_MIN = 360;         // the width the document keeps whatever either panel is dragged to
 const RAIL_DEFAULT = 372;    // its resting width, and the floor the fill below never goes under
-// The rail FILLS what the document does not want, up to here. Past this a card stops being a note and
-// becomes a paragraph: 520 of rail is 480 of card inside the aside's padding and ~450 of text, which
-// is about 68 characters at the card's 13.5px — the top of a comfortable measure. A DRAG can still go
-// wider (railMax); this is only what the rail rests at when nobody has said otherwise.
-const RAIL_AUTO_MAX = 520;
+// The rail FILLS what the document does not want, up to here. 420 of rail is 380 of card inside the
+// aside's padding and ~350 of text, which is about 52 characters at the card's 13.5px: a note, read in
+// one eye movement, beside prose that stays the widest thing on the screen. It used to fill to 520,
+// where a card runs to a 68-character measure and starts competing with the document for the reading
+// eye on exactly the wide displays this fill exists for. A DRAG can still go wider (railMax); this is
+// only what the rail rests at when nobody has said otherwise.
+const RAIL_AUTO_MAX = 420;
 const DOC_MEASURE = 908;     // #doc's cap, its 44px margins included. Kept in step with the CSS.
 // What the two side panels may take between them: main, less the width the document keeps whatever
 // happens. Each panel's own max reads this minus whatever the OTHER one is currently occupying, so
@@ -3013,11 +3077,47 @@ function applyRailWidth(w, persist) {
 // against its anchor. The same two calls the window resize listener makes, for the same reason.
 function relayoutDoc() { if (isAsset()) sizeFrame(); scheduleDock(); }
 const railCollapsed = () => document.body.classList.contains('rail-collapsed');
+const railBare = () => document.body.classList.contains('rail-bare');
+// Two ways for the rail not to be on screen, one question for the toggle: collapsed is the human's
+// standing choice, bare is the document having nothing to say yet. Either way the button offers to
+// show it, and "hide" would be offering to hide a hairline.
+const railShut = () => railCollapsed() || railBare();
+// ---------- the rail at rest ----------
+// The counts the last render found, so the toggle can re-decide without re-running renderSide.
+let railCounts = { active: 0, archived: 0 };
+// The human overruling the rest state with the header toggle. Held for this page and deliberately not
+// persisted: it is an answer about this document, and the next one starts from its own contents.
+let railForced = false;
+let railAnimTimer = null;
+function noteRailRest(activeN, archivedN) {
+  railCounts = { active: activeN, archived: archivedN };
+  applyRailRest();
+}
+let railRestSeeded = false;
+function applyRailRest() {
+  const bare = !railForced && !railCollapsed() && Turn.rail(railCounts.active, railCounts.archived) === 'bare';
+  // The first render is the page arriving at its resting shape, not moving to it: animating that is a
+  // 372px band of white sliding shut on every load of a clean document. Read before the early return,
+  // or a document that opens with cards and is then emptied still counts as arriving.
+  const first = !railRestSeeded; railRestSeeded = true;
+  if (bare === railBare()) return;
+  if (!first && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    document.body.classList.add('rail-animating');
+    clearTimeout(railAnimTimer);
+    // Cards dock against a document column that is still moving, so re-measure once it has stopped.
+    railAnimTimer = setTimeout(() => { document.body.classList.remove('rail-animating'); relayoutDoc(); }, 260);
+  }
+  document.body.classList.toggle('rail-bare', bare);
+  paintRailToggle();
+  relayoutDoc();
+}
 function toggleRail(force) {
-  const collapse = force === undefined ? !railCollapsed() : !!force;
+  const collapse = force === undefined ? !railShut() : !!force;
   document.body.classList.toggle('rail-collapsed', collapse);
   uiStore.set('railCollapsed', collapse ? '1' : '');
   if (!collapse) { railSeen = railMsgTotal(); railNew = 0; }   // opening it IS reading it
+  railForced = !collapse;   // asking for the panel overrules the rest state; closing it hands it back
+  applyRailRest();
   paintRailToggle();
   relayoutDoc();
 }
@@ -3042,7 +3142,7 @@ function noteRailTraffic() {
 function paintRailToggle() {
   const btn = $('railToggle');
   if (!btn) return;
-  const shut = railCollapsed();
+  const shut = railShut();
   const label = (shut ? 'Show review panel' : 'Hide review panel') + (shut && railNew ? ` (${railNew} new)` : '');
   btn.title = label;
   btn.setAttribute('aria-label', label);
@@ -3184,7 +3284,9 @@ function renderNav() {
   $('navList').hidden = inbox;
   $('navInbox').hidden = !inbox;
   const waiting = navData.docs.reduce((n, d) => n + (d.turn || 0), 0);
-  $('navInboxCount').textContent = waiting ? (waiting > 9 ? '9+' : String(waiting)) : '';
+  const waitingLabel = waiting ? (waiting > 9 ? '9+' : String(waiting)) : '';
+  $('navInboxCount').textContent = waitingLabel;
+  $('navStripCount').textContent = waitingLabel;   // the same number, for the icon strip
   for (const b of document.querySelectorAll('.nav-tabs button'))
     b.setAttribute('aria-selected', b.dataset.view === navView ? 'true' : 'false');
   const docs = Nav.sort(navData.docs, navSort);
@@ -3298,10 +3400,16 @@ $('navInbox').addEventListener('click', (e) => {
 $('nav').addEventListener('click', (e) => {
   const b = e.target.closest && e.target.closest('.nav-tabs button[data-view]');
   if (!b) return;
-  navView = b.dataset.view === 'inbox' ? 'inbox' : 'files';
+  setNavView(b.dataset.view === 'inbox' ? 'inbox' : 'files');
+});
+function setNavView(view) {
+  navView = view === 'inbox' ? 'inbox' : 'files';
   uiStore.set('navView', navView);
   renderNav();
-});
+}
+// The strip's way into the inbox. Switching the view and expanding the panel are one move from there:
+// the strip has no tab bar to land on, and a count you can see but not follow is a tease.
+function openInbox() { setNavView('inbox'); toggleNav(true); }
 $('navCrumb').addEventListener('click', (e) => {
   const b = e.target.closest && e.target.closest('button[data-dir]');
   if (b) loadDir(b.dataset.dir);
@@ -3347,6 +3455,10 @@ function resetDocState() {
   clearTimeout(orphanFlipTimer); orphanFlipTimer = null;
   shownCardIds = null;      // so the incoming cards are a first render, not an arrival
   railSeen = null; railNew = 0;
+  // Asking for the rail was an answer about the document being left. The incoming one rests on its own
+  // contents, the way it would have if it had been opened in a fresh tab.
+  railForced = false;
+  presenceShown = false;    // and the readout fades in again rather than being already there
   sideTab = 'active';
   // Null FIRST: the window `message` listener identifies the frame by handle, so a late message from
   // the outgoing asset's frame is dropped rather than landing on the incoming document.
@@ -3582,7 +3694,17 @@ function paintNavToggle() {
   });
 })();
 // Restore before the first render, so the panel never flashes at the default width and then jumps.
-if (uiStore.get('navCollapsed', '')) document.body.classList.add('nav-collapsed');
+//
+// With no preference on file the default depends on what was ASKED FOR. A URL naming a document is a
+// request to read that document, and 248px of folder listing beside it is the answer to a question
+// nobody asked, so the panel rests as its icon strip, one click from the full list. Arriving with no
+// document is the other request, the picker, and there the panel is the point.
+//
+// Three states in the store, not two: `1` collapsed, `''` open, absent never answered. toggleNav
+// writes the empty string on every expand, so anyone who has opened the panel once has said so, and
+// this only decides for someone who never has.
+const navPref = uiStore.get('navCollapsed', null);
+if (navPref === null ? !!FILE : navPref === '1') document.body.classList.add('nav-collapsed');
 applyNavWidth(navWidth, false);
 paintNavToggle();
 // The rail's fill is measured against what the panel left of the window, and the panel's own width

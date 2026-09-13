@@ -108,6 +108,22 @@
     return groups.sort((a, b) => (b.turn - a.turn) || String(b.at).localeCompare(String(a.at)));
   }
 
-  const api = { LIVE, QUOTE_MAX, isLive, lastBy, lastAt, waiting, of, inbox, byNewest };
+  // What shape the review rail rests in, from the two counts the rail has already sorted out for
+  // itself: its top-level active cards and its top-level archived ones.
+  //
+  //   'bare'  nothing either way. No review exists on this document yet, so the rail is a hairline
+  //           edge and the document takes the width (index.html's body.rail-bare)
+  //   'tabs'  everything settled. The tab bar stays, because the archive is a click away and its
+  //           count is the only thing saying so, and nothing else is drawn
+  //   'full'  something is open. The working surface
+  //
+  // Here rather than in the page because it is the same live/settled split this module already owns,
+  // and because a rule about when a panel disappears is worth a test that does not need a browser.
+  function rail(activeN, archivedN) {
+    if (activeN > 0) return 'full';
+    return archivedN > 0 ? 'tabs' : 'bare';
+  }
+
+  const api = { LIVE, QUOTE_MAX, isLive, lastBy, lastAt, waiting, of, inbox, byNewest, rail };
   if (typeof module === 'object' && module.exports) module.exports = api; else root.Turn = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
