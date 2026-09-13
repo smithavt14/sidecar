@@ -118,7 +118,7 @@ caret climb to the top. Scroll with the wheel or a finger and it stands aside un
 
 **Comment.** Select text, then comment. The comment box is draggable, so you can move it off the text you're
 commenting on. Threads reply and resolve. Every open comment or suggestion softly highlights its span in the
-document; tap the highlight to open its card, tap a card's quote to jump to the text. The review rail has two tabs: **active** threads (open, editable) and **archived** threads (settled, read-only).
+document; tap the highlight to open its card, tap a card's quote to jump to the text. The review rail has two tabs: **active** threads (open, editable) and **archived** threads (settled, read-only), and an icon at the right end of that bar cycles how much of it is drawn: every card full, compact (a thread waiting on you stays full and the rest rest as pills you can click open), or hidden, which clears the rail and the highlights so you can read the draft straight through.
 
 **Screenshots.** Paste or drop an image into any comment or reply box, or use the picture button beside
 **resolve**; click it to see it full size. Showing a broken layout beats describing one. Your agent can
