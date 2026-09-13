@@ -923,9 +923,10 @@
        phone the column is the window and nothing binds; on a tablet held wide it still does. */
     #doc { max-width:calc(var(--measure) + 36px); padding:20px 18px 42vh; font-size:16px; line-height:1.6; }
     #doc h1 { font-size:25px; } #doc h2 { font-size:19px; } #doc h3 { font-size:16.5px; }
-    /* The page width is a desktop control: down here the window is narrower than the narrowest of the
-       three, so all three draw the same column and the button would do nothing visible. */
-    #measureToggle { display:none; }
+    /* The control stays while the three widths still differ. Below 540px the window is narrower than
+       the narrowest measure plus its gutters, all three draw the same column, and the button would do
+       nothing visible; a tablet at 768px still gets 500, 564 and 660px columns. */
+    @media (max-width: 540px) { #measureToggle { display:none; } }
     /* clear the notch/status bar: pad the top by the safe-area inset so the bar isn't cramped or hidden */
     .hwrap { padding:0 12px; height:calc(51px + env(safe-area-inset-top));
       padding-top:env(safe-area-inset-top); gap:8px; }
