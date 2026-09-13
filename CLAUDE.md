@@ -5,12 +5,12 @@ For *driving* sidecar as an agent (reviewing a document with a human), see
 
 ## Shape
 
-No build step. Twenty-one files carry the whole tool:
+No build step. Twenty-two files carry the whole tool:
 
 | File | What it is |
 |---|---|
 | `server.js` | HTTP server + fs-watch → SSE. Boots express; dispatches `sidecar <verb>` to the CLI first. |
-| `lib/cli.js` | The agent's entire command surface. Every write verb funnels into one `applyItems()`. Holds the two extension allowlists, `MARKDOWN` and `ASSETS`, and `docKind()` over them. |
+| `lib/cli.js` | The agent's entire command surface. Every write verb funnels into one `applyItems()`. Holds the two extension allowlists, `MARKDOWN` and `ASSETS`, `docKind()` over them, and the one exception to both: `themesDir()` and `isThemeFile()`, which the server asks too. |
 | `lib/review.js` | Load/save/merge the `.sidecar.json`, and the one place the pre-1.7 `.review.*` names still exist. Shared by the server and the CLI so both merge identically. |
 | `lib/element.js` | The element anchor: reference normalization, sel validation, and the Node-side liveness rule. |
 | `lib/assets.js` | Where an attached image lands and what counts as one. Shared by the upload route and `--image`. |
@@ -20,6 +20,7 @@ No build step. Twenty-one files carry the whole tool:
 | `lib/watchers.js` | The watcher registry in tmp: who is armed on what, whether the pid is still running, and what `watchers --clean` may reap. |
 | `lib/presence.js` | The presence ping. Decorative and server-optional: a failed POST never affects the command that made it. |
 | `public/index.html` | The entire frontend: rendering, contenteditable editor, directory panel, review rail. |
+| `public/themes.js` | The palette, as data: the eight built-in themes, the value grammar a theme file is checked against, and the pre-paint boot. Loaded in <head> before the stylesheet; `server.js` requires the same file. |
 | `public/navsort.js` | The directory panel's ordering. Pure list in/out; no DOM, no dependency. |
 | `public/doclink.js` | Does a link in a document open IN sidecar, and which document. Pure string in/out. |
 | `public/turn.js` | Whose turn is it: the panel's badges, the inbox, the rail's resting shape and its density. Pure review in, counts + items out; `server.js` requires it too. |
@@ -337,7 +338,8 @@ hover title in the UI.
   Keep that when you change the surrounding code; delete them when the reason stops being true.
 - Layout preferences (each panel's width, whether it is collapsed, whether the review rail's width was
   set by hand rather than filled, how dense the rail draws its cards, an asset's zoom, the directory
-  panel's sort one key per folder, typewriter scrolling, and the theme) persist in `localStorage`
+  panel's sort one key per folder, typewriter scrolling, and the theme, which is a mode plus one theme
+  per scheme) persist in `localStorage`
   under an `sc:` prefix, through the wrapped `uiStore`. Safari in private mode throws
   on `setItem`, and nothing about a preference is worth an exception on the path that renders the
   review. Document and review state never go there; those are files.
@@ -432,44 +434,103 @@ this and every other preference in the tool: reading is what you are doing for t
 while the theme and the page width are how you have set the tool up. A reading mode that survived a
 reload would open a document to a page with no folder, no rail and no explanation.
 
-## Two themes, one set of names
+## Eight themes, one set of names, and a ninth you write yourself
 
-Every colour in `public/index.html` comes from a custom property on `:root`, and dark mode redeclares
-those same properties rather than adding rules of its own. So a rule written once follows the theme,
-and the palette is the only place a colour is chosen. A test scans the stylesheet with the token
-blocks removed and fails on any hex or `rgb()` left in a rule; the two that are allowed are named in
-it, both theme-neutral (a mask reads only alpha, and the lightbox's shadow falls on its own scrim).
+Every colour in `public/index.html` comes from a custom property, and no rule in the stylesheet declares
+one. The palette lives in **`public/themes.js`** instead, as one flat object per theme, and is written
+onto `<html>` as inline custom properties before the first paint. So a rule is written once and follows
+whatever theme is on, and adding a theme costs no CSS at all. A test scans the stylesheet with the one
+remaining token block removed and fails on any hex or `rgb()` left in a rule; the two that are allowed
+are named in it, both theme-neutral (a mask reads only alpha, and the lightbox's shadow falls on its own
+scrim).
 
-The palette is declared twice, under `@media (prefers-color-scheme: dark) :root:not([data-theme="light"])`
-and under `:root[data-theme="dark"]`. The media query is what an untouched install follows, and it
-keeps following the system when the system flips mid-session with nothing listening. The attribute is
-a choice the human made and beats the system in both directions, which is why the media rule excludes
-an explicit `light`. A test asserts the two copies declare the same tokens at the same values.
+**A theme is `{ name, scheme, tokens }`** — a display name, `light` or `dark`, and the 50 colour tokens.
+That is the whole format, and the file a human writes is those same three fields. Eight are built in:
 
-`sc:theme` holds `system`, `light` or `dark`, and an inline script in `<head>` stamps `data-theme`
-before the first paint — in `<head>` because a reader who chose dark would otherwise get one white
-frame on every load. `color-scheme` moves with the palette, so scrollbars, form fields and native
-controls follow without being styled.
+| light | dark | |
+|---|---|---|
+| `paper` #ffffff | `ink` #16150f | the two sidecar shipped with, moved here verbatim |
+| `sepia` #f6efdd | `sepia dark` #1e1710 | cream paper, brown-black ink |
+| `slate` #eef1f6 | `slate dark` #0f131a | a cool grey-blue ground |
+| `contrast` #ffffff | `contrast dark` #0b0b0a | a bright room and tired eyes |
 
-**The store says where the cycle starts and the page says where it is.** `activeTheme` is read once at
-boot, from the attribute the stamp left or from the same key, and every click moves it; the write to
-`sc:theme` is a mirror. Safari in private mode throws on `setItem` while `getItem` keeps answering
-null, so a cycle that asked storage for its next step applied light on the first click and light on
-every click after it, with dark and the way back to system unreachable until a reload.
+The six new ones were built on the ramps paper and ink already described: the ink steps toward the ground
+at fixed distances (fg .13, muted .50, dead .74 on light; .12, .42, .70 on dark), the surfaces step up off
+it, and the hairlines are the ink at 8/14/16% on light, white at 10/16/22% on dark. `contrast` uses a
+shallower ramp, which is what "high contrast" means for the secondary text rather than the body copy.
 
-Three things do not move between the themes. **`--yellow` is #ffeb00 in both**, because it is the
-agent's and an agent that changes colour with the room is not a convention any more; `--on-yellow` is
-the dark ink that always sits on it. **`--asset-canvas` is white in both**: an asset is someone's own
-design, usually built for paper, and a dark backing would show through the parts it does not paint
-and change the thing being reviewed. **The toast inverts**, and it is the only surface that does:
-ink-on-light in light, light-on-ink in dark.
+**The LAYOUT tokens stay on `:root` in the stylesheet** and must not move into a theme: `--t-*`, `--r-*`,
+`--measure`, `--prose-*`, `--rail-w`, `--nav-w`, `--track-caps`, `--spring-press`. A size is a size in
+every theme, and a theme file that could change one would be a palette resizing the tool.
 
-The rest follows iA Writer's rule in both directions: never pure black on pure white, never pure white
-on pure black. The dark ground is the warm near-black the toast already was, the ink is a warm light
-grey, hairlines become white at low alpha, `--shell` steps one lighter than `--bg` rather than one
-darker, and the shadows go darker and deeper, since a 5% black shadow says nothing on a dark ground.
-One image needs help the tokens cannot give: `mark.svg` is an `<img>`, so its `currentColor` paints
-against its own document and is always black; dark mode inverts it with a filter.
+**Three things do not move between themes.** `--yellow` is #ffeb00 in all eight, because it is the agent's
+and an agent that changes colour with the room is not a convention any more; `--on-yellow` is the dark ink
+that always sits on it. `--asset-canvas` is white in all eight: an asset is someone's own design, usually
+built for paper, and a dark backing would show through the parts it does not paint. And iA Writer's rule
+holds in both directions, never pure black on pure white and never pure white on pure black, which a test
+asserts for every built-in along with 7:1 body copy on its own ground.
+
+### Two questions, two keys
+
+`sc:theme` is the MODE and still holds `system`, `light` or `dark`. `sc:themeLight` and `sc:themeDark` hold
+which theme wears each scheme, defaulting to paper and ink. So a reader on `system` who picked sepia by day
+and slate by night gets both, and the room decides which — the page listens to
+`prefers-color-scheme` itself now, since the media query that used to answer for free is gone with the CSS
+palette.
+
+`data-theme` carries the RESOLVED scheme in every case rather than only an explicit choice, which is what
+lets the two rules that need to know which way round the page is (the wordmark's inversion filter, and
+`color-scheme` for scrollbars and native controls) read one attribute and be right in a user's own theme
+too. The pre-paint script in `<head>` calls `Themes.boot`, and `public/themes.js` is loaded synchronously
+above it: the stylesheet has no colours of its own, so this is not a hint about the room, it IS the palette,
+and a page that painted before it ran would have no colours at all.
+
+**The store says where the page starts and the page says where it is.** Safari in private mode throws on
+`setItem` while `getItem` keeps answering null, so anything that re-read the store for its next step moved
+once and then stopped. A user theme cannot be read from a file before the first paint, so the page caches
+the one it chose under `sc:themeCache:<scheme>` and the stamp re-validates it through the same `validate`
+the server runs.
+
+### A theme file is a file
+
+`themes/` beside the served root's own `.sidecar` directory when there is one, and
+`$XDG_CONFIG_HOME/sidecar/themes` (`~/.config/sidecar/themes`) otherwise; `SIDECAR_THEMES` overrides both.
+The first branch is the interesting one: a theme file under the served root is also a DOCUMENT, so
+**customize** writes `<name>-custom.json` there, opens it in sidecar, and saving it repaints the tool.
+
+`.json` is not on either extension allowlist and must not be — that would put every `<doc>.sidecar.json` in
+the file picker — so the exception is a path check against the themes directory, and the bytes are wrapped
+in a ```json fence on the way out and unwrapped on the way back. JSON read as markdown is one paragraph
+whose newlines are gone the first time it saves; inside a fence it is a code block that round-trips through
+turndown byte for byte. The optimistic lock compares the fenced form on both sides, so the client needs to
+know none of this. The fence takes the FILE's own line ending and the unfencer accepts either, since
+`/api/save` rewrites every newline to the dominant one before the fence comes off: LF-only fence lines
+wrote themselves into a CRLF theme and killed it on the next read.
+
+**`lib/cli.js` owns the check, so the CLI opens exactly what the server does** (`isThemeFile`, beside
+`docKind` and the allowlists it is an exception to). A human comments on a theme in the browser and the
+agent answers with `sidecar reply` — which it could not do while the CLI rejected every `.json`. The CLI is
+handed a path and never knows which root a server is serving, so the root is read off the path
+(`<root>/.sidecar/themes/x.json`) and asked of the same resolution order. Sidecar's own state is excluded by
+name through `SIDECAR_SIBLING` (`lib/review.js`, one spelling shared with the legacy `.review.*` set): a
+theme opened in sidecar grows a review right beside it, and `readThemes` was reporting each of those as a
+theme somebody got wrong.
+
+`/api/themes` lists and validates; the directory is watched and a change pushes a `themes` event on the
+same SSE stream document edits use, carrying `rel` when the file is under the root so one event both
+re-applies the palette and reloads the open document.
+
+**The validator is a security boundary, not a courtesy.** Every value in a theme file ends up inside a
+custom property that rules all over the page read, and a custom property is not inert: `url(…)` fetches, and
+a value that escaped its declaration would be writing CSS. So a value is PARSED rather than sanitized — a
+hex, an `rgb()`/`hsl()`, a length or a bare keyword, in any comma- or space-separated combination, which is
+exactly what a colour, a length and a shadow are made of. Anything else is not a value. A colour function
+is parsed the same way down to its arguments (a known name, the right count, every one of them a number or
+a percentage), because a character class that let `rgb()` and `rgba(,,,,)` through refused nothing: the
+browser drops the declaration and the token goes silently missing from the page. Unknown token names
+are dropped rather than fatal (a token renamed later must not break every theme on disk), a bad value
+refuses the whole file by name, and a missing one falls back to the built-in of the same scheme — so the
+smallest useful theme file is a name, a scheme and one colour.
 
 ## Two scales, and the document is on neither
 
@@ -479,8 +540,9 @@ The chrome carried **sixteen distinct font sizes and fourteen distinct corner ra
 the arguments were good. Together they gave the eye nothing to settle into, which is the failure a
 good local decision cannot see.
 
-Six type steps and three radii replace them, declared on `:root` beside the palette and exempt from
-the palette test the way `--doc-space-*` and `--measure` already are: a size is a size in both themes.
+Six type steps and three radii replace them. They are what `:root` still carries now that the palette
+lives in themes.js, and they stay there the way `--doc-space-*` and `--measure` already do: a size is a
+size in every theme, and a theme that could change one would be a palette resizing the tool.
 
 | | | |
 |---|---|---|

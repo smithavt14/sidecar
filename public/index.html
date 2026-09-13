@@ -5,17 +5,22 @@
 <title>sidecar</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<!-- The palette itself, as data: the eight built-in themes, the value grammar a reader's own theme file
+     is checked against, and boot(). Synchronous and ahead of the stylesheet, because the stamp below
+     calls it and the stylesheet declares no colour of its own — a theme is what puts the colours on the
+     page. server.js requires the same file, so the page and the server agree on what a theme is. -->
+<script src="/themes.js"></script>
 <script>
-  /* Theme, before the first paint. The CSS follows the system on its own; this only stamps a CHOICE,
-     and it has to run here in <head> or a reader who picked dark gets one white frame on every load.
-     Inline, synchronous, and wrapped: Safari in private mode throws on localStorage, and no
-     preference is worth a blank page. The key is `sc:theme`, the same `sc:` prefix every other UI
-     preference uses (see uiStore) — read directly here because uiStore does not exist yet. */
+  /* Theme, before the first paint. Every colour on the page is an inline custom property now, so this
+     is not a hint about which way round the room is — it IS the palette, and it has to run here in
+     <head> or the first frame has no colours at all.
+     Themes.boot reads `sc:theme` (system / light / dark), then `sc:themeLight` or `sc:themeDark` for
+     which theme wears that scheme, and wraps every storage access itself: Safari in private mode throws
+     on localStorage and no preference is worth a blank page. The outer catch covers the rest and falls
+     back to paper rather than leaving the page unpainted. */
   (function () {
-    try {
-      var t = localStorage.getItem('sc:theme');
-      if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
-    } catch (e) {}
+    try { Themes.boot(document, localStorage); }
+    catch (e) { try { Themes.apply(document.documentElement, Themes.BUILTIN.paper); } catch (e2) {} }
   })();
   (function () {
     var W = { narrow: '29em', default: '33em', wide: '39em' };
@@ -75,68 +80,18 @@
      font-size, a `font:` shorthand or a border-radius that named a number instead of a step. */
   @font-face { font-family:'Geist'; font-weight:100 900; font-display:swap;
     src:url('/fonts/geist-latin.woff2') format('woff2'), url('/fonts/geist-latin-ext.woff2') format('woff2'); }
+  /* ---------- what :root still carries ----------
+     Not the palette. Every colour sidecar draws lives in public/themes.js, as one flat object of token
+     values per theme, and is written onto <html> as inline custom properties before the first paint
+     (see the stamp in <head>). So this file declares no colour anywhere: a rule names a token, a theme
+     decides what the token is, and adding a ninth theme costs no CSS at all. A test scans this
+     stylesheet for a hex or an rgb() that escaped into a rule.
+
+     What is left here is everything that is the same in every theme, which is what it always was: the
+     two panel widths, the document's measure and type size, the chrome's six type steps, its three
+     radii and the pill, one uppercase tracking, and the press spring. A size is a size in every theme,
+     and a theme file that could change one would be a palette resizing the tool. */
   :root {
-    --bg:#ffffff;            /* page surface */
-    --fill:#faf9f4;          /* recessed wells: code, diffs, icon holders */
-    --card:#ffffff;          /* a RAISED surface: a review card, a menu, a popover, the seltool */
-    --card-off:#fafaf8;      /* a settled one: orphaned, archived */
-    --card-fade:rgba(255,255,255,0);  /* --card at zero alpha, for the clipped card's fade */
-    --ink:#141410;           /* headings, structure, your identity */
-    --ink-btn:#1b1a15;       /* primary button */
-    --ink-btn-hover:#26251e;
-    --on-ink:#ffffff;        /* text ON the primary button */
-    --on-ink-edge:rgba(255,255,255,.16);      /* its faint edge */
-    --on-ink-edge-strong:rgba(255,255,255,.3);
-    --fg:#33332c;            /* body copy */
-    --ink-2:#57574f;         /* quiet chips, mono wells, the crumb's last segment */
-    --ink-3:#6b6b64;         /* the presence readout while claude is here */
-    --muted:#8a8a82;         /* labels, secondary */
-    --faint:#a3a39b;         /* timestamps, quiet quotes */
-    --fainter:#b0b0a8;       /* mono meta, em-dash */
-    --dead:#c2c2ba;          /* a dot with nothing behind it */
-    --line:rgba(20,20,15,.08);      /* hairline */
-    --line-2:rgba(20,20,15,.14);    /* quote rule, table cell */
-    --line-strong:rgba(20,20,15,.16); /* button outline, input */
-    /* The application frame. The folder panel is a SURFACE rather than a margin of the page, so it
-       needs a ground of its own — grey text floating on the document's own white is the thing that
-       made the panel read as a stray column. Warm, one step off --bg, with its own row states: hover
-       and open are separated (Grant Developer's rail gives both the same tint and leans on weight
-       alone, which is a step too quiet once every row is a filename rather than a destination). */
-    --shell:#f6f5ef;         /* the panel's ground */
-    --shell-row:rgba(20,20,15,.05);    /* a row under the pointer */
-    --shell-on:rgba(20,20,15,.095);    /* the open document */
-    --yellow:#ffeb00;        /* THE AGENT — nothing else, and the same hex in both themes */
-    --yellow-ring:rgba(190,172,0,.65);
-    --chip:#fffce0;          /* claude chip tint */
-    --chip-fg:#2b2a20;       /* text ON that tint */
-    --on-yellow:#2b2a20;     /* text on SOLID yellow — dark in both themes, because yellow never moves */
-    --chip-n:#f2f2ee;        /* the monochrome chip: flag, accepted/rejected/resolved, the open count */
-    --chip-n-2:#e4e4dc;      /* its raised sibling: the active tab's count */
-    /* The toast is the one INVERTED surface: ink on light, light on ink. It is the only thing in the
-       tool that flips sides when the theme does. */
-    --toast:#1b1a15;
-    --toast-fg:#faf9f4;
-    --toast-btn:#ffffff;
-    --toast-btn-fg:#141410;
-    --toast-btn-hover:#f0f0ea;
-    --toast-shadow:0 1px 2px rgba(0,0,0,.2), 0 18px 40px -18px rgba(0,0,0,.5);
-    --asset-canvas:#ffffff;  /* an asset's artboard is PAPER, white in both themes (see the frame rule) */
-    /* An anchored span is a WASH, not a rule. #ffeb00 as a 2px underline was the highest-energy thing
-       in a near-monochrome reading column, and a watermark colour (Bear's red, iA's blue) is never a
-       rule under prose. Low alpha, and it follows the dot convention: the agent's spans take the
-       yellow, yours take an ink tint. The underline comes back on hover; see mark.anchor. */
-    --anchor-wash:rgba(255,235,0,.30);
-    --anchor-wash-mine:rgba(20,20,15,.085);
-    --flash-fill:rgba(255,235,0,.32);      /* the jump flash: an anchor, a diagram node */
-    --flash-ring:rgba(255,235,0,.3);
-    --flash-ring-strong:rgba(255,235,0,.55);   /* the card's */
-    --scrim:rgba(20,20,18,.82);      /* the lightbox */
-    --scrim-soft:rgba(20,20,15,.28); /* behind the drawer and the sheet */
-    --shadow:0 1px 2px rgba(20,20,15,.05), 0 10px 30px -20px rgba(20,20,15,.35);
-    --shadow-raise:0 1px 2px rgba(20,20,15,.06);   /* the chosen half of a segmented control */
-    --shadow-panel:rgba(20,20,15,.18);   /* colour only: the drawer and the sheet cast it differently */
-    --shadow-pill:rgba(20,20,15,.4);     /* the same, for the pull-up pill */
-    --ring:0 0 0 3px rgba(20,20,15,.08);   /* focus — ink-tinted, not yellow (yellow is the agent's) */
     /* Release spring for pressable things. Solved from stiffness 500 / damping 30 / mass 0.6, which is
        zeta 0.87 — it overshoots by 0.4%, so the "pop" is the curve's shape rather than a bounce. A real
        bounce on a button you hit fifty times in a review would read as slop. */
@@ -203,128 +158,9 @@
     /* One tracking for every uppercase micro-label in the tool. It ran from .03em to .13em across
        six labels that all do the same job. */
     --track-caps:.06em;
-    color-scheme:light;
-  }
-  /* ---------- the dark palette ----------
-     The same tokens, a second time. iA Writer's rule holds in both directions: never pure black on
-     pure white, never pure white on pure black. The ground is the warm near-black --dark was already
-     (#1b1a15's family) and the ink is a warm light grey, so a page of prose reads at the same weight
-     it does on white. Hairlines invert to white at low alpha, --shell steps one lighter than --bg
-     rather than one darker, and the shadows go darker and deeper because a 5% black shadow says
-     nothing on a dark ground. Two things do NOT move: --yellow, which is the agent's and the same
-     hex everywhere, and --asset-canvas, because an artboard is paper.
-
-     Two selectors, one list. The media query follows the system and is what an untouched install
-     gets; the attribute is a choice the human made and wins in both directions, which is why the
-     media rule excludes an explicit `light`. The values below are emitted twice on purpose and a
-     test asserts the two copies are identical. */
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      --bg:#16150f;
-      --fill:#211f18;
-      --card:#272520;
-      --card-off:#1d1b15;
-      --card-fade:rgba(39,37,32,0);
-      --ink:#e6e4da;
-      --ink-btn:#e6e4da;
-      --ink-btn-hover:#f3f1e7;
-      --on-ink:#16150f;
-      --on-ink-edge:rgba(20,20,15,.2);
-      --on-ink-edge-strong:rgba(20,20,15,.34);
-      --fg:#cdcbc0;
-      --ink-2:#b7b5aa;
-      --ink-3:#a29f95;
-      --muted:#918e83;
-      --faint:#7b786e;
-      --fainter:#6b6860;
-      --dead:#56534a;
-      --line:rgba(255,255,255,.10);
-      --line-2:rgba(255,255,255,.16);
-      --line-strong:rgba(255,255,255,.22);
-      --shell:#1b1a14;
-      --shell-row:rgba(255,255,255,.055);
-      --shell-on:rgba(255,255,255,.10);
-      --yellow:#ffeb00;
-      --yellow-ring:rgba(216,197,28,.75);
-      --chip:#2e2a12;
-      --chip-fg:#efe7bd;
-      --on-yellow:#2b2a20;
-      --chip-n:#27251c;
-      --chip-n-2:#35322a;
-      --toast:#e9e7dd;
-      --toast-fg:#1b1a15;
-      --toast-btn:#16150f;
-      --toast-btn-fg:#f0eee4;
-      --toast-btn-hover:#2a2820;
-      --toast-shadow:0 1px 2px rgba(0,0,0,.3), 0 18px 40px -16px rgba(0,0,0,.75);
-      --asset-canvas:#ffffff;
-      --anchor-wash:rgba(255,235,0,.17);
-      --anchor-wash-mine:rgba(255,255,255,.11);
-      --flash-fill:rgba(255,235,0,.26);
-      --flash-ring:rgba(255,235,0,.26);
-      --flash-ring-strong:rgba(255,235,0,.5);
-      --scrim:rgba(0,0,0,.86);
-      --scrim-soft:rgba(0,0,0,.55);
-      --shadow:0 1px 2px rgba(0,0,0,.45), 0 10px 30px -18px rgba(0,0,0,.9);
-      --shadow-raise:0 1px 2px rgba(0,0,0,.5);
-      --shadow-panel:rgba(0,0,0,.6);
-      --shadow-pill:rgba(0,0,0,.7);
-      --ring:0 0 0 3px rgba(255,255,255,.14);
-      color-scheme:dark;
-    }
-  }
-  :root[data-theme="dark"] {
-    --bg:#16150f;
-    --fill:#211f18;
-    --card:#272520;
-    --card-off:#1d1b15;
-    --card-fade:rgba(39,37,32,0);
-    --ink:#e6e4da;
-    --ink-btn:#e6e4da;
-    --ink-btn-hover:#f3f1e7;
-    --on-ink:#16150f;
-    --on-ink-edge:rgba(20,20,15,.2);
-    --on-ink-edge-strong:rgba(20,20,15,.34);
-    --fg:#cdcbc0;
-    --ink-2:#b7b5aa;
-    --ink-3:#a29f95;
-    --muted:#918e83;
-    --faint:#7b786e;
-    --fainter:#6b6860;
-    --dead:#56534a;
-    --line:rgba(255,255,255,.10);
-    --line-2:rgba(255,255,255,.16);
-    --line-strong:rgba(255,255,255,.22);
-    --shell:#1b1a14;
-    --shell-row:rgba(255,255,255,.055);
-    --shell-on:rgba(255,255,255,.10);
-    --yellow:#ffeb00;
-    --yellow-ring:rgba(216,197,28,.75);
-    --chip:#2e2a12;
-    --chip-fg:#efe7bd;
-    --on-yellow:#2b2a20;
-    --chip-n:#27251c;
-    --chip-n-2:#35322a;
-    --toast:#e9e7dd;
-    --toast-fg:#1b1a15;
-    --toast-btn:#16150f;
-    --toast-btn-fg:#f0eee4;
-    --toast-btn-hover:#2a2820;
-    --toast-shadow:0 1px 2px rgba(0,0,0,.3), 0 18px 40px -16px rgba(0,0,0,.75);
-    --asset-canvas:#ffffff;
-    --anchor-wash:rgba(255,235,0,.17);
-    --anchor-wash-mine:rgba(255,255,255,.11);
-    --flash-fill:rgba(255,235,0,.26);
-    --flash-ring:rgba(255,235,0,.26);
-    --flash-ring-strong:rgba(255,235,0,.5);
-    --scrim:rgba(0,0,0,.86);
-    --scrim-soft:rgba(0,0,0,.55);
-    --shadow:0 1px 2px rgba(0,0,0,.45), 0 10px 30px -18px rgba(0,0,0,.9);
-    --shadow-raise:0 1px 2px rgba(0,0,0,.5);
-    --shadow-panel:rgba(0,0,0,.6);
-    --shadow-pill:rgba(0,0,0,.7);
-    --ring:0 0 0 3px rgba(255,255,255,.14);
-    color-scheme:dark;
+    /* `color-scheme` is not declared here. It moves with the palette, so Themes.apply sets it inline
+       beside the tokens — one place decides which way round the page is, and native controls follow a
+       reader's own dark theme as readily as they follow ink. */
   }
   * { box-sizing: border-box; }
   body { margin:0; font:var(--t-4)/1.6 'Geist', ui-sans-serif, system-ui, sans-serif; background:var(--bg);
@@ -358,12 +194,11 @@
   /* The mark is an <img>, so its `currentColor` cannot see the page's tokens: an SVG used as an
      image paints against its own document, where currentColor is always black. A filter is the only
      hook the page has on an image's pixels, and the mark is one flat colour, so inverting it is
-     exact rather than approximate. brightness trims pure white back to the ink the wordmark uses. */
+     exact rather than approximate. brightness trims pure white back to the ink the wordmark uses.
+     One selector, because `data-theme` now carries the RESOLVED scheme in every case: the stamp writes
+     `light` or `dark` on <html> whichever way the reader got there, so the media-query copy this rule
+     used to need (for an install that had never chosen) has nothing left to cover. */
   .hbrand .mark, .nav-brand .mark { height:20px; width:auto; flex:none; display:block; }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .hbrand .mark,
-    :root:not([data-theme="light"]) .nav-brand .mark { filter:invert(1) brightness(.91); }
-  }
   :root[data-theme="dark"] .hbrand .mark,
   :root[data-theme="dark"] .nav-brand .mark { filter:invert(1) brightness(.91); }
   .hbrand .wm, .nav-brand .wm { color:var(--ink); font:600 var(--t-5) 'Geist', ui-sans-serif, sans-serif; letter-spacing:-.02em; }
@@ -400,6 +235,38 @@
      dispatcher seeing the BUTTON as e.target, never the path inside it. */
   button.iconbtn { padding:7px 6px; line-height:0; }
   button.iconbtn svg { width:16px; height:16px; display:block; pointer-events:none; }
+  /* ---------- the theme menu ----------
+     The folder's sort switcher drawn a second time (#navSort), because it answers the same shape of
+     question: a list where the chosen one is the only one worth reading at rest. Three parts. A row of
+     three icon buttons for the MODE (system, light, dark), which is what the header button used to
+     cycle. The themes themselves, grouped by scheme and each carrying a swatch of its own ground and
+     ink, since a name is not a colour. And one action at the foot.
+     The swatch's two colours are the theme's own tokens, set inline from themes.js — the one place in
+     the tool where a colour on screen is not the ACTIVE palette's, and it has to be, or every swatch in
+     the menu would be the same square. */
+  #themeCtl { position:relative; display:flex; }
+  #themeCtl .menu { position:absolute; top:calc(100% + 6px); right:0; min-width:186px; z-index:30;
+    background:var(--card); border:1px solid var(--line-2); border-radius:var(--r-2); box-shadow:var(--shadow);
+    padding:4px; display:flex; flex-direction:column; gap:1px; max-height:74vh; overflow-y:auto; }
+  #themeCtl .menu[hidden] { display:none; }
+  #themeCtl .menu button { display:flex; align-items:center; gap:9px; width:100%; text-align:left;
+    white-space:nowrap; border:none; background:none; box-shadow:none; padding:6px 9px;
+    border-radius:var(--r-1); color:var(--fg); font:500 var(--t-3) 'Geist', ui-sans-serif, sans-serif; }
+  #themeCtl .menu button:hover { background:var(--fill); }
+  #themeCtl .menu button[aria-checked="true"], #themeCtl .menu button[aria-pressed="true"] {
+    font-weight:600; color:var(--ink); background:var(--fill); }
+  /* The mode row: three icons across, so it reads as one control rather than three menu items. */
+  #themeCtl .mode { display:flex; gap:2px; }
+  #themeCtl .mode button { justify-content:center; padding:6px 0; line-height:0; color:var(--muted); }
+  #themeCtl .mode button svg { width:15px; height:15px; display:block; pointer-events:none; }
+  #themeCtl .mode button[aria-pressed="true"] { color:var(--ink); }
+  #themeCtl .grp { padding:9px 9px 3px; color:var(--faint); text-transform:uppercase;
+    letter-spacing:var(--track-caps); font:500 var(--t-1) 'Geist', ui-sans-serif, sans-serif; }
+  #themeCtl .sw { flex:none; width:16px; height:16px; border-radius:var(--r-1); position:relative;
+    display:block; overflow:hidden; box-shadow:inset 0 0 0 1px var(--line-2); }
+  #themeCtl .sw i { position:absolute; left:3px; right:3px; top:7px; height:2px; border-radius:var(--r-1);
+    display:block; }
+  #themeCtl .sep { height:1px; background:var(--line); margin:4px 2px; flex:none; }
   /* The page-width icon reads the state it sets: its two rules sit where the column's edges do.
      transform-box:fill-box so the scale is about the group's own bounds rather than the SVG origin. */
   #measureToggle .mwb { transform-box:fill-box; transform-origin:center; transition:transform .18s ease; }
@@ -1452,10 +1319,14 @@
     <div id="presence" class="presence"></div>
     <div class="spacer"></div>
     <div id="turn" class="turn"></div>
-    <!-- system → light → dark, and back. The icon and the title carry it; there is no label, the
-         same way the two panel toggles beside it have none. -->
-    <button id="themeToggle" class="ghost iconbtn" onclick="cycleTheme()" title="Theme: system"
-      aria-label="Theme: system"></button>
+    <!-- The way into the themes: the mode (system, light, dark) and which theme wears each scheme. The
+         icon and the title carry it; there is no label, the same way the two panel toggles beside it
+         have none. renderThemeMenu fills the menu. -->
+    <div id="themeCtl">
+      <button id="themeToggle" class="ghost iconbtn" onclick="toggleThemeMenu()" aria-haspopup="menu"
+        aria-expanded="false" title="Theme: system" aria-label="Theme: system"></button>
+      <div class="menu" id="themeMenu" role="menu" hidden></div>
+    </div>
     <!-- The page width. Three measures, cycled, and the icon's two rules move with them: the only
          thing there is to say about this control is what it does to the column, and the column says
          it the moment it moves. Prose only: paintZoom hides it on an asset, which has a zoom. -->
@@ -1692,7 +1563,14 @@ async function boot() {
   loadDir(dirOf(FILE));   // not awaited: the document is what was asked for, the folder is context
   const es = new EventSource('/events');
   es.onmessage = async (e) => {
-    const { rel } = JSON.parse(e.data);
+    const msg = JSON.parse(e.data);
+    // A theme file changed under the themes directory. Re-read them and re-apply, which is what makes
+    // editing a theme in sidecar repaint the tool on save. It carries `rel` too when the file happens
+    // to sit inside the served root, so the document below reloads through exactly the path any other
+    // document does — one event, both jobs.
+    if (msg.event === 'themes') await loadThemes();
+    const rel = msg.rel;
+    if (!rel) return;
     navTouched(rel);       // a sibling moved: the folder's order may have, and a new file may exist
     if (rel !== FILE) return;
     const fresh = await api('GET', '/api/state?path=' + encodeURIComponent(FILE));
@@ -3606,52 +3484,214 @@ const uiStore = {
 };
 
 // ---------- the theme ----------
-// Three states, one button: system, light, dark. `system` is the absence of the attribute, which is
-// what lets the media query in the stylesheet answer — so an untouched install follows the OS and
-// keeps following it when the OS flips mid-session, with no listener here. A choice stamps
-// `data-theme` on <html> and beats the media query in both directions.
+// Two questions, and they were one control until themes arrived. WHICH WAY ROUND the page is, is the
+// mode: system, light or dark, kept in `sc:theme` exactly as it always was, where `system` follows the
+// room. WHICH THEME wears each of the two schemes is `sc:themeLight` and `sc:themeDark`, defaulting to
+// paper and ink, the two palettes sidecar shipped with. So a reader on system who has chosen sepia by
+// day and slate by night gets both, and the room decides which.
 //
-// The stamp itself happens in <head>, before anything paints; this half owns the button, the cycle
-// and the write. Both read the same `sc:theme` key.
-const THEMES = ['system', 'light', 'dark'];
-const THEME_ICON = {
+// The palette itself is public/themes.js: eight built-ins as flat token objects, plus whatever the
+// human has put in the themes directory, which arrives from /api/themes and is re-read whenever that
+// directory changes. Applying one writes its tokens onto <html> as inline custom properties, so nothing
+// in the stylesheet knows a theme exists.
+//
+// The live state is here and storage is a mirror of it, the rule the old cycle learned the hard way:
+// Safari in private mode throws on setItem while getItem keeps answering null, so anything that re-read
+// the store for its next step moved once and then stopped.
+const MODES = ['system', 'light', 'dark'];
+const MODE_ICON = {
   system: '<rect x="2.5" y="4.25" width="15" height="9.5" rx="2"/><path d="M7.25 17h5.5"/><path d="M10 13.75V17"/>',
   light: '<circle cx="10" cy="10" r="3.3"/><path d="M10 2.7v1.7M10 15.6v1.7M2.7 10h1.7M15.6 10h1.7M4.85 4.85 6.05 6.05M13.95 13.95l1.2 1.2M15.15 4.85l-1.2 1.2M6.05 13.95l-1.2 1.2"/>',
   dark: '<path d="M15.9 11.55A6.55 6.55 0 0 1 8.45 4.1a6.55 6.55 0 1 0 7.45 7.45Z"/>',
 };
-//
-// The live theme is `activeTheme`, and storage is a mirror of it. Safari in private mode throws on
-// setItem while getItem keeps answering null, so a cycle that re-read the store for its next step
-// would apply light, read `system` back on the next click, and apply light again forever: dark and
-// the way home to system both unreachable until a reload. The store decides where the cycle starts
-// and nothing after that.
-let activeTheme = readTheme();
-function readTheme() {
-  // The pre-paint stamp has already run and already resolved the same key, so its answer is taken
-  // first; a `system` install carries no attribute and falls through to the store's own default.
-  const stamped = document.documentElement.dataset.theme;
-  if (THEMES.includes(stamped)) return stamped;
-  const t = uiStore.get('theme', 'system');
-  return THEMES.includes(t) ? t : 'system';
+// The pre-paint stamp in <head> already resolved all of this once; boot() is pure and reads the same
+// keys, so running it again here costs nothing and hands back what the page is actually wearing rather
+// than what this file would have guessed. Wrapped because the IDENTIFIER can throw and not only the
+// call: a browser with site data blocked raises on `localStorage` itself.
+const booted = (() => { try { return Themes.boot(document, localStorage); } catch (e) { return { mode: 'system' }; } })();
+let themeMode = booted.mode;
+let themeFor = { light: uiStore.get('themeLight', '') || Themes.DEFAULT.light,
+                 dark: uiStore.get('themeDark', '') || Themes.DEFAULT.dark };
+let userThemes = {};        // id (`user:<filename>`) → { name, scheme, tokens, rel, file }
+
+function activeScheme() { return themeMode === 'system' ? Themes.systemScheme(document) : themeMode; }
+function activeTheme() {
+  const scheme = activeScheme();
+  const id = themeFor[scheme];
+  return Themes.builtin(id, scheme)
+    || (userThemes[id] && userThemes[id].scheme === scheme ? userThemes[id] : null)
+    || Themes.base(scheme);
 }
-function currentTheme() { return activeTheme; }
-function applyTheme(t) {
-  if (t === 'system') document.documentElement.removeAttribute('data-theme');
-  else document.documentElement.setAttribute('data-theme', t);
-  paintTheme(t);
+// Put the current choice on the page.
+function applyTheme() {
+  const theme = activeTheme();
+  Themes.apply(document.documentElement, theme);
+  paintTheme();
+  if (!$('themeMenu').hidden) renderThemeMenu();
+  return theme;
 }
-function setTheme(t) { activeTheme = t; uiStore.set('theme', t); applyTheme(t); }
-function cycleTheme() { setTheme(THEMES[(THEMES.indexOf(activeTheme) + 1) % THEMES.length]); }
-function paintTheme(t) {
+// What lets a USER theme survive a reload without a frame of paper: the pre-paint stamp cannot read a
+// file, so the page leaves the theme it chose where the stamp will look, and the stamp re-validates it
+// through the same rules the server runs. Written per SCHEME rather than for what is on screen, because
+// a dark theme chosen in daylight has to be there when the room turns.
+function cacheTheme(scheme) {
+  const id = themeFor[scheme];
+  const t = userThemes[id];
+  if (t && t.scheme === scheme) uiStore.set('themeCache:' + scheme, JSON.stringify({ id: id, theme: Themes.expand(t, t.name) }));
+}
+function setThemeMode(m) {
+  themeMode = MODES.includes(m) ? m : 'system';
+  uiStore.set('theme', themeMode);
+  applyTheme();
+}
+function setTheme(id) {
+  const t = Themes.BUILTIN[id] || userThemes[id];
+  if (!t) return;
+  themeFor[t.scheme] = id;
+  uiStore.set(t.scheme === 'dark' ? 'themeDark' : 'themeLight', id);
+  cacheTheme(t.scheme);
+  applyTheme();
+}
+function paintTheme() {
   const btn = $('themeToggle');
   if (!btn) return;
   btn.innerHTML = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" '
-    + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + THEME_ICON[t] + '</svg>';
-  const label = 'Theme: ' + t;
+    + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + MODE_ICON[themeMode] + '</svg>';
+  // Both halves of the answer, because either alone is a half-truth: `system · ink` says why the page
+  // is dark AND what it is wearing, where `system` said neither.
+  const label = 'Theme: ' + (themeMode === 'system' ? 'system · ' + activeTheme().name : activeTheme().name);
   btn.title = label;
   btn.setAttribute('aria-label', label);
 }
-applyTheme(currentTheme());
+// `system` has to keep following the room. The stylesheet's media query used to do that with nothing
+// listening; a theme is applied by script now, so the page listens itself and re-applies on a flip.
+try {
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    if (themeMode === 'system') applyTheme();
+  });
+} catch (e) {}
+
+// A swatch is the theme's own ground with a bar of its own ink across it, which is the only way a menu
+// of names says anything. Both values came through Themes.validate (a built-in, or a file the server
+// checked), which is why they can be written into a style attribute at all.
+function themeSwatch(t) {
+  const tk = Themes.resolve(t);
+  const box = document.createElement('span');
+  box.className = 'sw';
+  box.style.setProperty('background', tk['--bg']);
+  const bar = document.createElement('i');
+  bar.style.setProperty('background', tk['--ink']);
+  box.appendChild(bar);
+  return box;
+}
+function renderThemeMenu() {
+  const m = $('themeMenu');
+  m.innerHTML = '';
+  const row = document.createElement('div');
+  row.className = 'mode';
+  for (const mode of MODES) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.dataset.mode = mode;
+    b.setAttribute('aria-pressed', mode === themeMode ? 'true' : 'false');
+    b.title = mode;
+    b.setAttribute('aria-label', mode);
+    b.innerHTML = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" '
+      + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + MODE_ICON[mode] + '</svg>';
+    row.appendChild(b);
+  }
+  m.appendChild(row);
+  for (const s of Themes.SCHEMES) {
+    const head = document.createElement('div');
+    head.className = 'grp';
+    head.textContent = s;
+    m.appendChild(head);
+    const ids = Themes.ORDER.filter(id => Themes.BUILTIN[id].scheme === s)
+      .concat(Object.keys(userThemes).filter(id => userThemes[id].scheme === s).sort());
+    for (const id of ids) {
+      const t = Themes.BUILTIN[id] || userThemes[id];
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.setAttribute('role', 'menuitemradio');
+      b.dataset.theme = id;
+      // Checked is "this is the theme for its own scheme", which is true whether or not that scheme is
+      // the one on screen: choosing a dark theme in daylight is choosing tonight's.
+      b.setAttribute('aria-checked', themeFor[s] === id ? 'true' : 'false');
+      b.appendChild(themeSwatch(t));
+      b.appendChild(document.createTextNode(t.name));
+      m.appendChild(b);
+    }
+  }
+  const sep = document.createElement('div');
+  sep.className = 'sep';
+  m.appendChild(sep);
+  const cz = document.createElement('button');
+  cz.type = 'button';
+  cz.setAttribute('role', 'menuitem');
+  cz.dataset.act = 'customize';
+  cz.textContent = 'customize';
+  cz.title = 'Copy ' + activeTheme().name + ' to a theme file and open it';
+  m.appendChild(cz);
+}
+function toggleThemeMenu(force) {
+  const m = $('themeMenu');
+  const open = force === undefined ? m.hidden : !!force;
+  if (open) renderThemeMenu();
+  m.hidden = !open;
+  $('themeToggle').setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+$('themeMenu').addEventListener('click', (e) => {
+  const b = e.target.closest && e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.mode) { setThemeMode(b.dataset.mode); return; }
+  if (b.dataset.theme) { setTheme(b.dataset.theme); return; }
+  if (b.dataset.act === 'customize') { toggleThemeMenu(false); customizeTheme(); }
+});
+// Anything outside the control shuts it, the same way the folder's sort menu closes. The button's own
+// handler runs first, so opening it does not immediately close it on the way back up.
+document.addEventListener('click', (e) => {
+  if (!$('themeMenu').hidden && !(e.target.closest && e.target.closest('#themeCtl'))) toggleThemeMenu(false);
+});
+paintTheme();
+
+// The themes on disk. Every file in the directory is validated by the server against the same rules
+// this page would run, so what arrives here is already a theme; a file that is not one comes back in
+// `errors` and is reported rather than swallowed, because a human editing one is a human who will get
+// it wrong and needs to be told where.
+async function loadThemes() {
+  let d;
+  try { d = await api('GET', '/api/themes'); } catch (e) { return; }
+  const next = {};
+  for (const t of d.themes || []) next[t.id] = t;
+  userThemes = next;
+  // A file that was edited on disk is a new palette for the same id, so the cache the stamp reads has to
+  // move with it, or the next load paints the version before the edit for one frame.
+  for (const s of Themes.SCHEMES) cacheTheme(s);
+  applyTheme();
+  if ((d.errors || []).length) {
+    const e = d.errors[0];
+    showBanner(e.file + ': ' + e.error, [{ label: 'ok', fn: () => {} }]);
+  }
+}
+// "customize" is the whole feature in one click: the theme on screen, written out as a file with every
+// token spelled out, and then opened for editing. Saving it reapplies the palette live, because the
+// directory is watched and the change arrives on the same SSE stream a document edit does.
+async function customizeTheme() {
+  const t = activeTheme();
+  let r;
+  // Named for what it is, so the menu does not end up showing two themes called sepia — and not renamed
+  // twice, so customizing a custom theme is not 'sepia custom custom'.
+  const name = /(^|\s)custom$/.test(t.name) ? t.name : t.name + ' custom';
+  try { r = await api('POST', '/api/themes', Themes.expand(t, name)); }
+  catch (e) { showBanner('Could not write the theme. ' + e.message, [{ label: 'ok', fn: () => {} }]); return; }
+  await loadThemes();
+  setTheme(r.id);
+  // Under the served root it is a document like any other and opens in place. Outside it, sidecar
+  // cannot reach it — say where it is instead of pretending.
+  if (r.rel) openDoc(r.rel);
+  else showBanner(r.file, [{ label: 'ok', fn: () => {} }]);
+}
+loadThemes();
 // ---------- reading mode ----------
 // One toggle, and everything that is not the document goes: both panels, the rail's cards, the marks
 // in the prose, the rest of the header. The document stays contenteditable, because catching a typo
