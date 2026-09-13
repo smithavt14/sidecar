@@ -4946,7 +4946,8 @@ test('every colour token has a dark value, and the two that must not move do not
   // The layout tokens carry no colour and are the same in every theme, so they are the exceptions.
   // The type scale (--t-*), the radius scale (--r-*) and the caps tracking join them for the same
   // reason --doc-space-* and --measure are already here: a size is a size in both themes.
-  const LAYOUT = new Set(['--spring-press', '--rail-w', '--nav-w', '--nav-track', '--track-caps']);
+  const LAYOUT = new Set(['--spring-press', '--rail-w', '--nav-w', '--nav-track', '--track-caps',
+    '--prose-size', '--prose-floor']);
   const isLayout = (k) => LAYOUT.has(k) || k.startsWith('--doc-space-') || k === '--measure'
     || /^--[tr]-/.test(k);
   for (const k of Object.keys(LIGHT)) {
@@ -5106,7 +5107,6 @@ test('every chrome font-size comes from the type scale', () => {
   // headings) against a measure this chrome has nothing to do with. Two scales, one per surface.
   // Everything else names a step. Two literals survive and both are here with their reason.
   const EXCEPT = {
-    'font-size:0': 'the folder strip hides the badge NUMBER on a 7px dot; it is not a size',
     'font-size:.82em': "the docs link's arrow is sized to the word it follows, whatever that word is",
   };
   const stray = [];
@@ -5187,8 +5187,8 @@ test('one tracking for every uppercase micro-label', () => {
   assert.match(LIGHT['--track-caps'], /^\.\d+em$/, 'the token is there and is a tracking');
   assert.ok(STYLE.split('letter-spacing:var(--track-caps)').length - 1 >= 5,
     'and the labels that were tracked by hand read it instead');
-  // A single uppercase letter (the icon strip's initial) is tracked by nothing; a label that DOES
-  // set a tracking sets the token, or the explicit 0 that resets it on a count inside one.
+  // A label that sets a tracking sets the token, or the explicit 0 that resets it on a count inside
+  // one.
   for (const { sel, body } of RULES) {
     if (!/text-transform:\s*uppercase/.test(body)) continue;
     for (const m of body.matchAll(/letter-spacing:\s*([^;]+)/g)) {
@@ -5771,4 +5771,232 @@ test('entering reading mode closes the comment composer as well as the toolbar',
   page.calls.length = 0;
   page.setReading(false);
   assert.ok(!page.calls.includes('hidePopover'), 'and not on the way out, where there is nothing to close');
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+   THE COLLAPSED FOLDER IS A BARE EDGE
+   It used to be a 48px icon strip: one initial per document, each wearing its
+   own unread dot. Minimizing the folder is a request for the folder to go, so
+   what is left is the way back out and, when something is waiting, the count.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+test('the collapsed folder draws the handle, the count, and nothing else', () => {
+  assert.match(STYLE, /body\.nav-collapsed \{ --nav-track:34px; \}/,
+    'an edge, not a second document list');
+  assert.match(STYLE, /body\.nav-collapsed \.nav-list, body\.nav-collapsed #navInbox,\n\s*body\.nav-collapsed \.nav-empty \{ display:none; \}/,
+    'the list, the inbox and the empty state all go');
+  assert.match(STYLE, /body\.nav-collapsed #navExpand \{ display:flex; margin-left:0; \}/,
+    'the way back out stays');
+  assert.match(STYLE, /body\.nav-collapsed #nav:hover #navExpand \{ color:var\(--ink\); \}/,
+    'hovering the edge inks the handle');
+  // Every rule that drew a document on the strip is gone, not merely overridden.
+  for (const dead of ['body.nav-collapsed .nav-list a', 'body.nav-collapsed .nav-list a .ini',
+                      'body.nav-collapsed .nav-list a .meta']) {
+    assert.ok(!STYLE.includes(dead + ' {'), dead + ' has nothing left to style');
+  }
+  assert.ok(!STYLE.includes('.ini'), 'the initial is gone from the stylesheet');
+  assert.ok(!PAGE.includes('class="ini"'), 'and the row no longer renders one');
+});
+
+test('the count is the whole control, and a zero takes it with it', () => {
+  // A pill with no number in it is a control that does nothing, so the button goes rather than the
+  // number. renderNav owns that, because it is the only place the folder's total is known.
+  assert.match(PAGE, /\$\('navStripInbox'\)\.hidden = !waiting;/,
+    'renderNav hides the control itself at zero');
+  assert.match(STYLE, /body\.nav-collapsed #navStripInbox\[hidden\] \{ display:none; \}/,
+    'and the collapsed block honours the attribute rather than out-specifying it');
+  assert.match(STYLE, /body\.nav-collapsed #navStripInbox svg \{ display:none; \}/,
+    'the inbox glyph goes: the number is the thing');
+  const pill = STYLE.match(/body\.nav-collapsed #navStripInbox \.n \{([\s\S]*?)\}/);
+  assert.ok(pill, 'the pill rule is still findable');
+  assert.match(pill[1], /background:var\(--yellow\)/, 'yellow, because it is the agent holding something out');
+  assert.match(PAGE, /id="navStripInbox"[\s\S]{0,200}onclick="openInbox\(\)"/,
+    'and clicking it still opens the panel on the inbox');
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+   THE DOCUMENT'S TYPE SIZE
+   Four steps, stamped before the first paint, and one number every other
+   number in the document is derived from: the vertical scale, the headings
+   and the measure all follow it, so one control moves the whole page.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+// The block lifted out and run with its collaborators handed in, the same way the theme's is.
+const PROSE_MODULE = (() => {
+  const from = PAGE.indexOf('// ---------- the document\'s type size ----------');
+  const to = PAGE.indexOf('const railCollapsed =');
+  assert.ok(from > -1 && to > from, 'the type-size block is still one block in the page');
+  return PAGE.slice(from, to);
+})();
+
+function prosePage({ backing = {}, stamped } = {}) {
+  const doc = new JSDOM('<!doctype html><html><body></body></html>').window.document;
+  if (stamped) doc.documentElement.dataset.prose = stamped;
+  const calls = [], bound = [];
+  let asset = false;
+  const page = new Function('document', 'uiStore', 'relayoutDoc', 'isAsset', 'window',
+    PROSE_MODULE + '\nreturn { PROSE_SIZES, PROSE_DEFAULT, proseSize, applyProse, stepProse, cycleProse };')(
+    doc, storeOver(backing), () => calls.push('relayoutDoc'), () => asset,
+    { addEventListener: (type, fn, opts) => bound.push({ type, fn, opts }) });
+  page.doc = doc;
+  page.calls = calls;
+  page.backing = backing;
+  page.bound = bound;
+  page.applied = () => doc.documentElement.style.getPropertyValue('--prose-size');
+  page.setAsset = (v) => { asset = v; };
+  page.press = (key, mods = { metaKey: true }) => {
+    let prevented = false;
+    bound[0].fn({ key, altKey: false, ...mods, preventDefault: () => { prevented = true; } });
+    return prevented;
+  };
+  return page;
+}
+
+test('four steps, and the head and the page name the same four', () => {
+  const page = prosePage();
+  assert.deepEqual(page.PROSE_SIZES, ['15', '16.5', '18', '20'], 'four, a ratio apart');
+  assert.equal(page.PROSE_DEFAULT, '16.5', 'and the reading column\'s own size is the default');
+  // The stamp runs before this code exists and so carries its own copy. A drift between the two is a
+  // reader who set 20px watching the page reflow on every load.
+  const head = STAMP.match(/var S = \[([^\]]+)\]/);
+  assert.ok(head, 'the stamp still declares its own list');
+  assert.deepEqual(head[1].split(',').map(s => s.trim().replace(/'/g, '')), page.PROSE_SIZES,
+    'the pre-paint list and the cycled list are identical');
+  assert.match(STAMP, /if \(S\.indexOf\(p\) === -1\) p = '16\.5';/, 'and they default to the same step');
+});
+
+test('the stamp honours a stored step and ignores anything that is not one', () => {
+  const run = new Function('localStorage', 'document', STAMP);
+  const stamp = (stored) => {
+    const doc = new JSDOM('<!doctype html><html><body></body></html>').window.document;
+    run({ getItem: (k) => (k === 'sc:proseSize' ? stored : null) }, doc);
+    return doc.documentElement;
+  };
+  assert.equal(stamp('20').dataset.prose, '20', 'a chosen step is stamped');
+  assert.equal(stamp('20').style.getPropertyValue('--prose-size'), '20px',
+    'as the variable #doc reads, so the first frame is already the right size');
+  assert.equal(stamp(null).dataset.prose, '16.5', 'nothing stored reads as the default');
+  assert.equal(stamp('17').dataset.prose, '16.5', 'a size that is not a step is not honoured');
+  assert.equal(stamp('99px; }').dataset.prose, '16.5', 'and nothing junk is echoed into the style attribute');
+});
+
+test('the stamp runs in <head> and reads the same key the page writes', () => {
+  assert.ok(PAGE.indexOf("localStorage.getItem('sc:proseSize')") < PAGE.indexOf('<style>'),
+    'ahead of the stylesheet, so the document is never drawn at the wrong size first');
+  const page = prosePage();
+  page.applyProse('18');
+  assert.deepEqual(page.backing, { 'sc:proseSize': '18' }, 'one key, prefixed like every other preference');
+  assert.doesNotMatch(PROSE_MODULE, /localStorage/, 'nothing in the block reaches storage around uiStore');
+});
+
+test('the button wraps through the four and the keys stop at the ends', () => {
+  const page = prosePage();
+  assert.equal(page.proseSize(), '16.5', 'an install that has never touched it rests at the default');
+  page.cycleProse(); assert.equal(page.proseSize(), '18');
+  page.cycleProse(); assert.equal(page.proseSize(), '20');
+  page.cycleProse(); assert.equal(page.proseSize(), '15', 'the button wraps: it is the only step it has');
+  // The keys do not wrap. ⌘- four times is a request to be smaller, not a request for 20px.
+  page.applyProse('15');
+  page.stepProse(-1, false); assert.equal(page.proseSize(), '15', 'and holds at the small end');
+  page.applyProse('20');
+  page.stepProse(1, false); assert.equal(page.proseSize(), '20', 'and at the large end');
+});
+
+test('a stamped size is where the cycle starts, and junk in the store is not', () => {
+  assert.equal(prosePage({ stamped: '20' }).proseSize(), '20', 'the cycle reads the attribute the stamp left');
+  assert.equal(prosePage({ stamped: '13' }).proseSize(), '16.5', 'an attribute naming no step is the default');
+  const page = prosePage();
+  page.applyProse('nonsense');
+  assert.equal(page.proseSize(), '16.5', 'and applying junk lands on the default rather than on nothing');
+  assert.equal(page.applied(), '16.5px');
+});
+
+test('every size change re-docks the cards', () => {
+  // Every line in the document moved, so every card is level with the wrong pixel until it re-measures.
+  // The same call the measure's cycle and the rail's drag make.
+  const page = prosePage();
+  page.cycleProse();
+  page.stepProse(-1, false);
+  assert.deepEqual(page.calls, ['relayoutDoc', 'relayoutDoc'], 'once per change, no more and no fewer');
+});
+
+test('the keys are taken in capture, and taken from the browser', () => {
+  const page = prosePage();
+  assert.equal(page.bound.length, 1, 'one listener');
+  assert.equal(page.bound[0].type, 'keydown');
+  assert.equal(page.bound[0].opts, true,
+    'capture: the document is contenteditable and the keys have to be taken before it sees them');
+  assert.ok(page.press('='), 'the browser zoom does not also fire');
+  assert.equal(page.proseSize(), '18');
+  assert.ok(page.press('+'), 'the shifted key means the same thing');
+  assert.equal(page.proseSize(), '20');
+  assert.ok(page.press('-')); assert.equal(page.proseSize(), '18');
+  assert.ok(page.press('0')); assert.equal(page.proseSize(), '16.5', '⌘0 is back to the default');
+  assert.ok(!page.press('=', {}), 'a bare = is typing and is left alone');
+  assert.ok(!page.press('=', { metaKey: true, altKey: true }), 'and ⌥⌘= is somebody else\'s shortcut');
+  page.setAsset(true);
+  assert.ok(!page.press('='), 'an asset is scaled rather than set, so the keys do nothing there');
+  assert.equal(page.proseSize(), '16.5');
+});
+
+test('the control sits with the theme and the width, and carries no label', () => {
+  assert.match(PAGE, /id="proseToggle"[\s\S]{0,240}onclick="cycleProse\(\)"/);
+  const btn = PAGE.match(/<button id="proseToggle"[\s\S]*?<\/button>/)[0];
+  assert.ok(!/>[A-Za-z]/.test(btn.replace(/<svg[\s\S]*?<\/svg>/, '')),
+    'an icon and a title, like every other button in that group');
+  assert.match(btn, /title="Text size"/);
+  assert.ok(PAGE.indexOf('id="measureToggle"') < PAGE.indexOf('id="proseToggle"')
+    && PAGE.indexOf('id="proseToggle"') < PAGE.indexOf('id="typewriterToggle"'),
+    'between the width and the typewriter, which is where the reading controls live');
+  assert.match(PAGE, /const ps = \$\('proseToggle'\); if \(ps\) ps\.hidden = isAsset\(\);/,
+    'and it goes with the measure on an asset');
+});
+
+test('one number, and the whole document is a multiple of it', () => {
+  // The point of the feature: the body size moves and the vertical rhythm, the headings and the column
+  // width move with it. A scale that only grew the body copy would be a document with the wrong air.
+  const doc = STYLE.match(/\n {2}#doc \{([\s\S]*?)\n {2}\}/);
+  assert.ok(doc, 'the #doc rule is still findable');
+  assert.match(doc[1], /--doc-size:max\(var\(--prose-size\), var\(--prose-floor\)\)/,
+    'the chosen step, floored by the breakpoint');
+  assert.match(doc[1], /font-size:var\(--doc-size\)/);
+  assert.match(doc[1], /max-width:calc\(var\(--measure\) \+ 88px\)/,
+    'the measure is in em and resolves against that size, so the line holds its characters');
+  // Every step of the vertical scale is the body line times something, and at the default it lands on
+  // the numbers the reading column was tuned at.
+  const WANT = { 0: [0.4, 6.6], 1: [0.8, 13.2], 2: [1.6, 26.4], 3: [2.4, 39.6], 4: [3.2, 52.8] };
+  for (const [n, [mult, px]] of Object.entries(WANT)) {
+    const m = doc[1].match(new RegExp(`--doc-space-${n}:calc\\(var\\(--doc-size\\) \\* ([\\d.]+)\\)`));
+    assert.ok(m, `--doc-space-${n} is derived from the body size`);
+    assert.equal(Number(m[1]), mult);
+    assert.equal(Math.round(mult * 16.5 * 10) / 10, px, `and at 16.5 it is still ${px}px`);
+  }
+  assert.ok(!/--doc-space-\d:\d/.test(STYLE), 'nothing is left on a fixed pixel');
+});
+
+test('the headings are ratios of the body, at both breakpoints', () => {
+  const size = (sel, where) => {
+    const m = where.match(new RegExp(`${sel.replace('#', '#')} \\{ font-size:([\\d.]+)em`));
+    assert.ok(m, `${sel} is sized as a ratio, not a pixel`);
+    return Number(m[1]);
+  };
+  // 28 / 21 / 17 over 16.5 is what the reading column set, and the ratios are those numbers.
+  for (const [sel, px] of [['#doc h1', 28], ['#doc h2', 21], ['#doc h3', 17]]) {
+    assert.equal(Math.round(size(sel, STYLE) * 16.5), px, `${sel} still draws ${px}px at the default step`);
+  }
+  // The phone keeps tighter ratios of its own, over the 16px floor it reads there.
+  for (const [sel, px] of [['#doc h1', 25], ['#doc h2', 19], ['#doc h3', 16.5]]) {
+    assert.equal(Math.round(size(sel, MOBILE) * 16 * 10) / 10, px, `${sel} draws ${px}px on a phone`);
+  }
+});
+
+test('the phone floors the step at 16, because #doc is editable', () => {
+  // iOS Safari zooms into an editable under 16px and never zooms back out. The floor is a token in the
+  // stylesheet rather than a clamp in the stamp: an inline style beats every media query, and a window
+  // dragged across 780px has to re-clamp with nothing listening.
+  assert.equal(LIGHT['--prose-floor'], '0px', 'no floor on a desktop, where 15px is a real choice');
+  assert.match(MOBILE, /:root \{ --prose-floor:16px; \}/, 'and 16px below the breakpoint');
+  assert.doesNotMatch(STAMP, /prose[\s\S]{0,400}matchMedia/, 'the stamp does not try to do it itself');
+  assert.ok(!MOBILE_RULES.some(r => r.sel === '#doc' && /font-size:/.test(r.body)),
+    'the mobile #doc rule sets no size of its own: the floor carries it');
 });
