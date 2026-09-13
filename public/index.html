@@ -2517,9 +2517,11 @@ function toggleFmtMenu(force) {
 // and the way OUT of a heading. Only simple text blocks convert; lists/tables/quotes/code are left alone.
 function setBlockFormat(tag) {
   restoreSelection();                       // bring back the pre-toolbar selection so we know the block
-  const b = caretBlock(); if (!b) { hideTool(); return; }
-  const inner = b.firstElementChild;
-  if (!inner || !/^(P|H[1-6])$/.test(inner.nodeName)) { hideTool(); return; }
+  const b = caretBlock(); if (!b || b.dataset.atomic) { hideTool(); return; }
+  // The line the selection is on, not the block's first: Enter splits inside the wrapper, so a block
+  // holds several lines and the toolbar has to act on the one that was selected (same as tryBlockRule).
+  const inner = caretInner(b) || b.firstElementChild;
+  if (!inner || !/^(P|DIV|H[1-6])$/.test(inner.nodeName)) { hideTool(); return; }
   if (inner.nodeName.toLowerCase() === tag) { hideTool(); return; }   // already that format
   const el = document.createElement(tag);
   while (inner.firstChild) el.appendChild(inner.firstChild);          // move the exact nodes (keeps inline marks)

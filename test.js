@@ -6204,3 +6204,36 @@ test('the converted line serializes to the marker it was typed from', () => {
   assert.equal(pageTd().turndown(page.block(0).innerHTML),
     'Everything else is second order.\n\n## Hello!');
 });
+
+// The block-format toolbar (the way OUT of a heading) has the same shape as type-to-format: it must
+// act on the line the selection is on, not the block's first line. Codex's repro on PR 9: `First`,
+// Enter, `## Second`, select Second, choose text: the H2 stayed; choosing H1 reformatted `First`.
+test('the block-format toolbar reformats the selected line, not the first line of the block', () => {
+  const m = PAGE.match(/(function setBlockFormat\(tag\) \{[\s\S]*?\n\})/);
+  assert.ok(m, 'setBlockFormat is still one function in the page');
+  const page = rulesPage('<div class="block"><p>First</p></div>');
+  const { doc } = page;
+  let dirty = false, saves = 0, hidden = 0;
+  const setBlockFormat = new Function('document', 'getSelection', 'caretBlock', 'caretInner',
+    'restoreSelection', 'hideTool', 'setStatus', 'scheduleSave',
+    'let dirty = false;\n' + m[1] + '\nreturn setBlockFormat;')(
+    doc, page.sel, page.caretBlock, page.caretInner, () => {}, () => { hidden++; }, () => {}, () => { saves++; });
+  page.caretToEndOf(doc.querySelector('p'));
+  page.pressEnter();
+  page.type('## Second');
+  const block = page.block(0);
+  assert.equal(block.children[1].nodeName, 'H2', 'type-to-format made the second line an h2');
+  // select the second line and choose "text"
+  const r = doc.createRange(); r.selectNodeContents(block.children[1]);
+  const s = page.sel(); s.removeAllRanges(); s.addRange(r);
+  setBlockFormat('p');
+  assert.equal(block.children[0].outerHTML, '<p>First</p>', 'the first line is untouched');
+  assert.equal(block.children[1].outerHTML, '<p>Second</p>', 'the selected line became a paragraph');
+  // and the other way: select it again, choose h1
+  const r2 = doc.createRange(); r2.selectNodeContents(block.children[1]);
+  s.removeAllRanges(); s.addRange(r2);
+  setBlockFormat('h1');
+  assert.equal(block.children[0].outerHTML, '<p>First</p>', 'still untouched');
+  assert.equal(block.children[1].outerHTML, '<h1>Second</h1>', 'the selected line became an h1');
+  assert.equal(hidden, 2, 'the toolbar closed each time'); assert.equal(saves, 2, 'and a save was scheduled');
+});
