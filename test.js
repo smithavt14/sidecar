@@ -16,7 +16,14 @@ const sha_of = (s) => crypto.createHash('sha1').update(s).digest('hex').slice(0,
 
 const PORT = 4991;
 const BASE = `http://127.0.0.1:${PORT}`;
-let dir, proc;
+let dir, proc, xdgHome;
+
+// Every server this file spawns inherits process.env, and one booted against a root with no `.sidecar`
+// resolves its themes directory to $XDG_CONFIG_HOME — creating it, because the watcher needs something
+// to watch. Pointed at a real home that is somebody's actual config directory, so the suite gets its
+// own and the children inherit that instead. Set before any of them starts.
+xdgHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-xdg-suite-'));
+process.env.XDG_CONFIG_HOME = xdgHome;
 
 const DOC = `# Title
 
@@ -88,7 +95,11 @@ before(async () => {
     setTimeout(() => rej(new Error('server never became ready')), 8000);
   });
 });
-after(() => { proc.kill(); fs.rmSync(dir, { recursive: true, force: true }); });
+after(() => {
+  proc.kill();
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(xdgHome, { recursive: true, force: true });
+});
 
 test('state returns markdown, hash, empty review', async () => {
   const s = await state();
