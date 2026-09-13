@@ -5,7 +5,7 @@ For *driving* sidecar as an agent (reviewing a document with a human), see
 
 ## Shape
 
-No build step. Twenty files carry the whole tool:
+No build step. Twenty-one files carry the whole tool:
 
 | File | What it is |
 |---|---|
@@ -25,6 +25,7 @@ No build step. Twenty files carry the whole tool:
 | `public/turn.js` | Whose turn is it: the panel's badges and the inbox. Pure review in, counts + items out; `server.js` requires it too. |
 | `public/anchor.js` | The ONE content-anchor matcher, loaded by both the browser and Node. |
 | `public/stability.js` | What the rail shows while the document is rewritten under it: freeze, last known position, orphan grace. Pure; the clock is passed in. |
+| `public/focus.js` | Where the page has to sit for the caret's line to rest at 45% of the window. Pure numbers in/out; the clamp and the deadband. |
 | `public/serialize.js` | The tight-diff serialize/reindex round-trip, shared with the Node tests. |
 | `public/flow.js` | ```flow fences → SVG. Pure string in/out; no DOM, no dependency. |
 | `public/assetframe.js` | An asset's HTML → the sandboxed frame's srcdoc: the sanitize profile, the `/assets` rewriting, the picker inlining. |
@@ -273,8 +274,9 @@ hover title in the UI.
 - Comments explain *why*, especially where the code looks odd — most of them record a real incident.
   Keep that when you change the surrounding code; delete them when the reason stops being true.
 - Layout preferences (each panel's width, whether it is collapsed, whether the review rail's width was
-  set by hand rather than filled, an asset's zoom, the directory panel's sort one key per folder, and
-  the theme) persist in `localStorage` under an `sc:` prefix, through the wrapped `uiStore`. Safari in private mode throws
+  set by hand rather than filled, an asset's zoom, the directory panel's sort one key per folder,
+  typewriter scrolling, and the theme) persist in `localStorage` under an `sc:` prefix, through the
+  wrapped `uiStore`. Safari in private mode throws
   on `setItem`, and nothing about a preference is worth an exception on the path that renders the
   review. Document and review state never go there; those are files.
 - The shell is the panel fixed to the window, the document inset past it, and the review rail taking
@@ -312,6 +314,61 @@ hover title in the UI.
   asset frame's sandbox flag set being exactly `allow-scripts` (asserted against the whole served
   page, which is why no comment in `public/index.html` spells the same-origin flag), and the
   assembled srcdoc carrying no script but the picker.
+
+## Two axes of focus, two controls
+
+Every writing app that takes reading seriously separates the same two questions, and sidecar answers
+them with two independent toggles rather than one "focus mode" that does both.
+
+**Where does the active line sit** is typewriter scrolling (`sc:typewriter`, off by default). While the
+document holds the caret, the page scrolls so the caret's LINE centres at 45% of the window. The
+arithmetic is `public/focus.js` and nothing else: the page measures a caret rect, the window, the
+scroll position and how far the document can scroll, and the module returns the scroll position or
+`null`. Two things live there because both are easy to get wrong inline. The **clamp**, since a caret
+in the first paragraph cannot sit at 45% of anything (`#doc`'s 40vh bottom padding is what gives the
+last line the room to). And the **deadband**, since a two-pixel correction is invisible and is also a
+scroll animation, so every arrow key inside one line would restart one.
+
+45% rather than the middle follows iA Writer and Ulysses: the eye wants the next few lines under the
+sentence being written, and the exact centre puts as much dead space below it as above.
+
+The caret is read as `focusNode`/`focusOffset` rather than by collapsing `getRangeAt(0)`. A Range is
+normalized to DOCUMENT ORDER, so collapsing one to its end hands back the anchor of a backward
+selection, and Shift+Up scrolled toward the sentence being left behind.
+
+`body.typewriter` puts 58vh under the document while the mode is on. 45% of the window means 55vh of
+space below the caret, `#doc` rests at 40vh (42vh on a phone), and the clamp quietly stopped the last
+line around 58% of the window: the mode's own promise, unreachable in the last paragraph.
+
+Three gates decide when to ask: the caret actually moved (`selectionchange` fires in bursts and on
+things that are not caret moves), the document has focus (typing into a reply box in the rail is not
+writing in the document, and re-centring the page under it drags the box away), and nothing has
+suspended it. **A wheel or a touch drag suspends re-centring until the caret next moves.** The suspend
+hangs off the input devices rather than off the `scroll` event, because `scrollTo` fires `scroll` and
+would immediately suspend the thing that just scrolled.
+
+It rides on the ordinary page scroll, which is the same surface `dockCards` lives on: a card is placed
+from its mark's rect relative to the rail's, and a scroll moves both, so re-centring moves neither.
+
+**What else is on screen** is reading mode: both panels, the rail, the marks in the prose and the rest
+of the header go, and the column centres in the window. Escape or the same toggle comes back out
+(⌘⇧F either way). The document stays `contenteditable`, because leaving the mode to fix a typo is what
+stops a reading mode being used; what goes is the invitation, so `showTool()` refuses to raise the
+selection toolbar while reading, the composer closes on the way in, and tapping an anchor opens no card.
+
+**An unpainted mark must not be an island.** A `mark.anchor` is `contenteditable="false"` everywhere
+else, which is what makes it a clean tap target for its card. Invisible and untappable it would be an
+anchored sentence the caret could not enter, so `syncMarkEditing()` drops the attribute while reading
+and puts it back on the way out. It runs from both `setReading` and the tail of `markAnchors`, since
+marks are rebuilt on every render.
+
+Two things about how it is built. **Both tracks collapse to zero rather than being removed**: `--nav-track`
+and `--rail-w` already drive the body's inset, the grid's second column, the header's right margin and
+both grips, so setting the two numbers moves all of it, and `main` can interpolate a width where it
+could not interpolate a missing column. And **nothing is persisted**, which is the difference between
+this and every other preference in the tool: reading is what you are doing for the next ten minutes,
+while the theme and the page width are how you have set the tool up. A reading mode that survived a
+reload would open a document to a page with no folder, no rail and no explanation.
 
 ## Two themes, one set of names
 
