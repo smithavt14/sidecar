@@ -4807,3 +4807,206 @@ test('the timeout exit says it is a timeout rather than a failure', () => {
   assert.match(r.stdout, /DONE: false/);
   fs.rmSync(d, { recursive: true, force: true });
 });
+
+
+/* ────────────────────────────────────────────────────────────────────────────
+   THE THEME
+   The palette is declared twice — once under the system's preference, once
+   under an explicit choice — so the pair is asserted to say the same thing.
+   Below that, the stamp that runs in <head> before the first paint, driven
+   with its own localStorage so the private-mode throw is exercised too.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+const PAGE = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+const STYLE = PAGE.slice(PAGE.indexOf('<style>'), PAGE.indexOf('</style>'));
+
+// One declaration block → { '--token': 'value' }. Comments go first, or a token named inside one
+// would be read as a declaration.
+function decls(block) {
+  const out = {};
+  for (const line of block.replace(/\/\*[\s\S]*?\*\//g, '').split(';')) {
+    const m = line.match(/(--[a-z0-9-]+)\s*:\s*([\s\S]+)/i);
+    if (m) out[m[1]] = m[2].trim().replace(/\s+/g, ' ');
+  }
+  return out;
+}
+const grab = (re, what) => {
+  const m = STYLE.match(re);
+  assert.ok(m, `the ${what} block is still findable`);
+  return decls(m[1]);
+};
+const LIGHT = grab(/\n {2}:root \{\n([\s\S]*?)\n {2}\}\n/, 'light token');
+const DARK_MEDIA = grab(/:root:not\(\[data-theme="light"\]\) \{\n([\s\S]*?)\n {4}\}/, 'system dark');
+const DARK_ATTR = grab(/\n {2}:root\[data-theme="dark"\] \{\n([\s\S]*?)\n {2}\}\n/, 'chosen dark');
+
+test('the two dark blocks are one palette written twice, and cannot drift apart', () => {
+  assert.deepEqual(DARK_ATTR, DARK_MEDIA,
+    'the system-preference copy and the explicit-choice copy declare the same tokens at the same values');
+  assert.ok(Object.keys(DARK_ATTR).length > 30, 'and it is the whole palette, not a handful');
+});
+
+test('every colour token has a dark value, and the two that must not move do not move', () => {
+  // The layout tokens carry no colour and are the same in every theme, so they are the exceptions.
+  const LAYOUT = new Set(['--spring-press', '--rail-w', '--nav-w', '--nav-track']);
+  const isLayout = (k) => LAYOUT.has(k) || k.startsWith('--doc-space-') || k === '--measure';
+  for (const k of Object.keys(LIGHT)) {
+    if (isLayout(k)) { assert.ok(!(k in DARK_ATTR), `${k} is layout and stays out of the palette`); continue; }
+    assert.ok(k in DARK_ATTR, `${k} has a dark value`);
+  }
+  for (const k of Object.keys(DARK_ATTR)) assert.ok(k in LIGHT, `${k} is a real token, not a dark-only stray`);
+  // YELLOW = THE AGENT, one hex everywhere. An artboard is paper in both themes.
+  assert.equal(LIGHT['--yellow'], '#ffeb00');
+  assert.equal(DARK_ATTR['--yellow'], '#ffeb00');
+  assert.equal(DARK_ATTR['--on-yellow'], LIGHT['--on-yellow'], 'text on solid yellow stays dark');
+  assert.equal(DARK_ATTR['--asset-canvas'], '#ffffff');
+});
+
+test('neither ground is pure, and the dark one is genuinely dark', () => {
+  // iA Writer's rule, asserted rather than trusted: no #ffffff page under black ink, no #000000 page
+  // under white ink. --bg is the only place the page's own ground is set.
+  assert.notEqual(LIGHT['--ink'], '#000000');
+  assert.notEqual(DARK_ATTR['--bg'], '#000000');
+  assert.notEqual(DARK_ATTR['--ink'], '#ffffff');
+  const lum = (hex) => {
+    const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map(c => c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const contrast = (a, b) => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
+  assert.ok(lum(DARK_ATTR['--bg']) < 0.03, 'the dark ground is a ground, not a mid grey');
+  assert.ok(contrast(DARK_ATTR['--fg'], DARK_ATTR['--bg']) > 7, 'body copy clears AAA on the dark ground');
+  assert.ok(contrast(LIGHT['--fg'], LIGHT['--bg']) > 7, 'and still does on the light one');
+  // --shell is a surface of its own in both directions: one step off the page, never equal to it.
+  assert.notEqual(DARK_ATTR['--shell'], DARK_ATTR['--bg']);
+  assert.ok(lum(DARK_ATTR['--shell']) > lum(DARK_ATTR['--bg']), 'and on dark it steps LIGHTER');
+});
+
+test('no colour is hard-coded outside the palette', () => {
+  // The whole point of the second palette is that one edit moves the theme. A hex dropped into a rule
+  // is a thing that cannot follow it, so the stylesheet is scanned for them with the token blocks
+  // removed. Two literals are allowed and both are named here: a mask reads only alpha, and a shadow
+  // cast on the lightbox's own scrim never touches the page.
+  let rest = STYLE.replace(/\/\*[\s\S]*?\*\//g, '');
+  for (const re of [/\n {2}:root \{\n[\s\S]*?\n {2}\}\n/,
+                    /@media \(prefers-color-scheme: dark\) \{\n {4}:root:not\(\[data-theme="light"\]\) \{\n[\s\S]*?\n {4}\}\n {2}\}/,
+                    /\n {2}:root\[data-theme="dark"\] \{\n[\s\S]*?\n {2}\}\n/]) {
+    const before = rest.length;
+    rest = rest.replace(re, '');
+    assert.ok(rest.length < before, 'a token block was found and removed before the scan');
+  }
+  const ALLOWED = ['#000 22px', '#000 22px', 'rgba(0,0,0,.45)'];
+  const found = rest.match(/#[0-9a-f]{3,8}\b[^;,)]*|rgba?\([0-9.,\s]+\)/gi) || [];
+  const stray = found.filter(f => !ALLOWED.includes(f.trim()));
+  assert.deepEqual(stray, [], 'every colour in a rule comes from a token');
+});
+
+// The stamp itself. It is a bare IIFE over `localStorage` and `document`, so it can be run with both
+// handed in — which is how the throw an unavailable localStorage raises gets exercised at all.
+const STAMP = (() => {
+  const m = PAGE.match(/<script>\n([\s\S]*?Theme, before the first paint[\s\S]*?)\n<\/script>/);
+  assert.ok(m, 'the pre-paint stamp is still in the page');
+  return m[1];
+})();
+
+test('the theme stamp runs in <head>, before anything the reader could see', () => {
+  assert.ok(PAGE.indexOf('Theme, before the first paint') < PAGE.indexOf('<style>'),
+    'ahead of the stylesheet, so there is no white frame to repaint');
+  assert.ok(PAGE.indexOf('Theme, before the first paint') < PAGE.indexOf('<body>'), 'and inside <head>');
+});
+
+test('the stamp honours a stored light or dark, and nothing else', () => {
+  const run = new Function('localStorage', 'document', STAMP);
+  const stamp = (stored) => {
+    const doc = new JSDOM('<!doctype html><html><body></body></html>').window.document;
+    run({ getItem: () => stored }, doc);
+    return doc.documentElement.getAttribute('data-theme');
+  };
+  assert.equal(stamp('dark'), 'dark', 'a chosen dark is stamped');
+  assert.equal(stamp('light'), 'light', 'and so is a chosen light, which has to beat a dark system');
+  assert.equal(stamp(null), null, 'no preference leaves the attribute off, so the media query answers');
+  assert.equal(stamp('system'), null, 'and so does the explicit system setting');
+  assert.equal(stamp('<script>'), null, 'anything else is not a theme and is ignored rather than echoed');
+});
+
+test('a localStorage that throws costs the page nothing', () => {
+  // Safari in private mode. The catch is the whole reason the stamp is wrapped.
+  const run = new Function('localStorage', 'document', STAMP);
+  const doc = new JSDOM('<!doctype html><html><body></body></html>').window.document;
+  assert.doesNotThrow(() => run({ getItem() { throw new Error('blocked'); } }, doc));
+  assert.equal(doc.documentElement.getAttribute('data-theme'), null);
+});
+
+// The page's own theme block — the store it writes through, the cycle, and the stamp it applies —
+// lifted out and run over a jsdom document. Asserting the cycle from the source told us the list had
+// three names in it and nothing about what a third click does, which is how a cycle that could not
+// reach dark passed.
+const THEME_MODULE = (() => {
+  const m = PAGE.match(/(const uiStore = \{[\s\S]*?applyTheme\(currentTheme\(\)\);)/);
+  assert.ok(m, 'the theme block is still one run of source in the page');
+  return m[1];
+})();
+
+// `localStorage` and `$` are handed in, so the storage a private-mode Safari gives the page can be
+// handed in too. `document` is a real jsdom one carrying the button paintTheme writes into.
+function themePage({ localStorage, stamped } = {}) {
+  const doc = new JSDOM('<!doctype html><html><body><button id="themeToggle"></button></body></html>').window.document;
+  if (stamped) doc.documentElement.setAttribute('data-theme', stamped);
+  const written = [];
+  const cell = new Map();
+  const store = localStorage || {
+    getItem: (k) => (cell.has(k) ? cell.get(k) : null),
+    setItem: (k, v) => { cell.set(k, String(v)); written.push([k, String(v)]); },
+  };
+  const page = new Function('document', 'localStorage', '$',
+    THEME_MODULE + '\nreturn { cycleTheme, currentTheme };')(
+    doc, store, (id) => doc.getElementById(id));
+  page.stamp = () => doc.documentElement.getAttribute('data-theme');
+  page.title = () => doc.getElementById('themeToggle').getAttribute('title');
+  page.written = written;
+  return page;
+}
+
+test('clicking the toggle cycles system → light → dark → system', () => {
+  const page = themePage();
+  assert.equal(page.stamp(), null, 'a fresh install starts on system, which is no attribute at all');
+
+  page.cycleTheme();
+  assert.equal(page.stamp(), 'light');
+  assert.equal(page.title(), 'Theme: light', 'and the button says which one it is on');
+
+  page.cycleTheme();
+  assert.equal(page.stamp(), 'dark');
+
+  page.cycleTheme();
+  assert.equal(page.stamp(), null, 'the third click hands the room back to the system');
+  assert.equal(page.currentTheme(), 'system');
+  assert.deepEqual(page.written, [['sc:theme', 'light'], ['sc:theme', 'dark'], ['sc:theme', 'system']],
+    'one key, written on every step');
+});
+
+test('the cycle starts from what the pre-paint stamp already resolved', () => {
+  const page = themePage({ stamped: 'dark' });
+  assert.equal(page.currentTheme(), 'dark');
+  page.cycleTheme();
+  assert.equal(page.stamp(), null, 'dark comes back to system rather than restarting the list');
+});
+
+test('a storage that refuses every write still cycles the whole way round', () => {
+  // Safari in private mode: setItem throws and getItem keeps answering null. Deriving the next step
+  // from the store there applied light on the first click and light on every click after it, so dark
+  // and the way back to system could not be reached without a reload.
+  const page = themePage({ localStorage: { getItem: () => null, setItem() { throw new Error('blocked'); } } });
+  assert.doesNotThrow(() => page.cycleTheme());
+  assert.equal(page.stamp(), 'light');
+  page.cycleTheme();
+  assert.equal(page.stamp(), 'dark', 'dark is reachable with nothing persisted');
+  page.cycleTheme();
+  assert.equal(page.stamp(), null, 'and so is the way back to system');
+});
+
+test('the toggle is an icon in the header and writes through the one preference store', () => {
+  assert.match(PAGE, /id="themeToggle"[\s\S]{0,200}onclick="cycleTheme\(\)"/, 'the header carries the button');
+  assert.match(PAGE, /uiStore\.set\('theme', t\)/, 'and the choice goes through the one preference store');
+  assert.ok(!/themeToggle[^>]*>[A-Za-z]/.test(PAGE.match(/<button id="themeToggle"[\s\S]*?<\/button>/)[0]),
+    'no label text in the control — an icon and a title, like the two panel toggles beside it');
+});
