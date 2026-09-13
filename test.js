@@ -4792,8 +4792,9 @@ test('the two dark blocks are one palette written twice, and cannot drift apart'
 test('every colour token has a dark value, and the two that must not move do not move', () => {
   // The layout tokens carry no colour and are the same in every theme, so they are the exceptions.
   const LAYOUT = new Set(['--spring-press', '--rail-w', '--nav-w', '--nav-track']);
+  const isLayout = (k) => LAYOUT.has(k) || k.startsWith('--doc-space-') || k === '--measure';
   for (const k of Object.keys(LIGHT)) {
-    if (LAYOUT.has(k)) { assert.ok(!(k in DARK_ATTR), `${k} is layout and stays out of the palette`); continue; }
+    if (isLayout(k)) { assert.ok(!(k in DARK_ATTR), `${k} is layout and stays out of the palette`); continue; }
     assert.ok(k in DARK_ATTR, `${k} has a dark value`);
   }
   for (const k of Object.keys(DARK_ATTR)) assert.ok(k in LIGHT, `${k} is a real token, not a dark-only stray`);
