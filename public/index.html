@@ -99,6 +99,12 @@
     --toast-btn-hover:#f0f0ea;
     --toast-shadow:0 1px 2px rgba(0,0,0,.2), 0 18px 40px -18px rgba(0,0,0,.5);
     --asset-canvas:#ffffff;  /* an asset's artboard is PAPER, white in both themes (see the frame rule) */
+    /* An anchored span is a WASH, not a rule. #ffeb00 as a 2px underline was the highest-energy thing
+       in a near-monochrome reading column, and a watermark colour (Bear's red, iA's blue) is never a
+       rule under prose. Low alpha, and it follows the dot convention: the agent's spans take the
+       yellow, yours take an ink tint. The underline comes back on hover; see mark.anchor. */
+    --anchor-wash:rgba(255,235,0,.30);
+    --anchor-wash-mine:rgba(20,20,15,.085);
     --flash-fill:rgba(255,235,0,.32);      /* the jump flash: an anchor, a diagram node */
     --flash-ring:rgba(255,235,0,.3);
     --flash-ring-strong:rgba(255,235,0,.55);   /* the card's */
@@ -190,6 +196,8 @@
       --toast-btn-hover:#2a2820;
       --toast-shadow:0 1px 2px rgba(0,0,0,.3), 0 18px 40px -16px rgba(0,0,0,.75);
       --asset-canvas:#ffffff;
+      --anchor-wash:rgba(255,235,0,.17);
+      --anchor-wash-mine:rgba(255,255,255,.11);
       --flash-fill:rgba(255,235,0,.26);
       --flash-ring:rgba(255,235,0,.26);
       --flash-ring-strong:rgba(255,235,0,.5);
@@ -242,6 +250,8 @@
     --toast-btn-hover:#2a2820;
     --toast-shadow:0 1px 2px rgba(0,0,0,.3), 0 18px 40px -16px rgba(0,0,0,.75);
     --asset-canvas:#ffffff;
+    --anchor-wash:rgba(255,235,0,.17);
+    --anchor-wash-mine:rgba(255,255,255,.11);
     --flash-fill:rgba(255,235,0,.26);
     --flash-ring:rgba(255,235,0,.26);
     --flash-ring-strong:rgba(255,235,0,.5);
@@ -776,13 +786,24 @@
      itself and lets it collapse out through this element. The .4em pair that used to live here was
      where a paragraph's spacing actually came from, a quarter of a line and nobody's decision. */
   .block { position:relative; }
-  /* Persistent cue: an open item softly underlines its span in the agent's yellow, tappable. It must
-     cost the line NOTHING, because the same text is read and edited in place and a mark that added a pixel
-     would reflow the paragraph the moment a comment landed on it. A border on an inline box does not
-     enter the line box, which is why the underline is one; the horizontal padding that used to sit
-     here did move the text, and `color:inherit` holds off the UA's own `mark` colour. */
-  mark.anchor { background:transparent; color:inherit; border-bottom:2px solid var(--yellow);
-    padding:0; cursor:pointer; transition:background .15s ease; border-radius:1px; }
+  /* Persistent cue: an open item WASHES its span rather than ruling a line under it. The 2px solid
+     #ffeb00 this replaced was the loudest element on a near-monochrome page, and it sat inside the
+     reading column, under prose. Bear's red and iA's blue are watermarks (a cursor, a link) and
+     neither draws a rule under a sentence. So the colour drops to a low-alpha fill that follows the
+     dot convention (the agent's spans yellow, yours ink-tinted) and the underline becomes the HOVER
+     state, where the link between one span and one card has to be explicit. `.lit` is that same state
+     driven from the other end: the pointer over the card in the rail.
+     It must still cost the line NOTHING, because the same text is read and edited in place and a mark
+     that added a pixel would reflow the paragraph the moment a comment landed on it. A border on an
+     inline box does not enter the line box, which is why the underline is one and why it is declared
+     transparent at rest rather than added on hover; the horizontal padding that used to sit here did
+     move the text, and `color:inherit` holds off the UA's own `mark` colour. */
+  mark.anchor { background:var(--anchor-wash); color:inherit; border-bottom:2px solid transparent;
+    padding:0; cursor:pointer; border-radius:2px;
+    transition:background .15s ease, border-color .15s ease; }
+  mark.anchor.mine { background:var(--anchor-wash-mine); }
+  mark.anchor:hover, mark.anchor.lit { border-bottom-color:var(--yellow); }
+  mark.anchor.mine:hover, mark.anchor.mine.lit { border-bottom-color:var(--ink); }
   mark.anchor.flash { background:var(--flash-fill); box-shadow:0 0 0 3px var(--flash-ring); }
   /* The rail scrolls WITH the page rather than in its own scroll box. That's what lets a card sit level
      with the text it's about (see dockCards): two independent scrollers can't stay aligned without a
@@ -802,6 +823,11 @@
   .tab .tc { font-size:11px; font-weight:600; background:var(--chip-n); color:var(--ink-2); border-radius:20px;
     padding:0 6px; min-width:17px; text-align:center; }
   .tab.on .tc { background:var(--chip-n-2); }
+  /* The density control, at the right end of the tab bar. What it changes is the column underneath it,
+     so it belongs to that column's chrome rather than to the page header, where the three controls
+     next to it are all about the document. Icon and title, like every other toggle in the tool. */
+  .tabs .dens { margin-left:auto; color:var(--muted); }
+  .tabs .dens:hover { background:var(--fill); color:var(--ink); }
   .side-list { display:flex; flex-direction:column; gap:8px; }
   /* ---------- the full-height rail (desktop) ----------
      The rail is the frame's right column now, the folder panel mirrored: it runs the full height of
@@ -851,10 +877,59 @@
     padding:2px 0; border:0; background:none; box-shadow:none; cursor:pointer;
     font:600 12px 'Geist', ui-sans-serif, sans-serif; color:var(--muted); }
   .side-list.docked .card.has-more .more:hover { color:var(--ink); background:none; }
-  /* review card — no border; a soft depth shadow lifts it off the rail */
-  .card { background:var(--card); border-radius:14px; padding:15px 16px; font-size:13px; box-shadow:var(--shadow);
-    transition:box-shadow .2s ease, background .2s ease; }
+  /* review card: no border, a soft depth shadow lifts it off the rail.
+     `position:relative` is for the fold control in the corner; the docked rule below overrides it to
+     absolute, which positions the same way. */
+  .card { position:relative; background:var(--card); border-radius:14px; padding:15px 16px; font-size:13px;
+    box-shadow:var(--shadow); transition:box-shadow .2s ease, background .2s ease; }
   .card.flash { box-shadow:var(--shadow), 0 0 0 3px var(--flash-ring-strong); }
+  /* ---------- the collapsed card ----------
+     The second of three densities (public/turn.js: DENSITIES). A thread whose next move is not the
+     human's rests as a pill level with its anchor: the provenance dot, one mono word for the kind, and
+     the reply count. No body, which is the whole point: a rail of settled threads was charging full
+     card height for conversations nobody was going to read again.
+     The pill carries the surface, not the card, so the card measures the pill's own height and
+     dockCards can sit four of them level with four anchors instead of stacking one down the rail. */
+  /* The archived and orphaned tints are declared further down and would otherwise paint a full-width
+     recessed bar behind a 110px pill, so both are named here rather than relying on source order. */
+  .card.collapsed, .card.collapsed.archived, .card.collapsed.orphaned {
+    background:none; box-shadow:none; padding:0; border-radius:99px; }
+  .card.collapsed .pill { display:inline-flex; align-items:center; gap:7px; max-width:100%;
+    background:var(--card); box-shadow:var(--shadow); border:0; border-radius:99px; padding:5px 11px;
+    cursor:pointer; text-align:left; color:var(--ink-2);
+    font:600 11px 'Geist Mono', ui-monospace, Menlo, monospace; letter-spacing:.02em; }
+  .card.collapsed .pill:hover { color:var(--ink); background:var(--card); }
+  .card.collapsed .pill .dot { width:7px; height:7px; border-radius:50%; background:var(--ink); flex:none; }
+  .card.collapsed.by-agent .pill .dot { background:var(--yellow); box-shadow:0 0 0 1px var(--yellow-ring); }
+  .card.collapsed .pill .n { background:var(--chip-n); color:var(--ink-2); border-radius:20px; padding:0 6px; }
+  .card.collapsed.archived .pill, .card.collapsed.orphaned .pill { background:var(--card-off); }
+  .card.collapsed.orphaned .pill .dot { background:var(--dead); box-shadow:none; }
+  /* The flash lands on the pill, since the card itself is now a transparent box the size of one. */
+  .card.collapsed.flash { box-shadow:none; }
+  .card.collapsed.flash .pill { box-shadow:var(--shadow), 0 0 0 3px var(--flash-ring-strong); }
+  /* The hover preview: the last line said on the thread, painted OVER whatever is below it. Absolute
+     and pointer-events:none, so hovering a pill never lays a second box into the column and never
+     moves the card under the pointer. The reason a preview is worth having at all is that it costs
+     the layout nothing. */
+  .card.collapsed .peek { position:absolute; left:0; right:0; top:calc(100% + 5px); z-index:1;
+    background:var(--card); box-shadow:var(--shadow); border-radius:10px; padding:8px 11px;
+    font-size:12.5px; line-height:1.45; color:var(--fg); pointer-events:none;
+    opacity:0; transform:translateY(-2px); transition:opacity .13s ease, transform .13s ease; }
+  /* The clamp lives on the inner span, not on the box: Chrome blockifies an absolutely positioned
+     `-webkit-box` to `flow-root`, which drops the line clamp and leaves a third line cut in half under
+     the bottom edge. A static child keeps the clamp and the ellipsis it draws. */
+  .card.collapsed .peek span { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
+    overflow:hidden; }
+  .card.collapsed:hover { z-index:3; }
+  .card.collapsed:hover .peek { opacity:1; transform:translateY(0); }
+  @media (prefers-reduced-motion: reduce) { .card.collapsed .peek { transition:none; } }
+  /* Fold an expanded card back to its pill. Drawn only at compact, where folding means something:
+     `full` is the promise that nothing is folded, so the control would be a lie there. */
+  .card .fold { position:absolute; top:11px; right:11px; z-index:1; padding:2px 4px; line-height:0;
+    border:0; background:none; box-shadow:none; color:var(--faint); cursor:pointer; }
+  .card .fold:hover { color:var(--ink); background:none; }
+  .card .fold svg { width:13px; height:13px; display:block; pointer-events:none; }
+  .card.foldable .cbody, .card.foldable .chead { padding-right:20px; }
   /* A decided card leaves toward the document it was anchored to, which is where the change just
      landed. Short, because the list rebuild is waiting on it. */
   .card.leaving { opacity:0; transform:translateX(-10px); transition:opacity .18s ease-out, transform .18s ease-out; }
@@ -2739,7 +2814,10 @@ function dockCards() {
     // overruns by a few pixels from sprouting a toggle that reveals almost nothing.
     const cbody = card.querySelector(':scope > .cbody') || card;
     cbody.style.maxHeight = ''; card.classList.remove('clipped');
-    const tall = cbody.scrollHeight > CARD_CAP + 12;
+    // A pill has no body to clip and is already shorter than the cap, so the whole measure-and-clip
+    // pass is skipped rather than asked a question whose answer is always no. Its `more` toggle goes
+    // with it, or a card folded while expanded would keep a "show less" that reveals nothing.
+    const tall = !card.classList.contains('collapsed') && cbody.scrollHeight > CARD_CAP + 12;
     if (tall && !expanded) { cbody.style.maxHeight = CARD_CAP + 'px'; card.classList.add('clipped'); }
     card.classList.toggle('has-more', tall);
     let more = card.querySelector(':scope > .more');
@@ -2889,10 +2967,15 @@ function renderSide() {
   // Tabbed rail: active threads (open, editable) ↔ archived threads (settled, read-only).
   const tabs = document.createElement('div'); tabs.className = 'tabs';
   const tab = (id, label, n) => `<button class="tab${sideTab === id ? ' on' : ''}" data-tab="${id}">${label}${n ? ` <span class="tc">${n}</span>` : ''}</button>`;
-  tabs.innerHTML = tab('active', 'active', activeTop.length) + tab('archived', 'archived', archivedTop.length);
+  tabs.innerHTML = tab('active', 'active', activeTop.length) + tab('archived', 'archived', archivedTop.length)
+    + densityBtn();
   side.appendChild(tabs);
   const list = document.createElement('div'); list.className = 'side-list'; side.appendChild(list);
-  if (sideTab === 'active') renderActive(list, activeTop, childSug);
+  // `hidden` draws no cards at all. The tab bar and its counts stay, because below 781px they are the
+  // only way back and because the counts are still true; what goes is the column of cards and, in
+  // markAnchors, every cue they put in the prose.
+  if (Turn.density(railDensity) === 'hidden') { /* no cards */ }
+  else if (sideTab === 'active') renderActive(list, activeTop, childSug);
   else renderArchived(list, archivedTop, childSug);
   // Restore in-progress replies captured before the rebuild (see top of renderSide).
   for (const id in drafts) {
@@ -2957,13 +3040,19 @@ function renderActive(list, top, childSug) {
     // normal clothes for a few seconds while an agent's edit and its reanchor finish arguing.
     const cue = orphanCue(it);
     const dead = cue.shown;
-    el.className = 'card' + (dead ? ' orphaned' : ''); el.dataset.id = it.id;
+    const fold = cardCollapsed(it);
+    el.className = 'card' + (dead ? ' orphaned' : '')
+      + (fold ? ' collapsed by-' + whoCls(it.by) : (foldable() ? ' foldable' : ''));
+    el.dataset.id = it.id;
     // Per-item guard. A throw while building ONE card used to abort the whole loop, so every item after
     // it silently vanished from the rail while the tab count still claimed they were there — the human
     // sees "3 active", counts two, and has no way to know. Whatever goes wrong with one item, the rest
     // must still render, and the broken one must be VISIBLE rather than absent.
     try {
     const label = it.flag ? 'flag' : it.kind;
+    // Collapsed: a pill and nothing else. The branch is inside the per-item guard with everything
+    // else, so a thread that cannot be summarised still draws the error card rather than vanishing.
+    if (fold) { el.innerHTML = pillHtml(it, label); list.appendChild(el); continue; }
     let head = `<span class="who ${whoCls(it.by)}">${esc(it.by)}</span> <span class="badge ${label}">${label}</span>`;
     if (it.kind === 'suggestion') head += replyCount(it);
     if (dead) head += ` <span class="badge orphaned">${orphanLabel(it, cue.fromFrame)}</span>`;
@@ -3002,7 +3091,7 @@ function renderActive(list, top, childSug) {
     // The replying row sits OUTSIDE .cbody: the body is what a docked card clips, and a presence
     // signal hidden behind "show more" defeats its purpose. Below the body (dockCards slots the
     // show-more toggle between them) and above the reply box, it stays visible at any card height.
-    el.innerHTML = `<div class="cbody">${head + body}</div>` + replyingHtml(it) + actions;
+    el.innerHTML = `<div class="cbody">${head + body}</div>` + replyingHtml(it) + actions + foldBtn();
     } catch (e) {
       console.error('sidecar: failed to render item', it.id, e);
       el.className = 'card orphaned';
@@ -3033,8 +3122,13 @@ function renderArchived(list, archived, childSug) {
   const sorted = archived.slice().sort((a, b) => (b.decidedAt || '').localeCompare(a.decidedAt || ''));   // newest-decided first
   for (const it of sorted) {
     const el = document.createElement('div');
-    el.className = 'card archived'; el.dataset.id = it.id;
+    // Everything on this tab is settled, so at compact everything here starts as a pill: the archive is
+    // a record, and a record is read by finding one entry in it rather than by scrolling all of them.
+    const fold = cardCollapsed(it);
+    el.className = 'card archived' + (fold ? ' collapsed by-' + whoCls(it.by) : (foldable() ? ' foldable' : ''));
+    el.dataset.id = it.id;
     try {
+    if (fold) { el.innerHTML = pillHtml(it, it.flag ? 'flag' : (it.kind || 'comment')); list.appendChild(el); continue; }
     const when = it.decidedAt ? `<span class="when">${esc(timeAgo(Date.parse(it.decidedAt)))}</span>` : '';
     let body = `<div class="chead"><span class="who ${whoCls(it.by)}">${esc(it.by)}</span> <span class="badge ${it.status}">${it.status}</span>`
              + (it.kind === 'suggestion' ? replyCount(it) : '') + `${when}</div>`;
@@ -3056,7 +3150,7 @@ function renderArchived(list, archived, childSug) {
     // agent's `wait` marks it and is composing a retry, so the row belongs here too. Same replyingHtml
     // as the active rail, so the clearing rules come along unchanged: the agent's next empty-handed
     // ping, the staleness horizon, and the latest-message check once the reply lands on the thread.
-    el.innerHTML = body + replyingHtml(it);
+    el.innerHTML = body + replyingHtml(it) + foldBtn();
     } catch (e) {
       console.error('sidecar: failed to render archived item', it.id, e);
       el.innerHTML = `<div class="chead"><span class="badge orphaned">could not render — see console</span></div>`
@@ -3065,6 +3159,25 @@ function renderArchived(list, archived, childSug) {
     list.appendChild(el);
   }
 }
+// A collapsed card: the provenance dot (its colour is the `by-agent` class on the card), one mono word
+// for the kind, and the reply count where there is one. No body text, and the preview underneath is
+// painted over the column rather than into it (see .card.collapsed .peek), so a hover costs the layout
+// nothing. The whole pill is the expand control.
+function pillHtml(it, kind) {
+  const n = (it.thread || []).length;
+  const seen = Turn.peek(it);
+  return `<button class="pill" data-action="unfold" title="expand"><span class="dot"></span>`
+    + `<span class="k">${esc(kind)}</span>${n ? `<span class="n">${n}</span>` : ''}</button>`
+    + (seen ? `<div class="peek"><span>${esc(seen)}</span></div>` : '');
+}
+// Whether an expanded card carries a way back to its pill. Only at compact: `full` is the promise that
+// nothing is folded, so the control would be offering a state that density does not have.
+const foldable = () => Turn.density(railDensity) === 'compact';
+const foldBtn = () => foldable()
+  ? '<button class="fold" data-action="fold" title="collapse" aria-label="collapse">'
+    + '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" '
+    + 'stroke-linejoin="round" aria-hidden="true"><path d="M5.4 12.2 10 7.6l4.6 4.6"/></svg></button>'
+  : '';
 // A comment thread's messages in insertion order (oldest first) — shared by the active and archived
 // renderers. We render the array as-is rather than sorting by `at`: a reply is always appended last, so
 // insertion order IS chronological, and it can't be scrambled by a wrong timestamp. (An agent stamping a
@@ -3188,6 +3301,9 @@ $('side').addEventListener('click', (e) => {
   if (e.target.tagName === 'IMG' && e.target.closest('.msg')) { openLightbox(e.target.src); return; }
   const tabEl = e.target.closest('[data-tab]');
   if (tabEl) { if (sideTab !== tabEl.dataset.tab) { sideTab = tabEl.dataset.tab; renderSide(); } return; }
+  // The density control sits in the tab bar and belongs to the rail rather than to any one card, so it
+  // is read before the data-id lookup below, which would otherwise find nothing and drop the click.
+  if (e.target.closest('[data-action="density"]')) { cycleDensity(); return; }
   const el = e.target.closest('[data-action]');
   if (!el || !$('side').contains(el)) return;
   // Nearest data-id, so a nested suggestion's accept/reject targets the suggestion (its .subcard[data-id]),
@@ -3197,6 +3313,10 @@ $('side').addEventListener('click', (e) => {
   switch (el.dataset.action) {
     // Clipped-card toggle. Re-docks rather than just growing the card: everything below it has to move.
     case 'more': expandedCards.has(id) ? expandedCards.delete(id) : expandedCards.add(id); dockCards(); break;
+    // Expand a pill in place and fold it back. renderSide rather than a class toggle: the card is
+    // built from different markup in each state, and everything below it has to re-dock either way.
+    case 'unfold': cardFold.set(id, 'full'); renderSide(); break;
+    case 'fold': cardFold.set(id, 'collapsed'); renderSide(); break;
     case 'locate': locate(id); break;
     case 'accept': decide(id, 'accept'); break;
     case 'reject': decide(id, 'reject'); break;
@@ -3433,6 +3553,54 @@ const railBare = () => document.body.classList.contains('rail-bare');
 // standing choice, bare is the document having nothing to say yet. Either way the button offers to
 // show it, and "hide" would be offering to hide a hairline.
 const railShut = () => railCollapsed() || railBare();
+// ---------- the rail's density ----------
+// Three states, one icon button at the right end of the rail's own tab bar: full (every card a full
+// card), compact (the default, where a thread whose next move is the human's stays full and everything
+// rests as a pill), hidden (no cards, no anchor marks, and the track rests at the same hairline the
+// bare state uses, so the draft can be read straight through).
+//
+// The rule for which cards rest collapsed is public/turn.js (Turn.startCollapsed), beside the badge
+// rule it is built from. A decision about what is waiting on the human belongs in one place, and a
+// rule about when a card folds is worth a test that does not need a browser.
+//
+// The preference is the tool's, not the document's, the same reasoning the asset's zoom carries: how
+// much review a reader wants on screen is decided by the reader, and a key per document would have
+// every new document opening at a density they have already overruled.
+const DENSITY_ICON = {
+  full: '<rect x="3" y="3.25" width="14" height="5.5" rx="2"/><rect x="3" y="11.25" width="14" height="5.5" rx="2"/>',
+  compact: '<rect x="3" y="3.25" width="14" height="5.5" rx="2"/><path d="M3.9 12.4h12.2"/><path d="M3.9 15.8h12.2"/>',
+  hidden: '<path d="M3.9 6.2h12.2"/><path d="M3.9 10h12.2"/><path d="M3.9 13.8h12.2"/><path d="M4.6 15.4 15.4 4.6"/>',
+};
+let railDensity = Turn.density(uiStore.get('railDensity', ''));
+// A manual fold, per thread id, for this page only. Deliberately not stored: which threads a reader
+// opened while working through one document says nothing about the next session, and a rail that
+// restored a week-old set of folds would be answering a question nobody asked twice. resetDocState
+// clears it with everything else that belongs to the outgoing document.
+const cardFold = new Map();
+// Does this card draw as a pill right now? The manual answer wins where there is one, and only at
+// compact: `full` promises nothing is folded and `hidden` draws no cards at all, so neither has a
+// collapsed state for a stored fold to restore.
+function cardCollapsed(it) {
+  if (Turn.density(railDensity) !== 'compact') return false;
+  const manual = cardFold.get(it.id);
+  return manual ? manual === 'collapsed' : Turn.startCollapsed(it, state.agent, railDensity);
+}
+function setDensity(d) {
+  railDensity = Turn.density(d);
+  uiStore.set('railDensity', railDensity);
+  renderSide();      // draws the cards, or stops drawing them, and re-runs markAnchors and the dock
+  relayoutDoc();     // the track just changed width, so the column the cards dock against did too
+}
+function cycleDensity() { setDensity(Turn.nextDensity(railDensity)); }
+// The tab bar's own control. Rebuilt with the tabs on every render, so there is no separate paint step
+// and no way for the icon and the state to drift.
+function densityBtn() {
+  const d = Turn.density(railDensity);
+  const label = 'Cards: ' + d;
+  return `<button class="tab dens iconbtn" data-action="density" title="${label}" aria-label="${label}">`
+    + '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" '
+    + 'stroke-linejoin="round" aria-hidden="true">' + DENSITY_ICON[d] + '</svg></button>';
+}
 // ---------- the rail at rest ----------
 // The counts the last render found, so the toggle can re-decide without re-running renderSide.
 let railCounts = { active: 0, archived: 0 };
@@ -3446,7 +3614,10 @@ function noteRailRest(activeN, archivedN) {
 }
 let railRestSeeded = false;
 function applyRailRest() {
-  const bare = !railForced && !railCollapsed() && Turn.rail(railCounts.active, railCounts.archived) === 'bare';
+  // Two ways to rest at the hairline, and hidden is not overrulable by railForced: it is a standing
+  // choice about every document rather than an observation about this one.
+  const bare = !railCollapsed() && (Turn.density(railDensity) === 'hidden'
+    || (!railForced && Turn.rail(railCounts.active, railCounts.archived) === 'bare'));
   // The first render is the page arriving at its resting shape, not moving to it: animating that is a
   // 372px band of white sliding shut on every load of a clean document. Read before the early return,
   // or a document that opens with cards and is then emptied still counts as arriving.
@@ -3464,6 +3635,12 @@ function applyRailRest() {
 }
 function toggleRail(force) {
   const collapse = force === undefined ? !railShut() : !!force;
+  // The density control lives in the rail's own tab bar, and on desktop a hidden rail has no tab bar
+  // on screen to cycle back out of. So this button is the way back: asking for the review panel is
+  // asking for cards in it. (Below 781px the header button is gone and the tab bar is still there,
+  // so each viewport keeps exactly one way back.)
+  const unhide = !collapse && Turn.density(railDensity) === 'hidden';
+  if (unhide) { railDensity = 'compact'; uiStore.set('railDensity', railDensity); }
   document.body.classList.toggle('rail-collapsed', collapse);
   uiStore.set('railCollapsed', collapse ? '1' : '');
   if (!collapse) { railSeen = railMsgTotal(); railNew = 0; }   // opening it IS reading it
@@ -3471,6 +3648,7 @@ function toggleRail(force) {
   applyRailRest();
   paintRailToggle();
   relayoutDoc();
+  if (unhide) renderSide();   // the cards and the anchor marks both come back with it
 }
 // A message is a top-level item or a reply on one. Comparing the total against what was on screen the
 // last time the panel was open is enough for the badge: the point is "something arrived while this was
@@ -3799,6 +3977,9 @@ function resetDocState() {
   pendingSel = null; pendingSelBlock = null; pendingSelOffset = null; selRect = null;
   pendingNode = null; pendingElement = null; savedRange = null;
   expandedCards.clear();
+  // Which threads were folded open is an answer about the outgoing document's items, and an item id is
+  // only unique within one review.
+  cardFold.clear(); litId = null;
   // Every remembered card position was measured in the OUTGOING document, so it says nothing true
   // about the incoming one: a card held at "where it used to be" would be held somewhere that belongs
   // to another file. Freezes, grace clocks and the seed positions go with it.
@@ -4121,7 +4302,7 @@ function docText() {
   while (walker.nextNode()) { nodes.push({ node: walker.currentNode, start: full.length }); full += walker.currentNode.textContent; }
   return { nodes, full };
 }
-function wrapAnchor(quote, occurrence, id) {
+function wrapAnchor(quote, occurrence, id, mine) {
   const { nodes, full } = docText();
   // Same matcher the server + occurrenceFor use, run over the concatenated rendered text; the returned
   // offsets index straight into `full`, so the text-node slicing below is unchanged.
@@ -4143,7 +4324,8 @@ function wrapAnchor(quote, occurrence, id) {
     const slice = sl.node.textContent.slice(sl.s, sl.e);
     if (!slice.trim() && slice.includes('\n')) continue;
     const r = document.createRange(); r.setStart(sl.node, sl.s); r.setEnd(sl.node, sl.e);
-    const mark = document.createElement('mark'); mark.className = 'anchor'; mark.dataset.id = id; mark.contentEditable = 'false';
+    const mark = document.createElement('mark'); mark.className = 'anchor' + (mine ? ' mine' : '');
+    mark.dataset.id = id; mark.contentEditable = 'false';
     try { r.surroundContents(mark); if (!first) first = mark; } catch {}
   }
   return first;
@@ -4154,11 +4336,17 @@ function markAnchors() {
   const doc = $('doc');
   // An asset's cues are drawn by the picker, inside the frame, on the elements themselves. Hand it the
   // current anchor set instead of running the text matcher over a document that holds one iframe.
-  if (isAsset()) { sendFrame('init', { items: frameItems() }); return; }
+  // `hidden` is the density that takes the cues out of the prose too. The rail losing its cards and
+  // the paragraph keeping a wash under one sentence would be half a state, and the point of hidden is
+  // reading the draft as the reader of the draft will see it.
+  const off = Turn.density(railDensity) === 'hidden';
+  if (isAsset()) { sendFrame('init', { items: off ? [] : frameItems() }); return; }
   if (document.activeElement === doc || doc.contains(document.activeElement)) return;
   doc.querySelectorAll('mark.anchor').forEach(m => { const p = m.parentNode; while (m.firstChild) p.insertBefore(m.firstChild, m); p.removeChild(m); });
   doc.querySelectorAll('.fl-node.anchored').forEach(g => { g.classList.remove('anchored'); delete g.dataset.itemId; });
   doc.normalize();
+  litId = null;   // every mark that carried it has just been unwrapped
+  if (off) return;
   for (const it of state.review.items) {
     if (!['open', 'pending'].includes(it.status)) continue;
     if (it.kind === 'suggestion' && it.replyTo) continue;   // shares its parent comment's span — don't double-wrap
@@ -4171,7 +4359,9 @@ function markAnchors() {
     try { onNode = markNodes(it.anchor.quote, it.id) > 0; }
     catch (e) { console.error('sidecar: failed to highlight node', it.id, e); }
     if (onNode) continue;
-    try { wrapAnchor(it.anchor.quote, it.anchor.occurrence || 0, it.id); }
+    // Whose span this is, so the wash matches the dot on the card. Same whoCls the card head uses, so
+    // a custom SIDECAR_USER or SIDECAR_AGENT colours both ends identically.
+    try { wrapAnchor(it.anchor.quote, it.anchor.occurrence || 0, it.id, whoCls(it.by) === 'human'); }
     catch (e) { console.error('sidecar: failed to highlight', it.id, e); }
   }
 }
@@ -4290,14 +4480,26 @@ function locate(id) {
   marks[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
   pulse(marks);
 }
-// Hovering a card lights its element in the frame — the asset's answer to the highlight a text anchor
-// already carries in the document. Delegated, because renderSide rebuilds every card.
+// Hovering a card lights the span it is about: `.lit` in the document, or the element inside the frame
+// on an asset. The mark rests as a wash now and takes its underline back here, so the link between one
+// card and one span is explicit exactly when somebody is looking for it, instead of a rule under every
+// anchored sentence all the time. Delegated, because renderSide rebuilds every card.
+let litId = null;
+function litAnchor(id) {
+  if (id === litId) return;
+  litId = id;
+  $('doc').querySelectorAll('.lit').forEach(m => m.classList.remove('lit'));
+  if (id) anchorEls(id).forEach(m => m.classList.add('lit'));
+}
 $('side').addEventListener('mouseover', (e) => {
-  if (!isAsset()) return;
   const card = e.target.closest && e.target.closest('.card[data-id]');
-  sendFrame('highlight', { id: card ? card.dataset.id : null });
+  const id = card ? card.dataset.id : null;
+  if (isAsset()) sendFrame('highlight', { id });
+  else litAnchor(id);
 });
-$('side').addEventListener('mouseleave', () => { if (isAsset()) sendFrame('highlight', { id: null }); });
+$('side').addEventListener('mouseleave', () => {
+  if (isAsset()) sendFrame('highlight', { id: null }); else litAnchor(null);
+});
 
 boot();
 </script>

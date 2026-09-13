@@ -124,6 +124,58 @@
     return archivedN > 0 ? 'tabs' : 'bare';
   }
 
-  const api = { LIVE, QUOTE_MAX, isLive, lastBy, lastAt, waiting, of, inbox, byNewest, rail };
+  // ---------- how dense the rail is, and which cards rest collapsed ----------
+  // Google Docs gives a comment three densities and sidecar had one, so a document under review wore
+  // every thread at full height whether or not any of them wanted reading. Three states, cycled from
+  // the rail's tab bar and persisted under `sc:railDensity`:
+  //
+  //   'full'     every card is a full card, which is what sidecar has always drawn
+  //   'compact'  the default: a thread whose next move is the HUMAN's stays full, everything else
+  //              rests as a pill level with its anchor
+  //   'hidden'   no cards and no anchor marks. The rail rests at the same hairline the bare state
+  //              uses and the draft is read straight through
+  //
+  // Ordered densest first, because that is the order the cycle walks and the icon steps through.
+  const DENSITIES = ['full', 'compact', 'hidden'];
+  const DENSITY_REST = 'compact';
+  // Anything that is not one of the three is the default, the same way navsort reads a stored key:
+  // a preference written by an older build (or by a human editing localStorage) must not be able to
+  // leave the rail in a state no control can name.
+  function density(raw) { return DENSITIES.indexOf(raw) >= 0 ? raw : DENSITY_REST; }
+  function nextDensity(cur) { return DENSITIES[(DENSITIES.indexOf(density(cur)) + 1) % DENSITIES.length]; }
+
+  // Does this card rest COLLAPSED, before the human has touched it? The manual override lives in the
+  // page (a Map for the page's lifetime); this is the rule it starts from, and the rule is the same
+  // one the badge already runs: `waiting` is "the next move is the human's".
+  //
+  //   · claude asked something and nobody answered → full
+  //   · a pending suggestion, which only the human can accept or reject → full
+  //   · a flag → full. It is the one item written to be looked at
+  //   · an orphan → full. It is the card that is WRONG about the document, and the -1 rank exists to
+  //     put it where it will be seen; collapsing it to a pill would undo that in the same breath
+  //   · a thread whose last word is the human's, waiting on the agent → collapsed
+  //   · anything settled → collapsed, which is every card on the archived tab
+  //
+  // Only 'compact' collapses anything: 'full' is the promise that nothing is folded, and 'hidden'
+  // draws no cards at all, so neither has a collapsed state to return.
+  function startCollapsed(it, agent, dens) {
+    if (density(dens) !== 'compact') return false;
+    if (!isLive(it)) return true;
+    if (it && it.status === 'orphaned') return false;
+    if (it && it.flag) return false;
+    return !waiting(it, agent);
+  }
+
+  // The one line a collapsed card shows on hover: the last thing said on it. The thread's tail, or
+  // the suggestion's note, or the quote it is anchored to. A suggestion nobody has replied to has
+  // no message at all, and a pill with an empty preview is worse than one with the span it is about.
+  function peek(it) {
+    const m = lastMsg(it);
+    const t = (m && m.text) || (it && it.note) || (it && it.anchor && it.anchor.quote) || '';
+    return snippet(String(t).split(/\n/).find(l => l.trim()) || '');
+  }
+
+  const api = { LIVE, QUOTE_MAX, DENSITIES, DENSITY_REST, isLive, lastBy, lastAt, waiting, of, inbox,
+    byNewest, rail, density, nextDensity, startCollapsed, peek };
   if (typeof module === 'object' && module.exports) module.exports = api; else root.Turn = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

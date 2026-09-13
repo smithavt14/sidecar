@@ -22,7 +22,7 @@ No build step. Twenty files carry the whole tool:
 | `public/index.html` | The entire frontend: rendering, contenteditable editor, directory panel, review rail. |
 | `public/navsort.js` | The directory panel's ordering. Pure list in/out; no DOM, no dependency. |
 | `public/doclink.js` | Does a link in a document open IN sidecar, and which document. Pure string in/out. |
-| `public/turn.js` | Whose turn is it: the panel's badges and the inbox. Pure review in, counts + items out; `server.js` requires it too. |
+| `public/turn.js` | Whose turn is it: the panel's badges, the inbox, the rail's resting shape and its density. Pure review in, counts + items out; `server.js` requires it too. |
 | `public/anchor.js` | The ONE content-anchor matcher, loaded by both the browser and Node. |
 | `public/stability.js` | What the rail shows while the document is rewritten under it: freeze, last known position, orphan grace. Pure; the clock is passed in. |
 | `public/serialize.js` | The tight-diff serialize/reindex round-trip, shared with the Node tests. |
@@ -171,6 +171,52 @@ Auto-migrating an anchor across a diff was considered and refused; `annotateOrph
 silent re-anchoring picks the wrong target. Nothing here re-anchors anything. It buys the honest
 answer a few seconds so it can be delivered in place instead of somewhere else.
 
+## Three densities, and a mark that stopped shouting
+
+The rail drew one kind of card, so a document under review wore every thread at full height whether or
+not any of them wanted reading. Google Docs' 2024 redesign gives a comment three densities and this is
+that idea, in sidecar's terms. **`public/turn.js` owns both halves** (`Turn.density`, `Turn.nextDensity`,
+`Turn.startCollapsed`), beside the `waiting` rule they are built from.
+
+- **full**: every card a full card, which is what the rail has always drawn.
+- **compact**: the default. A thread whose next move is the HUMAN's stays full; everything else rests
+  as a pill level with its anchor: the provenance dot, one mono word for the kind, the reply count, and
+  the last line said on it as a hover preview. Nothing else.
+- **hidden**: no cards, and no anchor marks in the prose. The track rests at the same 12px hairline the
+  bare state uses, so the draft reads straight through.
+
+**Collapsed is the same rule the panel's badge already runs**, which is the point of putting it in
+`turn.js`: a card is full exactly when the badge would have counted it, and the two cannot drift because
+there is one function under both. Two items are added by hand and each is a real decision. **A flag is
+always full**, since it is the one item written to be looked at. **An orphan is always full**, because the
+-1 rank exists to put a broken anchor where it will be seen and folding it to a pill in the same breath
+would undo that. Everything settled is collapsed, which is every card on the archived tab.
+
+The control is an icon at the right end of the rail's own tab bar, persisted as `sc:railDensity`. One
+preference for the tool rather than one per document, the same reasoning the asset's zoom carries. A
+manual expand or fold is held per item id **for the page's lifetime only** and `resetDocState` clears it:
+which threads a reader opened while working through one document says nothing about the next, and an item
+id is unique only within one review.
+
+**Hidden has one way back per viewport, on purpose.** On desktop the tab bar is inside the hairline, so
+the header's *show review panel* is it, and `toggleRail` sets the density back to compact rather than
+un-hiding an empty rail. Below 781px that header button is already gone and the rail is a sheet whose tab
+bar is still on screen, so the control cycles it back itself.
+
+A collapsed card measures about 23px, so **more cards sit level with their own anchors** instead of being
+pushed down by a tall neighbour: `dockCards` is unchanged, it just has less height to step over. The
+clip-and-*show more* pass is skipped for a pill, which has no body to clip.
+
+**The anchor mark is a wash now, not a rule.** `#ffeb00` as a 2px solid underline was the highest-energy
+element on a near-monochrome page and it sat under prose, inside the reading column; Bear's red and iA's
+blue are watermarks (a cursor, a link) and neither draws a line under a sentence. So the colour drops to
+`--anchor-wash` (yellow, the agent's) or `--anchor-wash-mine` (ink-tinted, yours), matching the dot on the
+card, and the **underline becomes the hover state**, over the span or over its card in the rail, which
+is what puts `.lit` on the mark. The dark palette retunes the alpha rather than reusing it, since yellow
+at 30% over a near-black ground glows. The border stays declared at rest and transparent, for the reason
+it was a border in the first place: a border on an inline box does not enter the line box, and a mark that
+added a pixel would reflow the paragraph the moment a comment landed on it.
+
 ## The folder says what is still waiting on you
 
 A badge on a panel row counts the items on that document whose next move is the HUMAN's: a live comment
@@ -273,8 +319,9 @@ hover title in the UI.
 - Comments explain *why*, especially where the code looks odd — most of them record a real incident.
   Keep that when you change the surrounding code; delete them when the reason stops being true.
 - Layout preferences (each panel's width, whether it is collapsed, whether the review rail's width was
-  set by hand rather than filled, an asset's zoom, the directory panel's sort one key per folder, and
-  the theme) persist in `localStorage` under an `sc:` prefix, through the wrapped `uiStore`. Safari in private mode throws
+  set by hand rather than filled, how dense the rail draws its cards, an asset's zoom, the directory
+  panel's sort one key per folder, and the theme) persist in `localStorage` under an `sc:` prefix,
+  through the wrapped `uiStore`. Safari in private mode throws
   on `setItem`, and nothing about a preference is worth an exception on the path that renders the
   review. Document and review state never go there; those are files.
 - The shell is the panel fixed to the window, the document inset past it, and the review rail taking

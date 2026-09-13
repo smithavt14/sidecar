@@ -2720,6 +2720,103 @@ test('the rail rests bare on the counts a real empty review produces', () => {
   assert.equal(Turn.rail(none.open, empty.items.length - none.open), 'bare');
 });
 
+// ---------- the rail's density, and which cards rest collapsed (Turn.density / startCollapsed) ----------
+// Google Docs gives a comment three densities and sidecar had one. The rule for which cards fold is the
+// SAME `waiting` rule the panel's badge runs, so a card is full exactly when the badge would have
+// counted it, and the two cannot drift because there is one function under both.
+
+test('a stored density that is not one of the three reads as compact', () => {
+  // The stored value comes back through localStorage, which a human can edit and an older build may
+  // have written. Anything unrecognised must not leave the rail in a state no control can name.
+  for (const raw of ['', null, undefined, 'dense', 'HIDDEN', '__proto__', 'constructor']) {
+    assert.equal(Turn.density(raw), 'compact', JSON.stringify(raw));
+  }
+  for (const d of Turn.DENSITIES) assert.equal(Turn.density(d), d, d);
+  assert.equal(Turn.DENSITY_REST, 'compact', 'and compact is where an untouched install rests');
+});
+
+test('the density cycle walks all three and comes home', () => {
+  assert.deepEqual(Turn.DENSITIES, ['full', 'compact', 'hidden'], 'densest first, the order the icon steps');
+  const walk = [];
+  let d = Turn.DENSITY_REST;
+  for (let i = 0; i < 3; i++) { d = Turn.nextDensity(d); walk.push(d); }
+  assert.deepEqual(walk, ['hidden', 'full', 'compact'], 'three clicks from compact land back on compact');
+  assert.equal(Turn.nextDensity('nonsense'), 'hidden', 'a junk value cycles as if it were the default');
+});
+
+test('at full nothing folds, at hidden there are no cards to fold', () => {
+  const items = [comment('c1', 'open', msg(HUMAN, 'over to you')), comment('c2', 'resolved', msg(AGENT, 'done')),
+                 sug('s1', 'pending')];
+  for (const d of ['full', 'hidden']) {
+    for (const it of items) assert.equal(Turn.startCollapsed(it, AGENT, d), false, `${it.id} at ${d}`);
+  }
+});
+
+test('a thread waiting on the AGENT rests collapsed; one waiting on the human stays full', () => {
+  // The human said the last word and the ball is in claude's court: there is nothing to do on this card
+  // and nothing to read on it that the human did not just write.
+  const mine = comment('c1', 'open', msg(AGENT, 'a question'), msg(HUMAN, 'answered'));
+  assert.equal(Turn.startCollapsed(mine, AGENT, 'compact'), true);
+  // Claude asked and nobody answered, so the card is the question.
+  const theirs = comment('c2', 'open', msg(AGENT, 'a question'));
+  assert.equal(Turn.startCollapsed(theirs, AGENT, 'compact'), false);
+  // The same split the badge makes, asserted against it rather than restated.
+  assert.equal(Turn.waiting(theirs, AGENT), true);
+  assert.equal(Turn.waiting(mine, AGENT), false);
+});
+
+test('a pending suggestion and a flag are always full; a decided suggestion is not', () => {
+  assert.equal(Turn.startCollapsed(sug('s1', 'pending'), AGENT, 'compact'), false, 'only the human can decide it');
+  assert.equal(Turn.startCollapsed(sug('s2', 'accepted'), AGENT, 'compact'), true, 'decided, so it is a record');
+  assert.equal(Turn.startCollapsed(sug('s3', 'rejected'), AGENT, 'compact'), true);
+  // A flag is the one item written to be looked at, whoever spoke last on it.
+  const flag = { ...comment('f1', 'open', msg(HUMAN, 'look here')), flag: true };
+  assert.equal(Turn.startCollapsed(flag, AGENT, 'compact'), false);
+});
+
+test('an orphan stays full, which is the whole point of the -1 rank', () => {
+  // index.html floats an orphaned card to the top of the rail so a broken anchor is seen. Folding it to
+  // a pill in the same breath would undo that, so the orphan is the one live card the density leaves
+  // alone whoever spoke last on it.
+  assert.equal(Turn.startCollapsed(comment('c1', 'orphaned', msg(HUMAN, 'said my piece')), AGENT, 'compact'), false);
+  assert.equal(Turn.startCollapsed(sug('s1', 'orphaned'), AGENT, 'compact'), false);
+});
+
+test('everything settled rests collapsed, which is every card on the archived tab', () => {
+  for (const st of ['resolved', 'accepted', 'rejected']) {
+    assert.equal(Turn.startCollapsed(comment('c1', st, msg(AGENT, 'x')), AGENT, 'compact'), true, st);
+    assert.ok(!Turn.isLive({ status: st }), st + ' is not live');
+  }
+});
+
+test('the rail at compact folds exactly the cards the badge does not count', () => {
+  // Wired end to end over one review rather than asserted per item: what stays full is what `Turn.of`
+  // reports as the human's turn, plus the two the rule adds by hand (a flag, an orphan).
+  const review = { schema: 1, items: [
+    comment('c1', 'open', msg(AGENT, 'unanswered')),              // claude's move on the human → full
+    comment('c2', 'open', msg(AGENT, 'q'), msg(HUMAN, 'a')),      // the human answered → collapsed
+    sug('s1', 'pending'),                                          // awaiting accept/reject → full
+    comment('c3', 'resolved', msg(AGENT, 'settled')),              // archived → collapsed
+  ] };
+  const full = review.items.filter(it => !Turn.startCollapsed(it, AGENT, 'compact')).map(i => i.id);
+  const badged = Turn.of(review, AGENT).items.filter(i => i.turn).map(i => i.id);
+  assert.deepEqual(full, ['c1', 's1']);
+  assert.deepEqual(full, badged, 'the two answers are the one rule');
+});
+
+test('the collapsed pill previews the last line said, and never an empty one', () => {
+  assert.equal(Turn.peek(comment('c1', 'open', msg(AGENT, 'first'), msg(HUMAN, 'last word'))), 'last word');
+  // Multi-line bodies are common (an agent writes markdown); the pill gets the first line with content.
+  assert.equal(Turn.peek(comment('c2', 'open', msg(AGENT, '\n\n  the heading\nand the body'))), 'the heading');
+  // A suggestion nobody has replied to has no message at all: its note, then the span it is about.
+  assert.equal(Turn.peek({ ...sug('s1', 'pending'), note: 'tighter' }), 'tighter');
+  assert.equal(Turn.peek(sug('s2', 'pending')), 'the s2 span');
+  // And it is cut to the same length the inbox cuts a quote to, so one pill cannot be a paragraph.
+  const long = Turn.peek(comment('c3', 'open', msg(AGENT, 'x'.repeat(400))));
+  assert.equal(long.length, Turn.QUOTE_MAX);
+  assert.ok(long.endsWith('…'));
+});
+
 // ---------- what the page shows at rest (public/index.html) ----------
 // Asserted against the file the same way the sandbox flag is: these are single literal strings whose
 // absence IS the feature, and each one was on screen on a clean document before anybody acted.
@@ -4898,6 +4995,98 @@ test('no colour is hard-coded outside the palette', () => {
   const found = rest.match(/#[0-9a-f]{3,8}\b[^;,)]*|rgba?\([0-9.,\s]+\)/gi) || [];
   const stray = found.filter(f => !ALLOWED.includes(f.trim()));
   assert.deepEqual(stray, [], 'every colour in a rule comes from a token');
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+   THE ANCHOR MARK, AND WHERE THE RAIL'S DENSITY IS KEPT
+   The mark rests as a wash and takes its underline back on hover; the density
+   is a preference like the two panel widths and goes through the same store.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+test('an anchored span is a wash at rest and takes its underline back on hover', () => {
+  // #ffeb00 as a 2px rule under prose was the highest-energy element on a near-monochrome page. What
+  // replaced it must still cost the line box nothing, so the border stays (transparent) rather than
+  // being added on hover, and the padding stays at zero.
+  const rest = STYLE.match(/\n {2}mark\.anchor \{([\s\S]*?)\}/);
+  assert.ok(rest, 'the mark rule is still findable');
+  assert.match(rest[1], /background:var\(--anchor-wash\)/, 'the wash is the resting state');
+  assert.match(rest[1], /border-bottom:2px solid transparent/, 'and the underline rests transparent');
+  assert.match(rest[1], /padding:0/, 'no padding, or the paragraph reflows when a comment lands');
+  assert.match(rest[1], /color:inherit/, "and the UA's own mark colour stays off");
+  assert.doesNotMatch(rest[1], /border-bottom:2px solid var\(--yellow\)/, 'the solid rule is gone');
+  // Both ends light it: the pointer over the span, and the pointer over its card (which sets .lit).
+  assert.match(STYLE, /mark\.anchor:hover, mark\.anchor\.lit \{ border-bottom-color:var\(--yellow\); \}/);
+  assert.match(STYLE, /mark\.anchor\.mine:hover, mark\.anchor\.mine\.lit \{ border-bottom-color:var\(--ink\); \}/);
+  // The jump cue is unchanged.
+  assert.match(STYLE, /mark\.anchor\.flash \{ background:var\(--flash-fill\)/);
+});
+
+test('the wash follows the dot convention and is retuned rather than reused in dark', () => {
+  // Yellow is the agent's in both themes, but a 30% yellow over a near-black ground glows; the dark
+  // palette carries its own alpha. The human's wash is an ink tint in light and a white one in dark,
+  // because a tint of the ink is invisible on a ground the ink is lighter than.
+  for (const k of ['--anchor-wash', '--anchor-wash-mine']) {
+    assert.ok(k in LIGHT && k in DARK_ATTR, k + ' is declared in both palettes');
+    assert.notEqual(LIGHT[k], DARK_ATTR[k], k + ' is retuned for the dark ground, not reused');
+  }
+  const alpha = (v) => Number(v.match(/([\d.]+)\)$/)[1]);
+  assert.match(LIGHT['--anchor-wash'], /^rgba\(255,235,0,/, "claude's wash is the agent's yellow");
+  assert.match(DARK_ATTR['--anchor-wash'], /^rgba\(255,235,0,/);
+  assert.ok(alpha(DARK_ATTR['--anchor-wash']) < alpha(LIGHT['--anchor-wash']), 'quieter on dark');
+  assert.ok(alpha(LIGHT['--anchor-wash']) <= 0.32, 'a wash, not a highlighter');
+  assert.match(LIGHT['--anchor-wash-mine'], /^rgba\(20,20,15,/, 'yours is ink-tinted');
+  assert.match(DARK_ATTR['--anchor-wash-mine'], /^rgba\(255,255,255,/, 'and inverts with the hairlines');
+});
+
+// The store, run with its own localStorage handed in, the same way the theme stamp below is, and for
+// the same reason: the private-mode throw is only exercisable that way.
+const UI_STORE = (() => {
+  const m = PAGE.match(/const uiStore = \{\n([\s\S]*?)\n\};/);
+  assert.ok(m, 'the one preference store is still in the page');
+  return new Function('localStorage', 'return {\n' + m[1] + '\n};');
+})();
+const storeOver = (backing) => UI_STORE({
+  getItem: (k) => (k in backing ? backing[k] : null),
+  setItem: (k, v) => { backing[k] = String(v); },
+});
+
+test('the density is stored under the sc: prefix, beside every other preference', () => {
+  const backing = {};
+  const store = storeOver(backing);
+  store.set('railDensity', 'hidden');
+  assert.deepEqual(backing, { 'sc:railDensity': 'hidden' }, 'one key, prefixed like railWidth and theme');
+  assert.equal(store.get('railDensity', ''), 'hidden', 'and it reads straight back');
+});
+
+test('a density round-trips through the store and the guard, junk and all', () => {
+  // The store returns strings and knows nothing about densities; Turn.density is the guard. Together
+  // they are what index.html runs at boot, so the pair is asserted rather than either half.
+  const backing = {};
+  const store = storeOver(backing);
+  const read = () => Turn.density(store.get('railDensity', ''));
+  assert.equal(read(), 'compact', 'an install that has never touched it rests at compact');
+  for (const d of Turn.DENSITIES) { store.set('railDensity', d); assert.equal(read(), d, d); }
+  store.set('railDensity', 'dense'); assert.equal(read(), 'compact', 'a value no control can name is the default');
+});
+
+test('a store that throws on every access still answers, and the rail still rests somewhere', () => {
+  // Safari in private mode throws on setItem while getItem keeps answering null. Nothing about a
+  // layout preference is worth an exception on the path that renders the review.
+  const store = UI_STORE({ getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); } });
+  assert.doesNotThrow(() => store.set('railDensity', 'hidden'));
+  assert.equal(store.get('railDensity', ''), '', 'the fallback comes back');
+  assert.equal(Turn.density(store.get('railDensity', '')), 'compact', 'so the rail rests at compact');
+});
+
+test('the page reads and writes the density through that store and that guard', () => {
+  assert.match(PAGE, /let railDensity = Turn\.density\(uiStore\.get\('railDensity', ''\)\);/,
+    'one read at boot, guarded');
+  assert.match(PAGE, /uiStore\.set\('railDensity', railDensity\);/, 'and the write is a mirror of it');
+  // Hidden takes the cues out of the prose as well as the cards out of the rail.
+  assert.match(PAGE, /const off = Turn\.density\(railDensity\) === 'hidden';/,
+    'markAnchors asks the same question');
+  assert.doesNotMatch(PAGE, /localStorage\.(get|set)Item\('sc:railDensity'/,
+    'nothing reaches storage around the store');
 });
 
 // The stamp itself. It is a bare IIFE over `localStorage` and `document`, so it can be run with both
