@@ -471,6 +471,47 @@ darker, and the shadows go darker and deeper, since a 5% black shadow says nothi
 One image needs help the tokens cannot give: `mark.svg` is an `<img>`, so its `currentColor` paints
 against its own document and is always black; dark mode inverts it with a filter.
 
+## Two scales, and the document is on neither
+
+The chrome carried **sixteen distinct font sizes and fourteen distinct corner radii** in one screen:
+8, 9, 9.5, 10, 10.5, 11, 11.5, 12, 12.5, 13, 13.5, 14, 14.5, 15, 16 and 22px, and corners running 2,
+3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 20, 22 and 99px. Every one had a comment arguing for it and most of
+the arguments were good. Together they gave the eye nothing to settle into, which is the failure a
+good local decision cannot see.
+
+Six type steps and three radii replace them, declared on `:root` beside the palette and exempt from
+the palette test the way `--doc-space-*` and `--measure` already are: a size is a size in both themes.
+
+| | | |
+|---|---|---|
+| `--t-1` 11px | mono meta, timestamps, counts, uppercase micro-labels | `--r-1` 4px |
+| `--t-2` 12px | small labels, chips, quoted spans, secondary rows | `--r-2` 8px |
+| `--t-3` 13px | buttons, tabs, card body, nav rows, inputs, menus | `--r-3` 12px |
+| `--t-4` 14px | chrome body, the toast, a file row's name | `--r-pill` 99px |
+| `--t-5` 16px | the wordmark, and the mobile form-field floor | |
+| `--t-6` 20px | the picker's heading | |
+
+**`--t-5` is load-bearing rather than decorative.** iOS Safari zooms into a focused field under 16px
+and does not zoom back, so the mobile block pins every input to that step; a test asserts a step
+reaches it.
+
+**The radii nest concentrically**, which is how to choose between them: a control inside a rounded
+container takes the container's radius less its padding. A button in the 8px view switcher is
+`--r-1`; a button in the 12px selection toolbar is `--r-2`. A dot keeps `50%`, which is a circle
+rather than a step on the scale.
+
+**The document is on its own scale and stays there.** Prose was tuned separately (16.5px body,
+28/21/17 headings, `--doc-space-*`) against a measure and a line height the chrome has nothing to do
+with, so every `#doc` rule is exempt from the type scan. The radius scan does cover `#doc`, because a
+code block, an image and the asset frame are boxes rather than prose and a corner is a corner.
+
+Four tests hold it: every chrome `font-size` and `font:` shorthand names a step, every
+`border-radius` anywhere names a radius, the chrome rests on three line heights (1, 1.45, 1.6) and
+three weights (400, 500, 600), and every uppercase micro-label tracks through `--track-caps`. Two
+literals survive the type scan and both are named in it with a reason: `font-size:0` hides the badge
+number on the folder strip's 7px dot, and the docs link's arrow is `.82em` of whatever word it
+follows.
+
 ## Attached images
 
 An attachment is not a schema field. A pasted screenshot becomes a file in `<doc>.sidecar.assets/` and a

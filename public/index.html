@@ -51,7 +51,13 @@
 
      Two themes, one set of names. Every colour in this file comes from a token, and the dark palette
      redeclares the same tokens rather than adding a parallel set of rules — so a new rule is written
-     once and follows the theme for free. A test scans the stylesheet for a hex that escaped. */
+     once and follows the theme for free. A test scans the stylesheet for a hex that escaped.
+
+     Sizes work the same way. The chrome reads six type steps (--t-1 … --t-6), three radii plus the
+     pill (--r-1 … --r-3, --r-pill) and one caps tracking (--track-caps), all declared on :root below
+     and all exempt from the palette test for the reason --doc-space-* already is: a size is a size in
+     both themes. The document is on its own scale and stays there. Tests scan this file for a
+     font-size, a `font:` shorthand or a border-radius that named a number instead of a step. */
   @font-face { font-family:'Geist'; font-weight:100 900; font-display:swap;
     src:url('/fonts/geist-latin.woff2') format('woff2'), url('/fonts/geist-latin-ext.woff2') format('woff2'); }
   :root {
@@ -142,6 +148,46 @@
        of three the header cycles; the inline script in the head sets it on <html> before the first
        paint, and this is what a browser with nothing stored reads. */
     --measure:33em;
+    /* ---------- the chrome's type scale ----------
+       Six steps for the header, the folder panel, the rail, the cards, the toolbar, the popover, the
+       menus, the toasts, the sheet and the picker. The audit that produced it counted SIXTEEN sizes
+       across one screen (8px to 22px, six of them on a half pixel), each justified in a comment of
+       its own and none of them part of a series. A reader's eye settles into a ladder it can predict;
+       it cannot settle into sixteen one-off decisions, however good each one was.
+       The document is NOT on this scale and must not be put on it. Prose was tuned separately (16.5px
+       body, 28/21/17 headings, --doc-space-*), against a measure and a line height this chrome has
+       nothing to do with. Two scales, one per surface, is the point.
+       Each step has a job, which is how six stayed six:
+         --t-1  mono meta, timestamps, counts, uppercase micro-labels
+         --t-2  small labels, chips, quoted spans, secondary rows
+         --t-3  the workhorse: buttons, tabs, card body, nav rows, inputs, menus
+         --t-4  chrome body, the toast, a file row's name
+         --t-5  the wordmark, and the mobile form-field floor (iOS Safari zooms a field below 16px
+                and never zooms back, so this step is load-bearing rather than decorative)
+         --t-6  the picker's heading, the one line of chrome that is a title */
+    --t-1:11px;
+    --t-2:12px;
+    --t-3:13px;
+    --t-4:14px;
+    --t-5:16px;
+    --t-6:20px;
+    /* ---------- and its radii ----------
+       Fourteen distinct corners (2 through 22px, the 99px pill included) became three and the pill. They nest
+       concentrically, which is the rule for deciding between them: a control inside a rounded
+       container takes the container's radius less its padding, so a button in the 8px view switcher
+       is --r-1 and a button in the 12px selection toolbar is --r-2.
+         --r-1  inline code, small chips, controls inside a rounded container
+         --r-2  buttons, inputs, nav rows, menus, message bubbles, wells
+         --r-3  raised surfaces: a card, the popover, the toolbar, the toast, the sheet's top corners
+         --r-pill  a true pill or a capsule badge; a dot stays `50%`, which is a circle rather than a
+                   step on this scale */
+    --r-1:4px;
+    --r-2:8px;
+    --r-3:12px;
+    --r-pill:99px;
+    /* One tracking for every uppercase micro-label in the tool. It ran from .03em to .13em across
+       six labels that all do the same job. */
+    --track-caps:.06em;
     color-scheme:light;
   }
   /* ---------- the dark palette ----------
@@ -266,7 +312,7 @@
     color-scheme:dark;
   }
   * { box-sizing: border-box; }
-  body { margin:0; font:15px/1.6 'Geist', ui-sans-serif, system-ui, sans-serif; background:var(--bg);
+  body { margin:0; font:var(--t-4)/1.6 'Geist', ui-sans-serif, system-ui, sans-serif; background:var(--bg);
     color:var(--fg); -webkit-font-smoothing:antialiased; }
   ::selection { background:var(--yellow); color:var(--on-yellow); }
   /* The shell: the folder panel is a fixed column down the left of the WINDOW and everything else is
@@ -305,12 +351,12 @@
   }
   :root[data-theme="dark"] .hbrand .mark,
   :root[data-theme="dark"] .nav-brand .mark { filter:invert(1) brightness(.91); }
-  .hbrand .wm, .nav-brand .wm { color:var(--ink); font:600 15px 'Geist', ui-sans-serif, sans-serif; letter-spacing:-.02em; }
+  .hbrand .wm, .nav-brand .wm { color:var(--ink); font:600 var(--t-5) 'Geist', ui-sans-serif, sans-serif; letter-spacing:-.02em; }
   .spacer { flex:1; }
-  #status { font-size:12.5px; color:var(--faint); min-width:64px; text-align:right; }
+  #status { font-size:var(--t-2); color:var(--faint); min-width:64px; text-align:right; }
   /* buttons — ink primary, thin-outline secondary, text ghost. Depth, not weight. */
-  button { font:600 13px 'Geist', ui-sans-serif, sans-serif; padding:8px 16px; border:1px solid var(--line-strong);
-    border-radius:9px; background:var(--bg); color:var(--fg); cursor:pointer;
+  button { font:600 var(--t-3) 'Geist', ui-sans-serif, sans-serif; padding:8px 16px; border:1px solid var(--line-strong);
+    border-radius:var(--r-2); background:var(--bg); color:var(--fg); cursor:pointer;
     transition:background .15s ease, border-color .15s ease, box-shadow .15s ease,
                transform .2s var(--spring-press); }
   button:hover { background:var(--fill); }
@@ -394,8 +440,8 @@
      what it counts is the agent's notes arriving while the panel was shut. */
   #railToggle { position:relative; }
   #railToggle .n { position:absolute; top:1px; right:-2px; min-width:14px; height:14px; padding:0 3px;
-    border-radius:99px; background:var(--yellow); color:var(--on-yellow); box-shadow:0 0 0 1.5px var(--bg);
-    font:600 10px/14px 'Geist', ui-sans-serif, sans-serif; text-align:center; }
+    border-radius:var(--r-pill); background:var(--yellow); color:var(--on-yellow); box-shadow:0 0 0 1.5px var(--bg);
+    font:600 var(--t-1)/14px 'Geist', ui-sans-serif, sans-serif; text-align:center; }
   #railToggle .n:empty { display:none; }
   /* ---------- reading mode ----------
      Two axes, and this is the second one. Typewriter scrolling answers "where does the active line
@@ -467,11 +513,11 @@
   .nav-brand { display:flex; align-items:center; gap:8px; height:52px; flex:none; padding:0 10px 0 14px;
     border-bottom:1px solid var(--line); }
   .nav-brand .home { display:flex; align-items:center; gap:8px; min-width:0; text-decoration:none;
-    color:inherit; border-radius:8px; padding:3px 5px; margin-left:-5px; transition:background .15s ease; }
+    color:inherit; border-radius:var(--r-2); padding:3px 5px; margin-left:-5px; transition:background .15s ease; }
   .nav-brand .home:hover { background:var(--shell-row); }
   /* 28px square, the trigger's size in GD's shell, and the same quiet ink so it reads as chrome. */
   #navCollapse, #navExpand { flex:none; margin-left:auto; width:28px; height:28px; padding:0;
-    display:flex; align-items:center; justify-content:center; color:var(--faint); border-radius:7px; }
+    display:flex; align-items:center; justify-content:center; color:var(--faint); border-radius:var(--r-2); }
   #navCollapse:hover, #navExpand:hover { color:var(--ink); background:var(--shell-row); }
   /* Everything under the brand row that is still chrome: the path, then the list's label and its
      ordering control. Gone when the panel is a strip. */
@@ -491,9 +537,9 @@
     /* a MASK: only the alpha is read, so the colour is arbitrary and the same in both themes */
     -webkit-mask-image:linear-gradient(90deg, transparent 0, #000 22px);
     mask-image:linear-gradient(90deg, transparent 0, #000 22px);
-    font-family:'Geist Mono', ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10.5px; line-height:1.6; }
+    font-family:'Geist Mono', ui-monospace,SFMono-Regular,Menlo,monospace; font-size:var(--t-1); line-height:1.6; }
   #navCrumb button { flex:none; border:none; background:none; box-shadow:none;
-    padding:1px 3px; border-radius:5px; font:inherit; color:var(--faint); white-space:nowrap; }
+    padding:1px 3px; border-radius:var(--r-1); font:inherit; color:var(--faint); white-space:nowrap; }
   #navCrumb button:hover { background:var(--shell-row); color:var(--fg); }
   #navCrumb button.here { color:var(--ink-2); font-weight:600; }
   #navCrumb .sep { flex:none; color:var(--fainter); }
@@ -512,25 +558,25 @@
   #navSort { position:relative; flex:none; }
   #navSort .sortbtn { display:flex; align-items:center; gap:5px; max-width:112px;
     border:1px solid var(--line-2); background:var(--card); box-shadow:none;
-    color:var(--fg); font:500 11.5px 'Geist', ui-sans-serif, sans-serif; padding:2px 6px; border-radius:7px; }
+    color:var(--fg); font:500 var(--t-2) 'Geist', ui-sans-serif, sans-serif; padding:2px 6px; border-radius:var(--r-2); }
   #navSort .sortbtn:hover { background:var(--fill); border-color:var(--line-strong); color:var(--ink); }
   #navSort .sortbtn #navSortLabel { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  #navSort .sortbtn .car { flex:none; font-size:8px; opacity:.5; }
+  #navSort .sortbtn .car { flex:none; font-size:var(--t-1); opacity:.5; }
   #navSort .menu { position:absolute; top:calc(100% + 5px); right:0; left:auto; min-width:132px; z-index:6;
-    background:var(--card); border:1px solid var(--line-2); border-radius:10px; box-shadow:var(--shadow);
+    background:var(--card); border:1px solid var(--line-2); border-radius:var(--r-2); box-shadow:var(--shadow);
     padding:4px; display:flex; flex-direction:column; gap:1px; }
   #navSort .menu[hidden] { display:none; }
   #navSort .menu button { display:block; width:100%; text-align:left; white-space:nowrap; border:none;
-    background:none; box-shadow:none; padding:7px 9px; border-radius:7px; color:var(--fg);
-    font:500 12.5px 'Geist', ui-sans-serif, sans-serif; }
+    background:none; box-shadow:none; padding:7px 9px; border-radius:var(--r-1); color:var(--fg);
+    font:500 var(--t-3) 'Geist', ui-sans-serif, sans-serif; }
   #navSort .menu button:hover { background:var(--fill); }
   #navSort .menu button[aria-checked="true"] { font-weight:600; color:var(--ink); background:var(--fill); }
   .nav-list { display:flex; flex-direction:column; gap:1px; padding:0 8px; }
-  /* An icon-led row, GD's rail item measured across: 13.5px label, a 16px glyph, 2.5px of horizontal
-     padding on a 6px radius. Its 7px of vertical padding lands a 30px row, compact enough that a
-     project folder is one glance. */
-  .nav-list a { display:flex; align-items:center; gap:8px; min-width:0; padding:6px 9px; border-radius:7px;
-    text-decoration:none; color:var(--fg); font-size:13.5px; line-height:1.35; }
+  /* An icon-led row, GD's rail item measured across: the --t-3 label, a 15px glyph, 9px of horizontal
+     padding on --r-2. Its 6px of vertical padding lands a 31px row, compact enough that a project
+     folder is one glance. */
+  .nav-list a { display:flex; align-items:center; gap:8px; min-width:0; padding:6px 9px; border-radius:var(--r-2);
+    text-decoration:none; color:var(--fg); font-size:var(--t-3); line-height:1.45; }
   .nav-list a .ic { flex:none; width:15px; height:15px; display:block; color:var(--faint); }
   .nav-list a:hover { background:var(--shell-row); color:var(--ink); }
   .nav-list a:hover .ic { color:var(--muted); }
@@ -542,10 +588,10 @@
   /* The row's right edge, kept as a slot rather than as whatever happens to be there: the sort's
      timestamp today, the your-turn badge next. GD's rail counts sit in exactly this position. */
   .nav-list a .meta { flex:none; margin-left:auto; display:flex; align-items:center; gap:6px;
-    font-family:'Geist Mono', ui-monospace, monospace; font-size:10.5px; font-weight:400; color:var(--faint); }
+    font-family:'Geist Mono', ui-monospace, monospace; font-size:var(--t-1); font-weight:400; color:var(--faint); }
   .nav-list a .meta:empty { display:none; }
   .nav-list a .ini { display:none; }
-  .nav-empty { padding:10px; margin:0 8px; color:var(--muted); font-size:12.5px; line-height:1.5; }
+  .nav-empty { padding:10px; margin:0 8px; color:var(--muted); font-size:var(--t-2); line-height:1.45; }
   /* ---------- the your-turn badge ----------
      The count of items on a document that are waiting on the HUMAN (public/turn.js). Yellow, because
      yellow is the agent everywhere in this tool and a badge here means the agent is holding something
@@ -554,25 +600,25 @@
      folder look like a to-do list.
      The same pill as #railToggle's unread count, which is the other place a number means "look here". */
   .nav-list a .meta .nb { flex:none; }
-  .nav-list a .meta .nb.turn { min-width:16px; height:16px; padding:0 4px; border-radius:99px;
+  .nav-list a .meta .nb.turn { min-width:16px; height:16px; padding:0 4px; border-radius:var(--r-pill);
     background:var(--yellow); color:var(--on-yellow); box-shadow:0 0 0 1px var(--yellow-ring);
-    font:600 10px/16px 'Geist', ui-sans-serif, sans-serif; text-align:center; }
+    font:600 var(--t-1)/16px 'Geist', ui-sans-serif, sans-serif; text-align:center; }
   .nav-list a .meta .nb.dot { width:6px; height:6px; margin:0 5px; border-radius:50%;
     background:var(--fainter); }
   .nav-list a.on .meta .nb.dot { background:var(--muted); }
   /* ---------- files / inbox ----------
      One choice, two states, so it is drawn as one control: a recessed track with the chosen half
      raised onto the page's own ground. GD's segmented switch, at the panel's scale. */
-  .nav-tabs { display:flex; gap:2px; margin:0 5px 2px; padding:2px; border-radius:9px;
+  .nav-tabs { display:flex; gap:2px; margin:0 5px 2px; padding:2px; border-radius:var(--r-2);
     background:var(--shell-row); }
   .nav-tabs button { flex:1; display:flex; align-items:center; justify-content:center; gap:5px;
-    border:none; background:none; box-shadow:none; border-radius:7px; padding:4px 8px; color:var(--muted);
-    font:500 12px 'Geist', ui-sans-serif, sans-serif; }
+    border:none; background:none; box-shadow:none; border-radius:var(--r-1); padding:4px 8px; color:var(--muted);
+    font:500 var(--t-2) 'Geist', ui-sans-serif, sans-serif; }
   .nav-tabs button:hover { color:var(--ink); }
   .nav-tabs button[aria-selected="true"] { background:var(--card); color:var(--ink); font-weight:600;
     box-shadow:var(--shadow-raise); }
-  .nav-tabs .n { min-width:15px; height:15px; padding:0 4px; border-radius:99px; background:var(--yellow);
-    color:var(--on-yellow); font:600 9.5px/15px 'Geist', ui-sans-serif, sans-serif; text-align:center; }
+  .nav-tabs .n { min-width:15px; height:15px; padding:0 4px; border-radius:var(--r-pill); background:var(--yellow);
+    color:var(--on-yellow); font:600 var(--t-1)/15px 'Geist', ui-sans-serif, sans-serif; text-align:center; }
   .nav-tabs .n:empty { display:none; }
   /* ---------- the inbox ----------
      Every open item in the folder, grouped under the document it is on. A row has to be recognisable
@@ -583,14 +629,14 @@
   .nav-inbox[hidden] { display:none; }
   .ib-group { margin-bottom:9px; }
   .ib-doc { display:flex; align-items:center; gap:6px; width:100%; padding:4px 9px; border:none;
-    background:none; box-shadow:none; border-radius:7px; color:var(--muted); text-align:left;
-    font:700 9.5px 'Geist', ui-sans-serif, sans-serif; letter-spacing:.13em; text-transform:uppercase; }
+    background:none; box-shadow:none; border-radius:var(--r-2); color:var(--muted); text-align:left;
+    font:600 var(--t-1) 'Geist', ui-sans-serif, sans-serif; letter-spacing:var(--track-caps); text-transform:uppercase; }
   .ib-doc:hover { background:var(--shell-row); color:var(--ink); }
   .ib-doc .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .ib-doc .n { flex:none; margin-left:auto; letter-spacing:0; font-size:10px; color:var(--faint); }
+  .ib-doc .n { flex:none; margin-left:auto; letter-spacing:0; font-size:var(--t-1); color:var(--faint); }
   .ib-item { display:block; width:100%; text-align:left; border:none; box-shadow:none;
-    background:var(--card); border:1px solid var(--line); border-radius:8px; padding:6px 9px 7px;
-    margin-top:2px; color:var(--fg); font:400 12.5px/1.45 'Geist', ui-sans-serif, sans-serif; }
+    background:var(--card); border:1px solid var(--line); border-radius:var(--r-2); padding:6px 9px 7px;
+    margin-top:2px; color:var(--fg); font:400 var(--t-2)/1.45 'Geist', ui-sans-serif, sans-serif; }
   .ib-item:hover { border-color:var(--line-strong); }
   /* Your turn reads as the agent's yellow, same as the badge and the same as a card's chip. Everything
      else stays on the page's ground: open, and not yours to move.
@@ -598,16 +644,16 @@
      FLEX row — every yellow inbox row laid its quote out beside its header until this was renamed. */
   .ib-item.ib-turn { background:var(--chip); border-color:var(--yellow-ring); }
   .ib-item .hd { display:flex; align-items:center; gap:6px; margin-bottom:3px; }
-  .ib-item .who { flex:none; font-weight:600; font-size:11.5px; color:var(--ink); }
-  .ib-item .kind { flex:none; font-size:9.5px; font-weight:600; letter-spacing:.06em;
+  .ib-item .who { flex:none; font-weight:600; font-size:var(--t-2); color:var(--ink); }
+  .ib-item .kind { flex:none; font-size:var(--t-1); font-weight:600; letter-spacing:var(--track-caps);
     text-transform:uppercase; color:var(--muted); }
   .ib-item .when { flex:none; margin-left:auto; font-family:'Geist Mono', ui-monospace, monospace;
-    font-size:10px; color:var(--faint); }
+    font-size:var(--t-1); color:var(--faint); }
   /* Two lines of the quote and then a cut: enough to recognise the sentence, never enough for one
      item to own the panel. */
   .ib-item .q { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
-    color:var(--muted); font-size:12px; line-height:1.4; }
-  .ib-empty { padding:14px 10px; margin:0 8px; color:var(--muted); font-size:12.5px; line-height:1.55; }
+    color:var(--muted); font-size:var(--t-2); line-height:1.45; }
+  .ib-empty { padding:14px 10px; margin:0 8px; color:var(--muted); font-size:var(--t-2); line-height:1.45; }
   .ib-empty b { display:block; color:var(--ink); font-weight:600; margin-bottom:3px; }
   /* the handle between the panel and the document — the rail's grip mirrored, same 11px of grab area
      straddling the hairline, same reason it is placed over the boundary rather than given a track.
@@ -641,7 +687,7 @@
        decoration; this one still switches documents, and the title carries the name. */
     body.nav-collapsed .nav-list a { position:relative; justify-content:center; width:32px; height:32px; padding:0; gap:0; }
     body.nav-collapsed .nav-list a .nm, body.nav-collapsed .nav-list a .ic { display:none; }
-    body.nav-collapsed .nav-list a .ini { display:block; font-size:12.5px; text-transform:uppercase; }
+    body.nav-collapsed .nav-list a .ini { display:block; font-size:var(--t-2); text-transform:uppercase; }
     body.nav-collapsed .nav-empty { display:none; }
     /* The badge SURVIVES the collapse, as a corner dot. Minimizing the folder is a request for less
        chrome, not a request to stop being told which document is waiting on you — and a strip that
@@ -663,11 +709,11 @@
        on the inbox. The badge is the pill the rail's toggle uses, the other place a number here means
        "look". */
     body.nav-collapsed #navStripInbox { position:relative; display:flex; align-self:center;
-      width:32px; height:32px; margin:8px 0 0; padding:0; color:var(--faint); border-radius:7px; }
+      width:32px; height:32px; margin:8px 0 0; padding:0; color:var(--faint); border-radius:var(--r-2); }
     body.nav-collapsed #navStripInbox:hover { color:var(--ink); background:var(--shell-row); }
     body.nav-collapsed #navStripInbox .n { position:absolute; top:-1px; right:-3px; min-width:14px;
-      height:14px; padding:0 3px; border-radius:99px; background:var(--yellow); color:var(--chip-fg);
-      box-shadow:0 0 0 1.5px var(--shell); font:600 10px/14px 'Geist', ui-sans-serif, sans-serif;
+      height:14px; padding:0 3px; border-radius:var(--r-pill); background:var(--yellow); color:var(--chip-fg);
+      box-shadow:0 0 0 1.5px var(--shell); font:600 var(--t-1)/14px 'Geist', ui-sans-serif, sans-serif;
       text-align:center; }
     body.nav-collapsed #navStripInbox .n:empty { display:none; }
   }
@@ -677,7 +723,7 @@
      header says which document. The FOLDERS are what give way when the row is tight, the filename
      never — a path ellipsised from the right hides the one word that names what is open. */
   #pwd { display:flex; align-items:baseline; min-width:0; flex:0 1 auto;
-    font-family:'Geist Mono', ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; letter-spacing:0; }
+    font-family:'Geist Mono', ui-monospace,SFMono-Regular,Menlo,monospace; font-size:var(--t-2); letter-spacing:0; }
   #pwd .dir { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--faint); }
   #pwd .file { flex:none; color:var(--ink); font-weight:600; }
   #pwd:empty { display:none; }
@@ -731,9 +777,9 @@
   #doc li > p { margin:0 0 var(--doc-space-1); }
   #doc li > :last-child { margin-bottom:0; }
   #doc hr { height:0; border:0; border-top:1px solid var(--line); margin:var(--doc-space-3) 0; }
-  #doc pre { background:var(--fill); padding:13px 16px; border-radius:10px; overflow-x:auto;
+  #doc pre { background:var(--fill); padding:13px 16px; border-radius:var(--r-2); overflow-x:auto;
     font:14px/1.6 'Geist Mono', ui-monospace, Menlo, monospace; margin:0 0 var(--doc-space-2); }
-  #doc code { background:var(--fill); padding:1px 5px; border-radius:4px; font-size:.9em;
+  #doc code { background:var(--fill); padding:1px 5px; border-radius:var(--r-1); font-size:.9em;
     font-family:'Geist Mono', ui-monospace, Menlo, monospace; }
   #doc pre code { padding:0; background:none; }
   #doc img { max-width:100%; height:auto; }
@@ -756,10 +802,10 @@
     -webkit-overflow-scrolling:touch; }
   .fl { display:block; max-width:100%; height:auto; margin:0 auto; }
   .fl-box { fill:var(--card); stroke:var(--line-strong); stroke-width:1.25; }
-  .fl-label { font:13px/1 'Geist', ui-sans-serif, system-ui, sans-serif; fill:var(--ink); text-anchor:middle; }
+  .fl-label { font:var(--t-3)/1 'Geist', ui-sans-serif, system-ui, sans-serif; fill:var(--ink); text-anchor:middle; }
   .fl-edge { stroke:var(--line-2); stroke-width:1.5; fill:none; }
   .fl-head { fill:var(--line-2); }
-  .fl-elabel { font:11px/1 'Geist', ui-sans-serif, system-ui, sans-serif; fill:var(--muted); text-anchor:middle; }
+  .fl-elabel { font:var(--t-1)/1 'Geist', ui-sans-serif, system-ui, sans-serif; fill:var(--muted); text-anchor:middle; }
   .fl-elabel-bg { fill:var(--bg); }
   /* a node is the click target — the affordance has to be visible before the click, or nobody finds it */
   .fl-node { cursor:pointer; }
@@ -769,10 +815,10 @@
   .fl-node.anchored .fl-box { stroke:var(--yellow-ring); stroke-width:2; }
   /* the flash on jump. `box-shadow` does nothing inside SVG, so this is the fill instead */
   .fl-node.flash .fl-box { fill:var(--flash-fill); stroke:var(--yellow-ring); stroke-width:2.5; }
-  .fl-errors { margin-top:8px; text-align:center; font:12px/1.5 'Geist Mono', ui-monospace, Menlo, monospace;
+  .fl-errors { margin-top:8px; text-align:center; font:var(--t-2)/1.45 'Geist Mono', ui-monospace, Menlo, monospace;
     color:var(--muted); }
   /* the one thing that tells you the boxes are live; hidden on touch, where hover doesn't exist */
-  .fl-hint { position:absolute; right:0; top:-18px; font-size:11px; color:var(--faint);
+  .fl-hint { position:absolute; right:0; top:-18px; font-size:var(--t-1); color:var(--faint);
     opacity:0; transition:opacity .15s; pointer-events:none; }
   #doc .block[data-atomic]:hover .fl-hint { opacity:1; }
   @media (hover:none) { .fl-hint { display:none; } }
@@ -792,21 +838,21 @@
      change the thing being reviewed. */
   /* margin:0 because the prose scale reaches every child of a #doc block and an asset is not prose. */
   #doc iframe.asset-frame { display:block; border:0; transform-origin:top left; margin:0; background:var(--asset-canvas);
-    border-radius:12px; box-shadow:var(--shadow); }
+    border-radius:var(--r-3); box-shadow:var(--shadow); }
   /* the document column's read-only tell, beside the filename in the header */
-  .kindtag { font-size:10.5px; font-weight:600; letter-spacing:.05em; text-transform:uppercase;
-    color:var(--muted); background:var(--fill); border-radius:6px; padding:3px 8px; white-space:nowrap; }
+  .kindtag { font-size:var(--t-1); font-weight:600; letter-spacing:var(--track-caps); text-transform:uppercase;
+    color:var(--muted); background:var(--fill); border-radius:var(--r-1); padding:3px 8px; white-space:nowrap; }
   .kindtag:empty { display:none; }
   /* The asset's zoom. A segmented pair, same shape as the panel's view tabs, because it is the same
      kind of choice: two states and only one can be true. It sits inside .htitle so the title group's
      cap bounds it too — outside, a fixed-width control after a capped group runs under the centred
      presence readout, which is the collision that cap exists to prevent. flex:none, so the path
      ellipsises around it the way it already does around the kind tag. */
-  .zoomctl { display:flex; flex:none; gap:2px; padding:2px; border-radius:8px; background:var(--fill); }
+  .zoomctl { display:flex; flex:none; gap:2px; padding:2px; border-radius:var(--r-2); background:var(--fill); }
   .zoomctl[hidden] { display:none; }
-  .zoomctl button { border:none; background:none; box-shadow:none; border-radius:6px;
-    padding:3px 8px; color:var(--muted); font:600 10.5px 'Geist', ui-sans-serif, sans-serif;
-    letter-spacing:.03em; }
+  .zoomctl button { border:none; background:none; box-shadow:none; border-radius:var(--r-1);
+    padding:3px 8px; color:var(--muted); font:600 var(--t-1) 'Geist', ui-sans-serif, sans-serif;
+    letter-spacing:var(--track-caps); }
   .zoomctl button:hover { color:var(--ink); background:none; }
   .zoomctl button[aria-pressed="true"] { background:var(--card); color:var(--ink);
     box-shadow:var(--shadow-raise); }
@@ -849,7 +895,7 @@
      transparent at rest rather than added on hover; the horizontal padding that used to sit here did
      move the text, and `color:inherit` holds off the UA's own `mark` colour. */
   mark.anchor { background:var(--anchor-wash); color:inherit; border-bottom:2px solid transparent;
-    padding:0; cursor:pointer; border-radius:2px;
+    padding:0; cursor:pointer; border-radius:var(--r-1);
     transition:background .15s ease, border-color .15s ease; }
   mark.anchor.mine { background:var(--anchor-wash-mine); }
   mark.anchor:hover, mark.anchor.lit { border-bottom-color:var(--yellow); }
@@ -866,11 +912,11 @@
      The padding is an OPAQUE buffer (no transparent margin/gap) so scrolling cards can't crowd under it. */
   .tabs { position:sticky; top:52px; z-index:2; display:flex; gap:2px; margin:0 -2px;
     padding:10px 2px 14px; background:var(--bg); }
-  .tab { font:600 13px 'Geist', ui-sans-serif, sans-serif; border:none; background:none; color:var(--muted);
-    padding:7px 11px; border-radius:8px; display:inline-flex; align-items:center; gap:6px; box-shadow:none; }
+  .tab { font:600 var(--t-3) 'Geist', ui-sans-serif, sans-serif; border:none; background:none; color:var(--muted);
+    padding:7px 11px; border-radius:var(--r-2); display:inline-flex; align-items:center; gap:6px; box-shadow:none; }
   .tab:hover { background:var(--fill); color:var(--fg); }
   .tab.on { color:var(--ink); background:var(--fill); }
-  .tab .tc { font-size:11px; font-weight:600; background:var(--chip-n); color:var(--ink-2); border-radius:20px;
+  .tab .tc { font-size:var(--t-1); font-weight:600; background:var(--chip-n); color:var(--ink-2); border-radius:var(--r-pill);
     padding:0 6px; min-width:17px; text-align:center; }
   .tab.on .tc { background:var(--chip-n-2); }
   /* The density control, at the right end of the tab bar. What it changes is the column underneath it,
@@ -925,12 +971,12 @@
   .side-list .card .more { display:none; }
   .side-list.docked .card.has-more .more { display:block; width:100%; text-align:center; margin:7px 0 0;
     padding:2px 0; border:0; background:none; box-shadow:none; cursor:pointer;
-    font:600 12px 'Geist', ui-sans-serif, sans-serif; color:var(--muted); }
+    font:600 var(--t-2) 'Geist', ui-sans-serif, sans-serif; color:var(--muted); }
   .side-list.docked .card.has-more .more:hover { color:var(--ink); background:none; }
   /* review card: no border, a soft depth shadow lifts it off the rail.
      `position:relative` is for the fold control in the corner; the docked rule below overrides it to
      absolute, which positions the same way. */
-  .card { position:relative; background:var(--card); border-radius:14px; padding:15px 16px; font-size:13px;
+  .card { position:relative; background:var(--card); border-radius:var(--r-3); padding:15px 16px; font-size:var(--t-3);
     box-shadow:var(--shadow); transition:box-shadow .2s ease, background .2s ease; }
   .card.flash { box-shadow:var(--shadow), 0 0 0 3px var(--flash-ring-strong); }
   /* ---------- the collapsed card ----------
@@ -943,19 +989,19 @@
   /* The archived and orphaned tints are declared further down and would otherwise paint a full-width
      recessed bar behind a 110px pill, so both are named here rather than relying on source order. */
   .card.collapsed, .card.collapsed.archived, .card.collapsed.orphaned {
-    background:none; box-shadow:none; padding:0; border-radius:99px; }
+    background:none; box-shadow:none; padding:0; border-radius:var(--r-pill); }
   .card.collapsed .pill { display:inline-flex; align-items:center; gap:7px; max-width:100%;
-    background:var(--card); box-shadow:var(--shadow); border:0; border-radius:99px; padding:5px 11px;
+    background:var(--card); box-shadow:var(--shadow); border:0; border-radius:var(--r-pill); padding:5px 11px;
     cursor:pointer; text-align:left; color:var(--ink-2);
-    font:600 11px 'Geist Mono', ui-monospace, Menlo, monospace; letter-spacing:.02em; }
+    font:600 var(--t-1) 'Geist Mono', ui-monospace, Menlo, monospace; letter-spacing:.02em; }
   .card.collapsed .pill:hover { color:var(--ink); background:var(--card); }
   .card.collapsed .pill .dot { width:7px; height:7px; border-radius:50%; background:var(--ink); flex:none; }
   .card.collapsed.by-agent .pill .dot { background:var(--yellow); box-shadow:0 0 0 1px var(--yellow-ring); }
-  .card.collapsed .pill .n { background:var(--chip-n); color:var(--ink-2); border-radius:20px; padding:0 6px; }
+  .card.collapsed .pill .n { background:var(--chip-n); color:var(--ink-2); border-radius:var(--r-pill); padding:0 6px; }
   /* An unsent reply survives the fold (see replyDrafts), so the pill has to say so. Ink rather than the
      chip grey the count wears: the draft is the human's own text and the one thing on a settled pill
      that is still owed something. */
-  .card.collapsed .pill .draft { background:var(--fill); color:var(--ink); border-radius:20px; padding:0 6px; }
+  .card.collapsed .pill .draft { background:var(--fill); color:var(--ink); border-radius:var(--r-pill); padding:0 6px; }
   /* Per-thread presence, on a pill. At compact a human's comment is collapsed exactly while it waits on
      the agent, which is the whole window in which the agent is answering it, so a rail that dropped the
      signal here would drop it where it is most often true. Same markup and the same shimmer as the full
@@ -972,8 +1018,8 @@
      moves the card under the pointer. The reason a preview is worth having at all is that it costs
      the layout nothing. */
   .card.collapsed .peek { position:absolute; left:0; right:0; top:calc(100% + 5px); z-index:1;
-    background:var(--card); box-shadow:var(--shadow); border-radius:10px; padding:8px 11px;
-    font-size:12.5px; line-height:1.45; color:var(--fg); pointer-events:none;
+    background:var(--card); box-shadow:var(--shadow); border-radius:var(--r-2); padding:8px 11px;
+    font-size:var(--t-2); line-height:1.45; color:var(--fg); pointer-events:none;
     opacity:0; transform:translateY(-2px); transition:opacity .13s ease, transform .13s ease; }
   /* The clamp lives on the inner span, not on the box: Chrome blockifies an absolutely positioned
      `-webkit-box` to `flow-root`, which drops the line clamp and leaves a third line cut in half under
@@ -1003,42 +1049,42 @@
   /* identity — the agent is a yellow chip (its color); the human is an ink dot + name. Classed
      .agent / .human, not by literal name, so any SIDECAR_USER / SIDECAR_AGENT colors correctly. */
   .card .who { font-weight:600; display:inline-flex; align-items:center; }
-  .who.agent { gap:5px; font-size:12px; color:var(--chip-fg); background:var(--chip);
-    border-radius:6px; padding:2px 8px; }
+  .who.agent { gap:5px; font-size:var(--t-2); color:var(--chip-fg); background:var(--chip);
+    border-radius:var(--r-1); padding:2px 8px; }
   .who.agent::before { content:''; width:6px; height:6px; border-radius:50%; background:var(--yellow);
     box-shadow:0 0 0 1px var(--yellow-ring); }
-  .who.human { gap:6px; font-size:13px; color:var(--ink); }
+  .who.human { gap:6px; font-size:var(--t-3); color:var(--ink); }
   .who.human::before { content:''; width:8px; height:8px; border-radius:50%; background:var(--ink); }
   .card.orphaned .who.agent { color:var(--ink-2); background:var(--chip-n); }
   .card.orphaned .who.agent::before { background:var(--dead); box-shadow:none; }
   /* kind label — quiet uppercase text, not a bordered badge */
-  .card .badge { font-size:10.5px; font-weight:600; letter-spacing:.03em; text-transform:uppercase;
+  .card .badge { font-size:var(--t-1); font-weight:600; letter-spacing:var(--track-caps); text-transform:uppercase;
     color:var(--muted); margin-left:8px; }
   .card .badge.suggestion { color:var(--muted); }
   /* flag = "look here" from you — monochrome chip (yellow is the agent's, never yours) */
-  .card .badge.flag { background:var(--chip-n); color:var(--ink-2); border-radius:20px; padding:2px 9px;
-    margin-left:8px; letter-spacing:.02em; }
+  .card .badge.flag { background:var(--chip-n); color:var(--ink-2); border-radius:var(--r-pill); padding:2px 9px;
+    margin-left:8px; }
   .card .badge.orphaned { color:var(--muted); }
   /* final-status chips on archived cards — monochrome, quiet */
   .card .badge.accepted, .card .badge.rejected, .card .badge.resolved {
-    background:var(--chip-n); color:var(--ink-2); border-radius:20px; padding:2px 9px; letter-spacing:.02em; }
+    background:var(--chip-n); color:var(--ink-2); border-radius:var(--r-pill); padding:2px 9px; }
   /* archived card — settled, recessed; a flex header so the decided-time sits at the right */
   .card.archived { background:var(--card-off); }
   .card.archived .quote { cursor:default; }
   .card .chead { display:flex; align-items:center; }
   /* the anchored span the card refers to — a yellow left-rule (the agent's), quiet quoted text */
-  .card .quote { color:var(--muted); font-size:12.5px; border-left:2px solid var(--yellow); padding-left:10px;
-    margin:9px 0; line-height:1.4; cursor:pointer; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+  .card .quote { color:var(--muted); font-size:var(--t-2); border-left:2px solid var(--yellow); padding-left:10px;
+    margin:9px 0; line-height:1.45; cursor:pointer; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
   .card.orphaned .quote { border-left-color:var(--line-2); color:var(--faint); text-decoration:line-through; }
-  .card .when { font-size:11px; color:var(--fainter); margin-left:auto; }
+  .card .when { font-size:var(--t-1); color:var(--fainter); margin-left:auto; }
   /* thread messages — bold name (no chip, no dot; the header carries identity) + body */
   /* A thread message is a block with its own tint, so who said what is legible at a glance instead of
      depending on reading the name. The tints are the identity colors already in use elsewhere: the
      agent's yellow chip, the human's neutral well. Left border carries it when tints get subtle. */
-  .msg { margin:8px 0; padding:7px 10px; border-radius:9px; font-size:13px; line-height:1.5;
+  .msg { margin:8px 0; padding:7px 10px; border-radius:var(--r-2); font-size:var(--t-3); line-height:1.45;
     color:var(--fg); background:var(--fill); }
   .msg.by-agent { background:var(--chip); }
-  .msg .who { background:none; padding:0; color:inherit; font-size:12px; display:block; margin-bottom:2px; }
+  .msg .who { background:none; padding:0; color:inherit; font-size:var(--t-2); display:block; margin-bottom:2px; }
   /* The dot comes back in-thread — it is the fastest identity read, and hiding it was why replies all
      looked alike. Inline-flex on the name row keeps it aligned with the text. */
   .msg .who::before { display:inline-block; vertical-align:middle; margin-right:5px; }
@@ -1054,73 +1100,77 @@
   .msg .t li { margin:3px 0; }
   .msg .t li > p { margin:0; }
   .msg .t h1, .msg .t h2, .msg .t h3, .msg .t h4 {
-    font-size:13px; font-weight:650; color:var(--ink); margin:11px 0 4px; letter-spacing:0; }
-  .msg .t code { font:12px 'Geist Mono', ui-monospace, Menlo, monospace;
-    background:var(--fill); border-radius:4px; padding:1px 4px; word-break:break-word; }
-  .msg .t pre { background:var(--fill); border-radius:9px; padding:9px 11px; margin:8px 0; overflow-x:auto; }
+    font-size:var(--t-3); font-weight:600; color:var(--ink); margin:11px 0 4px; letter-spacing:0; }
+  .msg .t code { font:var(--t-2) 'Geist Mono', ui-monospace, Menlo, monospace;
+    background:var(--fill); border-radius:var(--r-1); padding:1px 4px; word-break:break-word; }
+  .msg .t pre { background:var(--fill); border-radius:var(--r-2); padding:9px 11px; margin:8px 0; overflow-x:auto; }
   .msg .t pre code { background:none; padding:0; }
   .msg .t blockquote { margin:8px 0; padding-left:10px; border-left:2px solid var(--line-2); color:var(--muted); }
   .msg .t a { color:var(--ink); text-decoration:underline; text-underline-offset:2px; }
   .msg .t hr { border:0; border-top:1px solid var(--line); margin:11px 0; }
-  .msg .t table { border-collapse:collapse; margin:8px 0; font-size:12.5px; display:block; overflow-x:auto; }
+  .msg .t table { border-collapse:collapse; margin:8px 0; font-size:var(--t-2); display:block; overflow-x:auto; }
   .msg .t th, .msg .t td { border:1px solid var(--line-2); padding:4px 7px; text-align:left; }
   /* An attached screenshot in a 300px rail is unreadable at rail width — it's a thumbnail that
      opens. zoom-in says so before the click does. */
-  .msg .t img { max-width:100%; height:auto; border-radius:6px; display:block; margin:7px 0;
+  .msg .t img { max-width:100%; height:auto; border-radius:var(--r-1); display:block; margin:7px 0;
     border:1px solid var(--line-2); cursor:zoom-in; background:var(--fill); }
   /* full-size view of an attached image — click anywhere or Esc to dismiss */
   #lightbox { position:fixed; inset:0; z-index:60; display:none; place-items:center; padding:24px;
     background:var(--scrim); cursor:zoom-out; }
   #lightbox.on { display:grid; }
   /* the shadow sits on the scrim rather than on the page, so it is the same black in both themes */
-  #lightbox img { max-width:100%; max-height:100%; border-radius:10px; box-shadow:0 20px 60px rgba(0,0,0,.45); }
+  #lightbox img { max-width:100%; max-height:100%; border-radius:var(--r-2); box-shadow:0 20px 60px rgba(0,0,0,.45); }
   /* word-level diff — mono well; deletions strike out muted, insertions carry the agent's yellow */
-  .diffbox { font:12.5px/1.6 'Geist Mono', ui-monospace, Menlo, monospace; background:var(--fill); border-radius:10px;
+  .diffbox { font:var(--t-2)/1.6 'Geist Mono', ui-monospace, Menlo, monospace; background:var(--fill); border-radius:var(--r-2);
     padding:10px 12px; margin:9px 0; white-space:pre-wrap; word-break:break-word; color:var(--ink-2); }
   .diffbox del { color:var(--faint); text-decoration:line-through; }
-  .diffbox ins { background:var(--yellow); color:var(--on-yellow); text-decoration:none; border-radius:3px; padding:0 2px; }
+  .diffbox ins { background:var(--yellow); color:var(--on-yellow); text-decoration:none; border-radius:var(--r-1); padding:0 2px; }
   .row { display:flex; gap:8px; margin-top:11px; align-items:center; }
   .row.spread { justify-content:space-between; }
   .row .spacer { flex:1; }
   /* a compose box under a dragged image — the only cue that dropping here will do something */
   .dropping { border-color:var(--ink-btn) !important; box-shadow:var(--ring); }
-  .reply { width:100%; font:inherit; font-size:13px; border:1px solid var(--line-2); border-radius:9px;
+  .reply { width:100%; font:inherit; font-size:var(--t-3); border:1px solid var(--line-2); border-radius:var(--r-2);
     padding:8px 11px; background:var(--bg); color:var(--fg); resize:none; overflow:hidden; line-height:1.45;
     min-height:36px; max-height:40vh; overflow-y:auto; }
   .reply::placeholder { color:var(--faint); }
   .reply:focus { outline:none; border-color:var(--ink-btn); box-shadow:var(--ring); }
   /* floating selection toolbar — a soft light card; hover fills grey (your actions stay monochrome) */
   #seltool { position:absolute; display:none; z-index:30; background:var(--card); border:1px solid var(--line-2);
-    border-radius:10px; box-shadow:var(--shadow); padding:4px; align-items:center; gap:1px;
+    border-radius:var(--r-3); box-shadow:var(--shadow); padding:4px; align-items:center; gap:1px;
     flex-wrap:wrap; max-width:calc(100vw - 16px); }
   #seltool button { background:none; border:none; box-shadow:none; color:var(--fg); padding:6px 11px;
-    border-radius:7px; font-size:13px; font-weight:600; line-height:1; }
+    border-radius:var(--r-2); font-size:var(--t-3); font-weight:500; line-height:1; }
   #seltool button:hover { background:var(--fill); color:var(--ink); }
   /* text-style dropdown — a single control replacing the ¶/h1/h2/h3 row */
   #seltool .fmt { position:relative; display:inline-flex; }
   #seltool .fmt-btn { display:inline-flex; align-items:center; gap:3px; }
-  #seltool .fmt-btn .car { font-size:9px; opacity:.55; }
+  #seltool .fmt-btn .car { font-size:var(--t-1); opacity:.55; }
   #seltool .fmt-menu { position:absolute; top:calc(100% + 5px); left:0; z-index:1;
-    background:var(--card); border:1px solid var(--line-2); border-radius:10px; box-shadow:var(--shadow);
+    background:var(--card); border:1px solid var(--line-2); border-radius:var(--r-2); box-shadow:var(--shadow);
     padding:4px; display:flex; flex-direction:column; gap:1px; min-width:132px; }
   #seltool .fmt-menu[hidden] { display:none; }
   #seltool .fmt-menu button { display:block; width:100%; text-align:left; white-space:nowrap; }
-  #seltool b { font-weight:800; } #seltool i { font-style:italic; font-family:Georgia,serif; }
+  /* The B is a specimen of what the button does, so it has to read heavier than the words beside it.
+     It used to do that at 800, a weight nothing else in the tool used; the words dropped to 500
+     instead and the B takes 600, which is a step the rest of the chrome already stands on. Declared
+     rather than left to the UA, whose `bolder` resolves against the button and lands on 900. */
+  #seltool b { font-weight:600; } #seltool i { font-style:italic; font-family:Georgia,serif; }
   #seltool .tsep { width:1px; height:16px; background:var(--line-2); margin:0 3px; }
-  #seltool input { background:var(--bg); border:1px solid var(--line-2); color:var(--fg); border-radius:7px;
-    font:inherit; font-size:13px; padding:6px 10px; width:230px; outline:none; }
+  #seltool input { background:var(--bg); border:1px solid var(--line-2); color:var(--fg); border-radius:var(--r-2);
+    font:inherit; font-size:var(--t-3); padding:6px 10px; width:230px; outline:none; }
   #seltool input:focus { border-color:var(--ink-btn); box-shadow:var(--ring); }
   #popover { position:absolute; display:none; z-index:31; background:var(--card); border:1px solid var(--line-2);
-    border-radius:12px; box-shadow:var(--shadow); padding:13px; width:300px; }
+    border-radius:var(--r-3); box-shadow:var(--shadow); padding:13px; width:300px; }
   /* drag handle — grab this to move the comment box off the text you're commenting on */
   #popover .po-head { display:flex; align-items:center; justify-content:space-between; gap:8px;
     margin:-13px -13px 11px; padding:8px 13px; border-bottom:1px solid var(--line);
-    border-radius:12px 12px 0 0; cursor:grab; user-select:none; touch-action:none; }
+    border-radius:var(--r-3) var(--r-3) 0 0; cursor:grab; user-select:none; touch-action:none; }
   #popover .po-head:active { cursor:grabbing; }
-  #popover .po-title { font-size:10.5px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); }
-  #popover .po-grip { color:var(--faint); font-size:13px; line-height:1; letter-spacing:1.5px; }
-  #popover textarea { width:100%; min-height:66px; max-height:40vh; overflow-y:auto; font:inherit; font-size:13px;
-    border:1px solid var(--line-2); border-radius:9px; padding:8px 10px; resize:vertical; outline:none;
+  #popover .po-title { font-size:var(--t-1); font-weight:600; letter-spacing:var(--track-caps); text-transform:uppercase; color:var(--muted); }
+  #popover .po-grip { color:var(--faint); font-size:var(--t-3); line-height:1; letter-spacing:1.5px; }
+  #popover textarea { width:100%; min-height:66px; max-height:40vh; overflow-y:auto; font:inherit; font-size:var(--t-3);
+    border:1px solid var(--line-2); border-radius:var(--r-2); padding:8px 10px; resize:vertical; outline:none;
     background:var(--bg); color:var(--fg); }
   #popover textarea::placeholder { color:var(--faint); }
   #popover textarea:focus { border-color:var(--ink-btn); box-shadow:var(--ring); }
@@ -1131,18 +1181,18 @@
      the hiding and the transform/opacity carry the motion — translateX(-50%) has to stay inside every
      transform or the centering snaps. */
   #banner { visibility:hidden; position:fixed; bottom:18px; left:50%; background:var(--toast);
-    color:var(--toast-fg); padding:13px 18px; border-radius:12px; z-index:40; font-size:13.5px;
+    color:var(--toast-fg); padding:13px 18px; border-radius:var(--r-3); z-index:40; font-size:var(--t-4);
     box-shadow:var(--toast-shadow);
     opacity:0; transform:translate(-50%, 12px);
     transition:opacity .2s ease-out, transform .2s ease-out, visibility 0s linear .2s; }
   #banner.open { visibility:visible; opacity:1; transform:translate(-50%, 0);
     transition:opacity .2s ease-out, transform .2s ease-out, visibility 0s; }
   #banner button { margin-left:10px; background:var(--toast-btn); color:var(--toast-btn-fg); border:none;
-    font-size:12.5px; padding:6px 12px; }
+    padding:6px 12px; }
   #banner button:hover { background:var(--toast-btn-hover); }
   /* quiet docs link — a text link, never a CTA. It sits in the folder panel's foot now: app-level
      chrome belongs to the frame, and the header carries only the open document's things. */
-  .doclink { color:var(--muted); font-size:13px; font-weight:500; text-decoration:none;
+  .doclink { color:var(--muted); font-size:var(--t-3); font-weight:500; text-decoration:none;
     border-bottom:1.5px solid transparent; }
   .doclink:hover { color:var(--fg); }
   /* Pinned to the panel's foot by the auto margin when the list is short; a long folder scrolls it,
@@ -1153,7 +1203,7 @@
   /* right cluster: the orphaned count — the one header number that is actionable (click cycles the
      orphans) and shown nowhere else. The open count lives on the rail's active tab, always visible
      now, so the header repeating it was two counters for one fact. */
-  .turn { font-size:12.5px; color:var(--faint); display:flex; align-items:center; gap:5px; white-space:nowrap; }
+  .turn { font-size:var(--t-2); color:var(--faint); display:flex; align-items:center; gap:5px; white-space:nowrap; }
   .turn:empty { display:none; }
   .turn .orphan { color:var(--fg); border-bottom:1.5px solid var(--yellow); cursor:pointer; }
   /* center of the navbar: the readout for the agent being in the room. The header spans only the
@@ -1163,7 +1213,7 @@
      times so its arrival moves nothing around it; it is EMPTY whenever no agent is watching, and
      `:empty` takes the mobile pill's own padding with it. */
   .presence { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); pointer-events:none;
-    display:flex; align-items:center; gap:6px; font-size:12.5px; white-space:nowrap; }
+    display:flex; align-items:center; gap:6px; font-size:var(--t-2); white-space:nowrap; }
   .presence:empty { display:none; }
   .presence .dot { width:7px; height:7px; border-radius:50%; flex:none; }
   .presence.here { color:var(--ink-3); font-weight:500; }
@@ -1181,7 +1231,7 @@
   /* padding-left matches .msg's 10px horizontal padding, so the label lines up with the message
      TEXT in the bubbles above it, not with the card's content edge */
   .replying { display:flex; align-items:center; margin-top:8px; padding-left:10px; }
-  .replying .lbl { font-size:12.5px; font-weight:500; color:transparent;
+  .replying .lbl { font-size:var(--t-2); font-weight:500; color:transparent;
     background:linear-gradient(90deg, var(--muted) 35%, var(--fg) 50%, var(--muted) 65%);
     background-size:200% 100%; -webkit-background-clip:text; background-clip:text;
     animation:shimmerText 1.4s linear infinite; }
@@ -1206,32 +1256,32 @@
   .doclink::after { content:'\2197'; font-size:.82em; margin-left:2px; opacity:.6; }
   /* "done reviewing" is a review ACTION → it lives at the foot of the review column, not the nav bar. */
   .done-foot { display:block; width:100%; margin-top:8px; padding:14px 0 4px; text-align:center;
-    font-size:12.5px; font-weight:500; color:var(--muted); background:none; border:none; box-shadow:none;
+    font-size:var(--t-2); font-weight:500; color:var(--muted); background:none; border:none; box-shadow:none;
     border-top:1px solid var(--line); border-radius:0; }
   .done-foot:hover { color:var(--fg); background:none; }
   /* a suggestion nested inside the comment thread it answers (replyTo) — a quiet recessed panel */
   .subcard { margin:10px 0 5px; padding:12px 13px; border:1px solid var(--line-2);
-    border-radius:12px; background:var(--fill); }
+    border-radius:var(--r-2); background:var(--fill); }
   .subcard .who { font-weight:600; }
   #filelist { padding:48px 40px; max-width:760px; margin:0 auto; }
-  #filelist .h { font-size:22px; font-weight:600; letter-spacing:-.02em; color:var(--ink); margin:0 0 4px; }
-  #filelist .sub { font-size:13.5px; color:var(--muted); margin:0 0 26px; }
-  #filelist .sub code { font-family:'Geist Mono', ui-monospace, monospace; font-size:12.5px; color:var(--ink-2); }
+  #filelist .h { font-size:var(--t-6); font-weight:600; letter-spacing:-.02em; color:var(--ink); margin:0 0 4px; }
+  #filelist .sub { font-size:var(--t-3); color:var(--muted); margin:0 0 26px; }
+  #filelist .sub code { font-family:'Geist Mono', ui-monospace, monospace; font-size:var(--t-2); color:var(--ink-2); }
   #filelist a { display:flex; align-items:center; gap:12px; padding:14px 12px; border-bottom:1px solid var(--line);
-    text-decoration:none; color:var(--ink); border-radius:9px; }
+    text-decoration:none; color:var(--ink); border-radius:var(--r-2); }
   #filelist a:hover { background:var(--fill); }
-  #filelist a .nm { font-size:14.5px; font-weight:500; }
-  #filelist a .ext { font-family:'Geist Mono', ui-monospace, monospace; font-size:11px; color:var(--fainter); }
+  #filelist a .nm { font-size:var(--t-4); font-weight:500; }
+  #filelist a .ext { font-family:'Geist Mono', ui-monospace, monospace; font-size:var(--t-1); color:var(--fainter); }
   #filelist a .sp { flex:1; }
-  #filelist a .ago { font-size:11.5px; color:var(--faint); font-family:'Geist Mono', ui-monospace, monospace;
+  #filelist a .ago { font-size:var(--t-1); color:var(--faint); font-family:'Geist Mono', ui-monospace, monospace;
     white-space:nowrap; }
-  #filelist a .none { font-size:12px; color:var(--dead); min-width:20px; text-align:center; }
+  #filelist a .none { font-size:var(--t-2); color:var(--dead); min-width:20px; text-align:center; }
   /* open-count pill — grey chip carrying a single yellow dot (the agent has notes waiting) */
   .count { display:inline-flex; align-items:center; gap:6px; background:var(--chip-n); color:var(--ink-2);
-    border-radius:20px; font-size:12px; padding:3px 10px; font-weight:600; }
+    border-radius:var(--r-pill); font-size:var(--t-2); padding:3px 10px; font-weight:600; }
   .count::before { content:''; width:6px; height:6px; border-radius:50%; background:var(--yellow);
     box-shadow:0 0 0 1px var(--yellow-ring); }
-  .empty { color:var(--muted); font-size:13px; text-align:center; padding:40px 0; line-height:1.55; }
+  .empty { color:var(--muted); font-size:var(--t-3); text-align:center; padding:40px 0; line-height:1.45; }
 
   /* --- mobile: single-column doc, review panel becomes a pull-up bottom sheet --- */
   #sheetToggle, #sheetBackdrop, #navBackdrop { display:none; }
@@ -1269,7 +1319,7 @@
       opacity:0; pointer-events:none; transition:opacity .26s; }
     body.nav-open #navBackdrop { opacity:1; pointer-events:auto; }
     #doc pre { max-width:100%; }
-    #pwd { font-size:11.5px; }
+    #pwd { font-size:var(--t-1); }
     /* The gutters are 18px down here, so the cap is the same measure over a narrower margin. On a
        phone the column is the window and nothing binds; on a tablet held wide it still does. */
     #doc { max-width:calc(var(--measure) + 36px); padding:20px 18px 42vh; font-size:16px; line-height:1.6; }
@@ -1294,25 +1344,25 @@
        as a compact dot-only chip beside the title — the dot's color/pulse still carries the state
        (yellow=here, outline=away, filled=sent, pulsing=working); the label is hidden to save width. */
     .presence { position:static; transform:none; gap:0; padding:5px; margin-left:-2px;
-      background:var(--fill); border-radius:99px; }
+      background:var(--fill); border-radius:var(--r-pill); }
     .presence .lbl { display:none; }
     #filelist { padding:28px 18px; }
     #popover { width:min(300px, calc(100vw - 24px)); }
     /* iOS Safari zooms into any focused input with font-size <16px (and won't zoom back). Pin to 16px. */
-    .reply, #popover textarea, #seltool input { font-size:16px; }
+    .reply, #popover textarea, #seltool input { font-size:var(--t-5); }
 
     /* the sidebar, reframed as a bottom sheet */
     aside {
       /* height + overflow live here, not on the base rule: on desktop the rail scrolls with the page so
          cards can dock to their anchors, but the sheet genuinely is its own scrolling surface. */
       position:fixed; left:0; right:0; bottom:0; top:auto; height:76vh; overflow-y:auto;
-      border-left:none; border-top:1px solid var(--line); border-radius:22px 22px 0 0;
+      border-left:none; border-top:1px solid var(--line); border-radius:var(--r-3) var(--r-3) 0 0;
       background:var(--bg); box-shadow:0 -12px 40px var(--shadow-panel);
       transform:translateY(102%); transition:transform .26s ease-out; z-index:46;
       padding:22px 16px calc(env(safe-area-inset-bottom) + 20px); gap:0;
     }
     aside::before { content:''; position:absolute; top:9px; left:50%; transform:translateX(-50%);
-      width:40px; height:4px; border-radius:99px; background:var(--line-strong); }
+      width:40px; height:4px; border-radius:var(--r-pill); background:var(--line-strong); }
     /* Inside the sheet the tabs stick to the SHEET's scroll box, not the page, so the desktop
        under-the-header offset would push them 51px down. Back to cancelling the sheet's own padding. */
     .tabs { top:-22px; }
@@ -1326,9 +1376,9 @@
     #sheetToggle { display:inline-flex; align-items:center; gap:8px; position:fixed;
       right:16px; bottom:calc(env(safe-area-inset-bottom) + 16px); z-index:44;
       background:var(--ink-btn); color:var(--on-ink); border:none; box-shadow:0 8px 20px -6px var(--shadow-pill);
-      border-radius:99px; padding:11px 18px; font-weight:600; font-size:14px; }
-    #sheetToggle .n { background:var(--yellow); color:var(--on-yellow); border-radius:99px;
-      min-width:20px; text-align:center; padding:0 6px; font-size:12.5px; }
+      border-radius:var(--r-pill); padding:11px 18px; font-weight:600; font-size:var(--t-4); }
+    #sheetToggle .n { background:var(--yellow); color:var(--on-yellow); border-radius:var(--r-pill);
+      min-width:20px; text-align:center; padding:0 6px; font-size:var(--t-2); }
     #sheetToggle .n:empty { display:none; }
     body.sheet-open #sheetToggle { display:none; }
     /* Reading mode, down here. The two panels are already overlays rather than tracks, so collapsing
@@ -3757,7 +3807,7 @@ const RAIL_MAX_FRAC = 0.6;   // and past this the document is the sidebar
 const DOC_MIN = 360;         // the width the document keeps whatever either panel is dragged to
 const RAIL_DEFAULT = 372;    // its resting width, and the floor the fill below never goes under
 // The rail FILLS what the document does not want, up to here. 420 of rail is 380 of card inside the
-// aside's padding and ~350 of text, which is about 52 characters at the card's 13.5px: a note, read in
+// aside's padding and ~350 of text, which is about 54 characters at the card's --t-3: a note, read in
 // one eye movement, beside prose that stays the widest thing on the screen. It used to fill to 520,
 // where a card runs to a 68-character measure and starts competing with the document for the reading
 // eye on exactly the wide displays this fill exists for. A DRAG can still go wider (railMax); this is
