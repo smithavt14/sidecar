@@ -6510,3 +6510,240 @@ test('the phone floors the step at 16, because #doc is editable', () => {
   assert.ok(!MOBILE_RULES.some(r => r.sel === '#doc' && /font-size:/.test(r.body)),
     'the mobile #doc rule sets no size of its own: the floor carries it');
 });
+
+// ---- type-to-format, over a jsdom #doc, driven by the real input events ----------------------------
+// The rules block lifted out of the page and run whole, the THEME_MODULE pattern. Everything it reaches
+// for is handed in, so the assertions are about the source that ships, not a re-implementation.
+//
+// What this covers that the turndown round-trip above cannot: a line the user OPENED WITH ENTER.
+// Enter does not create a new .block — the browser splits inside the wrapper — so a .block holds
+// several lines and the marker sits on the last one. Reading blockEl.firstElementChild checked the line
+// above and `## Hello!` stayed literal until a reload re-lexed the file. Chrome's split, measured over
+// CDP on 2026-09-13: a sibling <p> after a paragraph, a bare <div> after a heading.
+const RULES_MODULE = (() => {
+  const m = PAGE.match(/(function caretBlock\(\) \{[\s\S]*?addEventListener\('compositionend', runBlockRule\);)/);
+  assert.ok(m, 'the input-rules block is still one run of source in the page');
+  return m[1];
+})();
+
+function rulesPage(html) {
+  const dom = new JSDOM('<!doctype html><html><body><div id="doc" contenteditable="true">'
+    + html + '</div></body></html>');
+  const { window } = dom, doc = window.document;
+  const saves = [];
+  const page = new Function('document', 'getSelection', 'NodeFilter', '$', 'scheduleSave', 'dirty',
+    RULES_MODULE + '\nreturn { caretBlock, caretInner, tryBlockRule, runBlockRule, isDirty: () => dirty };')(
+    doc, () => window.getSelection(), window.NodeFilter, (id) => doc.getElementById(id),
+    () => saves.push(1), false);
+  page.doc = doc; page.window = window; page.saves = saves;
+  page.sel = () => window.getSelection();
+  page.block = (i) => doc.querySelectorAll('#doc .block')[i];
+
+  // Put the caret at the end of `el`, the way clicking into a line does.
+  page.caretToEndOf = (el) => {
+    const r = doc.createRange(); r.selectNodeContents(el); r.collapse(false);
+    const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+  };
+  // What Chrome does to the DOM when Enter is pressed at the end of a line: it splits INSIDE the .block
+  // wrapper, leaving a sibling <p> after a paragraph and a bare <div> after a heading, and parks the
+  // caret in it. jsdom implements no editing commands, so the split is performed here and the caret
+  // placed exactly where the browser leaves it. Measured over CDP against real Chrome, see above.
+  page.pressEnter = () => {
+    const s = window.getSelection();
+    let n = s.anchorNode; n = n.nodeType === 1 ? n : n.parentElement;
+    const blockEl = n.closest('.block');
+    let line = n; while (line.parentElement !== blockEl) line = line.parentElement;
+    const opened = doc.createElement(/^H[1-6]$/.test(line.nodeName) ? 'div' : 'p');
+    opened.appendChild(doc.createElement('br'));
+    line.after(opened);
+    const r = doc.createRange(); r.setStart(opened, 0); r.collapse(true);
+    s.removeAllRanges(); s.addRange(r);
+    return opened;
+  };
+  // The line the caret is on, and its character offsets — the same three moves the page makes, so the
+  // harness measures the caret the way the code under test does.
+  const lineOf = (node) => {
+    let n = node.nodeType === 1 ? node : node.parentElement;
+    const blockEl = n.closest('.block');
+    while (n.parentElement !== blockEl) n = n.parentElement;
+    return n;
+  };
+  const offsetIn = (el, node, off) => {
+    const r = doc.createRange(); r.selectNodeContents(el); r.setEnd(node, off); return r.toString().length;
+  };
+  const setOffset = (el, off) => {
+    const w = doc.createTreeWalker(el, window.NodeFilter.SHOW_TEXT);
+    const r = doc.createRange(); let n, acc = 0, placed = false;
+    while ((n = w.nextNode())) {
+      if (acc + n.length >= off) { r.setStart(n, off - acc); r.collapse(true); placed = true; break; }
+      acc += n.length;
+    }
+    if (!placed) { r.selectNodeContents(el); r.collapse(false); }
+    const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+  };
+  // Insert `text` at the caret the way the browser does — the placeholder <br> of an empty line goes,
+  // the typed run merges into ONE text node (stripLead reads the first text node, so a run left split
+  // across nine nodes would not behave like real typing), and the caret lands after what was inserted.
+  const insertAtCaret = (text) => {
+    const r0 = window.getSelection().getRangeAt(0);
+    const line = lineOf(r0.startContainer);
+    const at = offsetIn(line, r0.startContainer, r0.startOffset);
+    r0.cloneRange().insertNode(doc.createTextNode(text));
+    const last = line.lastChild;
+    if (last && last.nodeName === 'BR' && line.textContent) last.remove();
+    line.normalize();
+    setOffset(line, at + text.length);
+  };
+  const fire = (init) => doc.getElementById('doc').dispatchEvent(
+    new window.InputEvent('input', { bubbles: true, ...init }));
+
+  // One character, the way the browser delivers it: the text lands, THEN `input` fires. The listener
+  // the module registered on #doc is what runs — nothing here calls the rule directly.
+  page.type = (text) => {
+    for (const ch of text) { insertAtCaret(ch); fire({ inputType: 'insertText', data: ch }); }
+  };
+  // A paste: the whole run arrives at once and `input` fires with insertFromPaste and no `data`.
+  page.paste = (text) => { insertAtCaret(text); fire({ inputType: 'insertFromPaste' }); };
+  // Where the caret sits, as "NODENAME:offset of text", so a test can say it survived the swap.
+  page.caret = () => {
+    const s = window.getSelection();
+    const n = s.anchorNode.nodeType === 1 ? s.anchorNode : s.anchorNode.parentElement;
+    return n.nodeName + ':' + s.anchorOffset + ' of ' + JSON.stringify(s.anchorNode.textContent);
+  };
+  return page;
+}
+
+test('`## ` on a line opened with Enter converts live, caret at the end', () => {
+  const page = rulesPage('<div class="block" data-i="0"><p>Everything else is second order.</p></div>');
+  page.caretToEndOf(page.doc.querySelector('#doc p'));
+  page.pressEnter();
+  page.type('## Hello!');
+
+  const block = page.block(0);
+  assert.equal(block.children.length, 2, 'still ONE .block — the split happened inside it');
+  assert.equal(block.lastElementChild.nodeName, 'H2', 'the line the caret is on became the heading');
+  assert.equal(block.lastElementChild.textContent, 'Hello!', 'and the marker is gone from the text');
+  assert.equal(block.firstElementChild.nodeName, 'P', 'the paragraph above is untouched');
+  assert.equal(block.firstElementChild.textContent, 'Everything else is second order.');
+  assert.equal(page.caret(), 'H2:6 of "Hello!"', 'the caret is at the end of the heading');
+  assert.ok(page.isDirty() && page.saves.length, 'and the conversion scheduled a save');
+
+  // Everything typed next flows into the heading, which is the point of keeping the caret.
+  page.type(' there');
+  assert.equal(block.lastElementChild.outerHTML, '<h2>Hello! there</h2>');
+});
+
+test('`### ` re-levels an h2 on a line opened with Enter after a heading', () => {
+  // Chrome opens a bare <div> after a heading, not a <p>. The rule has to read that as a line.
+  const page = rulesPage('<div class="block" data-i="0"><h2>1. Dark mode is the first fix</h2></div>');
+  page.caretToEndOf(page.doc.querySelector('#doc h2'));
+  assert.equal(page.pressEnter().nodeName, 'DIV', 'the browser leaves a bare div after a heading');
+  page.type('### Sub');
+
+  const block = page.block(0);
+  assert.equal(block.children.length, 2);
+  assert.equal(block.firstElementChild.outerHTML, '<h2>1. Dark mode is the first fix</h2>',
+    'the heading above keeps its level');
+  assert.equal(block.lastElementChild.outerHTML, '<h3>Sub</h3>');
+  assert.equal(page.caret(), 'H3:3 of "Sub"');
+});
+
+test('`### ` re-levels an existing h2 in place', () => {
+  const page = rulesPage('<div class="block" data-i="0"><h2>2. The reading column</h2></div>');
+  const h2 = page.doc.querySelector('#doc h2');
+  const r = page.doc.createRange(); r.selectNodeContents(h2); r.collapse(true);
+  page.sel().removeAllRanges(); page.sel().addRange(r);
+  page.type('### ');
+
+  const block = page.block(0);
+  assert.equal(block.children.length, 1, 'one line in, one line out');
+  assert.equal(block.firstElementChild.outerHTML, '<h3>2. The reading column</h3>');
+  assert.equal(page.caret(), 'H3:0 of "2. The reading column"', 'caret back at the start, where it was');
+});
+
+test('a marker pasted onto a line opened with Enter converts too', () => {
+  // insertFromPaste carries no `data`, so a rule gated on the typed character would miss it.
+  const page = rulesPage('<div class="block" data-i="0"><p>Everything else is second order.</p></div>');
+  page.caretToEndOf(page.doc.querySelector('#doc p'));
+  page.pressEnter();
+  page.paste('- a list item');
+
+  const block = page.block(0);
+  assert.equal(block.lastElementChild.outerHTML, '<ul><li>a list item</li></ul>');
+  assert.equal(block.firstElementChild.nodeName, 'P');
+});
+
+test('a blank line between the paragraph and the marker is still converted', () => {
+  const page = rulesPage('<div class="block" data-i="0"><p>Everything else is second order.</p></div>');
+  page.caretToEndOf(page.doc.querySelector('#doc p'));
+  page.pressEnter(); page.pressEnter();
+  page.type('## Hello!');
+
+  const block = page.block(0);
+  assert.deepEqual([...block.children].map(c => c.nodeName), ['P', 'P', 'H2'],
+    'the blank line stays a blank line; only the line the caret is on converts');
+});
+
+test('the rule reads the caret line, never the block it happens to sit in', () => {
+  // The regression in one assertion: a caret on the second line, a marker on the second line, and a
+  // first line that matches nothing. Against firstElementChild this returns false.
+  const page = rulesPage('<div class="block" data-i="0"><p>above</p><p>## below</p></div>');
+  const second = page.doc.querySelectorAll('#doc p')[1];
+  page.caretToEndOf(second);
+  assert.equal(page.caretInner(page.block(0)), second, 'caretInner finds the line, not the block');
+  assert.ok(page.runBlockRule(), 'and the rule fires on it');
+  assert.equal(page.block(0).lastElementChild.outerHTML, '<h2>below</h2>');
+});
+
+test('an atomic block is never rewritten by an input rule', () => {
+  // A rendered ```flow diagram carries its own source on __md; turning a line of it into a heading
+  // would desync the block from the markdown it serializes back to.
+  const page = rulesPage('<div class="block" data-i="0" data-atomic="1"><div>## not a heading</div></div>');
+  page.caretToEndOf(page.doc.querySelector('#doc div div'));
+  assert.equal(page.runBlockRule(), false, 'the rule declines an atomic block');
+  assert.equal(page.block(0).innerHTML, '<div>## not a heading</div>', 'and leaves it byte for byte');
+});
+
+test('the converted line serializes to the marker it was typed from', () => {
+  // The live DOM half of the round-trip meets the turndown half: convert through the real rule, then
+  // run the block through the page's own turndown, and the file gets `## Hello!` under the paragraph.
+  const page = rulesPage('<div class="block" data-i="0"><p>Everything else is second order.</p></div>');
+  page.caretToEndOf(page.doc.querySelector('#doc p'));
+  page.pressEnter();
+  page.type('## Hello!');
+  assert.equal(pageTd().turndown(page.block(0).innerHTML),
+    'Everything else is second order.\n\n## Hello!');
+});
+
+// The block-format toolbar (the way OUT of a heading) has the same shape as type-to-format: it must
+// act on the line the selection is on, not the block's first line. Codex's repro on PR 9: `First`,
+// Enter, `## Second`, select Second, choose text: the H2 stayed; choosing H1 reformatted `First`.
+test('the block-format toolbar reformats the selected line, not the first line of the block', () => {
+  const m = PAGE.match(/(function setBlockFormat\(tag\) \{[\s\S]*?\n\})/);
+  assert.ok(m, 'setBlockFormat is still one function in the page');
+  const page = rulesPage('<div class="block"><p>First</p></div>');
+  const { doc } = page;
+  let dirty = false, saves = 0, hidden = 0;
+  const setBlockFormat = new Function('document', 'getSelection', 'caretBlock', 'caretInner',
+    'restoreSelection', 'hideTool', 'setStatus', 'scheduleSave',
+    'let dirty = false;\n' + m[1] + '\nreturn setBlockFormat;')(
+    doc, page.sel, page.caretBlock, page.caretInner, () => {}, () => { hidden++; }, () => {}, () => { saves++; });
+  page.caretToEndOf(doc.querySelector('p'));
+  page.pressEnter();
+  page.type('## Second');
+  const block = page.block(0);
+  assert.equal(block.children[1].nodeName, 'H2', 'type-to-format made the second line an h2');
+  // select the second line and choose "text"
+  const r = doc.createRange(); r.selectNodeContents(block.children[1]);
+  const s = page.sel(); s.removeAllRanges(); s.addRange(r);
+  setBlockFormat('p');
+  assert.equal(block.children[0].outerHTML, '<p>First</p>', 'the first line is untouched');
+  assert.equal(block.children[1].outerHTML, '<p>Second</p>', 'the selected line became a paragraph');
+  // and the other way: select it again, choose h1
+  const r2 = doc.createRange(); r2.selectNodeContents(block.children[1]);
+  s.removeAllRanges(); s.addRange(r2);
+  setBlockFormat('h1');
+  assert.equal(block.children[0].outerHTML, '<p>First</p>', 'still untouched');
+  assert.equal(block.children[1].outerHTML, '<h1>Second</h1>', 'the selected line became an h1');
+  assert.equal(hidden, 2, 'the toolbar closed each time'); assert.equal(saves, 2, 'and a save was scheduled');
+});

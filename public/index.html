@@ -2045,6 +2045,19 @@ function caretBlock() {
   n = n.nodeType === 1 ? n : n.parentElement;
   return n ? n.closest('.block') : null;
 }
+// The LINE the caret is on, as a direct child of the .block wrapper. Enter does not open a new .block:
+// the browser splits INSIDE the wrapper, so one .block routinely holds several lines and a marker the
+// user just typed sits on the last of them. Reading blockEl.firstElementChild instead inspected the
+// line ABOVE, which is why `## ` typed on a line opened with Enter stayed literal until a reload
+// re-lexed the file. Chrome leaves a sibling <p> after a paragraph and a bare <div> after a heading.
+function caretInner(blockEl) {
+  const s = getSelection(); if (!s.rangeCount) return null;
+  let n = s.anchorNode; if (!n) return null;
+  n = n.nodeType === 1 ? n : n.parentElement;
+  if (!n || n === blockEl || !blockEl.contains(n)) return null;
+  while (n.parentElement !== blockEl) n = n.parentElement;
+  return n;
+}
 function firstText(el) { const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT); return w.nextNode(); }
 function stripLead(el, n) { const t = firstText(el); if (t) t.textContent = t.textContent.slice(n); }
 // The caret's character offset within an element, and a setter for it. Used to keep the caret exactly where
@@ -2066,13 +2079,16 @@ function setCaretOffset(el, off) {
   const s = getSelection(); s.removeAllRanges(); s.addRange(r);
 }
 
-// Block rule: a completed marker at the START of a plain paragraph. Only fires on <p> (marked never
-// renders a heading/list/quote as a bare <p>), so a formatted block can't re-trigger. Marker stripped,
-// wrapper swapped, caret placed after the marker.
+// Block rule: a completed marker at the START of the line the caret is on. Fires on a paragraph (a new
+// marker) or a heading (re-level); marked renders neither a list nor a quote as a bare <p>, so a
+// formatted line can't re-trigger. A <div> counts as a paragraph because that is what Chrome leaves
+// behind when Enter opens a line after a heading. Marker stripped, wrapper swapped, caret placed after
+// the marker.
 function tryBlockRule(blockEl) {
-  const inner = blockEl.firstElementChild;
+  if (blockEl.dataset.atomic) return false;             // a diagram / HTML island carries its own source
+  const inner = caretInner(blockEl) || blockEl.firstElementChild;
   if (!inner) return false;
-  const isP = inner.nodeName === 'P';
+  const isP = inner.nodeName === 'P' || inner.nodeName === 'DIV';
   const isHeading = /^H[1-6]$/.test(inner.nodeName);
   if (!isP && !isHeading) return false;                 // paragraphs (new markers) or headings (re-level) only
   const text = inner.textContent;
@@ -2083,10 +2099,11 @@ function tryBlockRule(blockEl) {
     const h = document.createElement('h' + m[1].length);
     while (inner.firstChild) h.appendChild(inner.firstChild);
     inner.replaceWith(h); target = h;
-  } else if (isP && text.match(/^> /)) {                // > → blockquote (paragraphs only; keep the inner <p>)
+  } else if (isP && text.match(/^> /)) {                // > → blockquote (paragraphs only, wrapping a <p>)
     strip = 2; stripLead(inner, strip);
-    const bq = document.createElement('blockquote');
-    inner.replaceWith(bq); bq.appendChild(inner); target = inner;
+    const bq = document.createElement('blockquote'), p = document.createElement('p');
+    while (inner.firstChild) p.appendChild(inner.firstChild);   // a fresh <p>: `inner` may be Chrome's <div>
+    bq.appendChild(p); inner.replaceWith(bq); target = p;
   } else if (isP && ((m = text.match(/^([-*]) /)) || (m = text.match(/^(\d+)\. /)))) {  // - / * / N. → list item
     const ordered = /\d/.test(m[1]);
     strip = m[0].length; stripLead(inner, strip);
@@ -2169,8 +2186,8 @@ $('doc').addEventListener('keydown', (e) => {
 // Fenced code block: ``` (optionally with a lang) on its own line, then Enter.
 $('doc').addEventListener('keydown', (e) => {
   if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
-  const b = caretBlock(), inner = b && b.firstElementChild;
-  if (!inner || inner.nodeName !== 'P') return;
+  const b = caretBlock(), inner = b && !b.dataset.atomic && (caretInner(b) || b.firstElementChild);
+  if (!inner || !['P', 'DIV'].includes(inner.nodeName)) return;   // the caret's line, not the block's first
   const fm = inner.textContent.match(/^```(\w*)$/);
   if (!fm) return;
   e.preventDefault();
@@ -2378,9 +2395,11 @@ function toggleFmtMenu(force) {
 // and the way OUT of a heading. Only simple text blocks convert; lists/tables/quotes/code are left alone.
 function setBlockFormat(tag) {
   restoreSelection();                       // bring back the pre-toolbar selection so we know the block
-  const b = caretBlock(); if (!b) { hideTool(); return; }
-  const inner = b.firstElementChild;
-  if (!inner || !/^(P|H[1-6])$/.test(inner.nodeName)) { hideTool(); return; }
+  const b = caretBlock(); if (!b || b.dataset.atomic) { hideTool(); return; }
+  // The line the selection is on, not the block's first: Enter splits inside the wrapper, so a block
+  // holds several lines and the toolbar has to act on the one that was selected (same as tryBlockRule).
+  const inner = caretInner(b) || b.firstElementChild;
+  if (!inner || !/^(P|DIV|H[1-6])$/.test(inner.nodeName)) { hideTool(); return; }
   if (inner.nodeName.toLowerCase() === tag) { hideTool(); return; }   // already that format
   const el = document.createElement(tag);
   while (inner.firstChild) el.appendChild(inner.firstChild);          // move the exact nodes (keeps inline marks)
