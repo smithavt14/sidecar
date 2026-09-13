@@ -4944,8 +4944,11 @@ test('the two dark blocks are one palette written twice, and cannot drift apart'
 
 test('every colour token has a dark value, and the two that must not move do not move', () => {
   // The layout tokens carry no colour and are the same in every theme, so they are the exceptions.
-  const LAYOUT = new Set(['--spring-press', '--rail-w', '--nav-w', '--nav-track']);
-  const isLayout = (k) => LAYOUT.has(k) || k.startsWith('--doc-space-') || k === '--measure';
+  // The type scale (--t-*), the radius scale (--r-*) and the caps tracking join them for the same
+  // reason --doc-space-* and --measure are already here: a size is a size in both themes.
+  const LAYOUT = new Set(['--spring-press', '--rail-w', '--nav-w', '--nav-track', '--track-caps']);
+  const isLayout = (k) => LAYOUT.has(k) || k.startsWith('--doc-space-') || k === '--measure'
+    || /^--[tr]-/.test(k);
   for (const k of Object.keys(LIGHT)) {
     if (isLayout(k)) { assert.ok(!(k in DARK_ATTR), `${k} is layout and stays out of the palette`); continue; }
     assert.ok(k in DARK_ATTR, `${k} has a dark value`);
@@ -4995,6 +4998,116 @@ test('no colour is hard-coded outside the palette', () => {
   const found = rest.match(/#[0-9a-f]{3,8}\b[^;,)]*|rgba?\([0-9.,\s]+\)/gi) || [];
   const stray = found.filter(f => !ALLOWED.includes(f.trim()));
   assert.deepEqual(stray, [], 'every colour in a rule comes from a token');
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+   ONE TYPE SCALE, ONE RADIUS SCALE
+   The chrome once carried seventeen font sizes and fourteen radii, each one
+   argued for in a comment of its own. Every one of them is a token now, and
+   this is what stops the next good argument putting a nineteenth back.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+// The stylesheet as innermost rules: comments gone, `selector` and the declarations inside its
+// braces. An @media wrapper never matches (its body holds braces), so what comes back is the rules
+// themselves, each carrying whatever selector list was written above it.
+const RULES = (() => {
+  const src = STYLE.replace(/\/\*[\s\S]*?\*\//g, '');
+  return [...src.matchAll(/([^{}]*)\{([^{}]*)\}/g)].map(m => ({ sel: m[1].trim(), body: m[2] }));
+})();
+
+test('the chrome type scale is six steps, and none of them is half a pixel', () => {
+  const steps = Object.keys(LIGHT).filter(k => /^--t-\d$/.test(k));
+  assert.deepEqual(steps, ['--t-1', '--t-2', '--t-3', '--t-4', '--t-5', '--t-6'],
+    'six steps, numbered; a seventh is a new decision and has to be argued for here first');
+  let last = 0;
+  for (const k of steps) {
+    const px = Number(LIGHT[k].replace('px', ''));
+    assert.ok(Number.isInteger(px), `${k} is a whole pixel`);
+    assert.ok(px > last, `${k} is a step UP from the one below it`);
+    last = px;
+  }
+  // iOS Safari zooms into a focused field under 16px and never zooms back, so one step has to be
+  // at least that. The mobile block pins every input to it.
+  assert.ok(steps.some(k => Number(LIGHT[k].replace('px', '')) >= 16),
+    'a step reaches 16px, which is what the mobile form fields need');
+  const radii = Object.keys(LIGHT).filter(k => /^--r-/.test(k));
+  assert.deepEqual(radii, ['--r-1', '--r-2', '--r-3', '--r-pill'], 'three radii and the pill');
+  assert.equal(LIGHT['--r-pill'], '99px', 'the pill is a pill');
+});
+
+test('every chrome font-size comes from the type scale', () => {
+  // #doc is exempt and must stay exempt: prose was tuned on its own scale (16.5px body, 28/21/17
+  // headings) against a measure this chrome has nothing to do with. Two scales, one per surface.
+  // Everything else names a step. Two literals survive and both are here with their reason.
+  const EXCEPT = {
+    'font-size:0': 'the folder strip hides the badge NUMBER on a 7px dot; it is not a size',
+    'font-size:.82em': "the docs link's arrow is sized to the word it follows, whatever that word is",
+  };
+  const stray = [];
+  for (const { sel, body } of RULES) {
+    if (sel.includes('#doc')) continue;
+    for (const m of body.matchAll(/font-size:\s*([^;]+)/g)) {
+      const decl = `font-size:${m[1].trim()}`;
+      if (/^var\(--t-\d\)$/.test(m[1].trim()) || decl in EXCEPT) continue;
+      stray.push(`${sel} → ${decl}`);
+    }
+    // The `font:` shorthand carries a size too. `inherit` carries none and is how a textarea keeps
+    // the page's family before pinning its own step.
+    for (const m of body.matchAll(/(?:^|[;{\s])font:\s*([^;]+)/g)) {
+      const v = m[1].trim();
+      if (v === 'inherit' || v.includes('var(--t-')) continue;
+      stray.push(`${sel} → font:${v}`);
+    }
+  }
+  assert.deepEqual(stray, [], 'each of these is a size the eye has to learn on its own');
+});
+
+test('every border-radius comes from the radius scale', () => {
+  // This one covers #doc as well: a code block, an image and the asset frame are boxes, not prose,
+  // and a corner is a corner wherever it is drawn. `50%` is a circle rather than a step on the
+  // scale, and `0` is the absence of one.
+  const ok = (part) => /^var\(--r-(?:[123]|pill)\)$/.test(part) || part === '50%' || part === '0';
+  const stray = [];
+  for (const { sel, body } of RULES) {
+    for (const m of body.matchAll(/border-radius:\s*([^;]+)/g)) {
+      const parts = m[1].trim().split(/\s+/);
+      if (parts.every(ok)) continue;
+      stray.push(`${sel} → border-radius:${m[1].trim()}`);
+    }
+  }
+  assert.deepEqual(stray, [], 'each of these is a corner that belongs to nothing');
+});
+
+test('the chrome rests on three line heights and three weights', () => {
+  // Ratios, not the pixel line-heights inside a badge's `font:` shorthand — those centre a 14px
+  // circle and are geometry. 0 is the same thing for an icon button: it collapses the line box.
+  const heights = new Set(), weights = new Set();
+  for (const { sel, body } of RULES) {
+    if (sel.includes('#doc') || sel.includes('@font-face')) continue;
+    for (const m of body.matchAll(/line-height:\s*([^;]+)/g)) heights.add(m[1].trim());
+    for (const m of body.matchAll(/font-weight:\s*([^;]+)/g)) weights.add(m[1].trim());
+  }
+  heights.delete('0');
+  assert.deepEqual([...heights].sort(), ['1', '1.45', '1.6'],
+    'one tight, one for UI text, one for body and mono');
+  assert.deepEqual([...weights].sort(), ['400', '500', '600'], 'and three weights, no more');
+});
+
+test('one tracking for every uppercase micro-label', () => {
+  // Six labels doing one job wore .03em, .05em, .06em, .13em and two more. They share a token now,
+  // so the next one written cannot invent a seventh value.
+  assert.match(LIGHT['--track-caps'], /^\.\d+em$/, 'the token is there and is a tracking');
+  assert.ok(STYLE.split('letter-spacing:var(--track-caps)').length - 1 >= 5,
+    'and the labels that were tracked by hand read it instead');
+  // A single uppercase letter (the icon strip's initial) is tracked by nothing; a label that DOES
+  // set a tracking sets the token, or the explicit 0 that resets it on a count inside one.
+  for (const { sel, body } of RULES) {
+    if (!/text-transform:\s*uppercase/.test(body)) continue;
+    for (const m of body.matchAll(/letter-spacing:\s*([^;]+)/g)) {
+      assert.ok(['var(--track-caps)', '0'].includes(m[1].trim()),
+        `${sel} tracks through the token, not by hand`);
+    }
+  }
 });
 
 /* ────────────────────────────────────────────────────────────────────────────
