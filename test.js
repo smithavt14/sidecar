@@ -3291,6 +3291,73 @@ test('the collapsed pill previews the last line said, and never an empty one', (
   assert.ok(long.endsWith('…'));
 });
 
+// ---------- a long thread folds in its middle (Turn.foldThread) ----------
+// The card-level clip is a pixel cap and cuts the END off a conversation, which is the half being read.
+// This takes the middle instead: the opening comment, a row, and the last two replies.
+
+const thread = (n) => Array.from({ length: n }, (_, i) => msg(i % 2 ? HUMAN : AGENT, 'message ' + i));
+
+test('a thread of four or fewer draws whole', () => {
+  for (let n = 0; n <= 4; n++) {
+    const all = thread(n);
+    const f = Turn.foldThread(all, false);
+    assert.deepEqual(f.head, all, `${n} messages`);
+    assert.equal(f.hiddenCount, 0);
+    assert.deepEqual(f.tail, []);
+    assert.equal(f.foldable, false, 'and there is no row to draw');
+  }
+  // Nothing at all is the same answer, since a card can carry a thread the file never wrote.
+  assert.deepEqual(Turn.foldThread(null, false), { head: [], hiddenCount: 0, tail: [], foldable: false });
+});
+
+test('a thread of five folds to the opener, a row for two, and the last two', () => {
+  const all = thread(5);
+  const f = Turn.foldThread(all, false);
+  assert.deepEqual(f.head.map(m => m.text), ['message 0']);
+  assert.equal(f.hiddenCount, 2);
+  assert.deepEqual(f.tail.map(m => m.text), ['message 3', 'message 4']);
+  // Five is the shortest thread that folds, so two is the fewest it ever hides: a row standing in for
+  // one message costs a row and saves a row.
+  assert.ok(f.hiddenCount >= 2, 'the fold never trades a row for a row');
+});
+
+test('the fold keeps its shape as the thread grows, so only the count moves', () => {
+  for (const n of [6, 10, 40]) {
+    const all = thread(n);
+    const f = Turn.foldThread(all, false);
+    assert.equal(f.head.length, Turn.THREAD_HEAD, `${n}: one opener`);
+    assert.equal(f.tail.length, Turn.THREAD_TAIL, `${n}: two replies`);
+    assert.equal(f.hiddenCount, n - 3, `${n}: and the row names the rest`);
+    assert.equal(f.head.length + f.hiddenCount + f.tail.length, n, `${n}: nothing is lost`);
+    // The newest is always drawn, and so is the one before it: the newest is usually an answer and its
+    // predecessor is the question it answers.
+    assert.deepEqual(f.tail.map(m => m.text), [`message ${n - 2}`, `message ${n - 1}`]);
+  }
+});
+
+test('an expanded thread draws whole and still carries the row that folds it back', () => {
+  const all = thread(9);
+  const f = Turn.foldThread(all, true);
+  assert.deepEqual(f.head.concat(f.tail), all, 'every message, none of them hidden');
+  assert.equal(f.hiddenCount, 0, 'so the row says `fold` rather than a count');
+  assert.equal(f.foldable, true, 'and the row is still drawn, which is the only way back');
+  // The row sits between head and tail in both states, so it holds its place in the thread when the
+  // fold opens: the label changes under the pointer instead of the control moving.
+  assert.equal(f.head.length, Turn.THREAD_HEAD, 'and it is still after the opening comment');
+  assert.deepEqual(f.head.map(m => m.text), Turn.foldThread(all, false).head.map(m => m.text));
+  // A short thread expanded is a short thread: there is nothing to fold back to.
+  assert.equal(Turn.foldThread(thread(3), true).foldable, false);
+});
+
+test('folding reads the thread and never writes it', () => {
+  const all = thread(7);
+  const before = JSON.stringify(all);
+  const f = Turn.foldThread(all, false);
+  f.head.push(msg(AGENT, 'not yours'));
+  assert.equal(JSON.stringify(all), before, 'the caller keeps its array');
+  assert.equal(all.length, 7);
+});
+
 // ---------- what the page shows at rest (public/index.html) ----------
 // Asserted against the file the same way the sandbox flag is: these are single literal strings whose
 // absence IS the feature, and each one was on screen on a clean document before anybody acted.

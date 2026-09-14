@@ -166,6 +166,44 @@
     return !waiting(it, agent);
   }
 
+  // ---------- a long thread folds in its middle ----------
+  // A working conversation between a human and an agent runs to ten messages of several paragraphs
+  // each, and the card drew every one of them at full height. The card-level clip (index.html's
+  // CARD_CAP) is a pixel cap, so what it hides is the END of the thread: the newest messages, which
+  // are the ones being read. The middle goes instead.
+  //
+  //   · the opening comment, which is what the thread is about
+  //   · one row saying how many replies are hidden
+  //   · the last two replies. The newest is usually an answer and the one before it is the question it
+  //     answers, so the pair reads as an exchange where a single message reads as half of one
+  //
+  // Four messages or fewer draw whole, so the shortest thread a fold touches is five and the fewest it
+  // ever hides is two: a row that stands in for one message costs a row and saves a row.
+  //
+  // `expanded` is the reader's own choice, held in the page for its lifetime (index.html's threadOpen),
+  // and it is passed in rather than read here for the same reason the density's manual override is:
+  // this module is pure, and both callers have to get the same answer from the same numbers.
+  //
+  // The row always sits BETWEEN head and tail, in both states. An expanded thread draws every message
+  // and still carries the row after its opening comment, where the count sat, so opening the fold
+  // changes the label under the pointer rather than moving the control to the foot of the thread.
+  const THREAD_HEAD = 1;
+  const THREAD_TAIL = 2;
+  function foldThread(messages, expanded) {
+    const all = (messages || []).slice();
+    // `foldable` is true whether or not the fold is applied right now, because an expanded thread still
+    // needs the row: it is what folds it back up.
+    const foldable = all.length > THREAD_HEAD + THREAD_TAIL + 1;
+    if (!foldable) return { head: all, hiddenCount: 0, tail: [], foldable: false };
+    if (expanded) return { head: all.slice(0, THREAD_HEAD), hiddenCount: 0, tail: all.slice(THREAD_HEAD), foldable: true };
+    return {
+      head: all.slice(0, THREAD_HEAD),
+      hiddenCount: all.length - THREAD_HEAD - THREAD_TAIL,
+      tail: all.slice(all.length - THREAD_TAIL),
+      foldable: true,
+    };
+  }
+
   // The one line a collapsed card shows on hover: the last thing said on it. The thread's tail, or
   // the suggestion's note, or the quote it is anchored to. A suggestion nobody has replied to has
   // no message at all, and a pill with an empty preview is worse than one with the span it is about.
@@ -175,7 +213,7 @@
     return snippet(String(t).split(/\n/).find(l => l.trim()) || '');
   }
 
-  const api = { LIVE, QUOTE_MAX, DENSITIES, DENSITY_REST, isLive, lastBy, lastAt, waiting, of, inbox,
-    byNewest, rail, density, nextDensity, startCollapsed, peek };
+  const api = { LIVE, QUOTE_MAX, DENSITIES, DENSITY_REST, THREAD_HEAD, THREAD_TAIL, isLive, lastBy,
+    lastAt, waiting, of, inbox, byNewest, rail, density, nextDensity, startCollapsed, foldThread, peek };
   if (typeof module === 'object' && module.exports) module.exports = api; else root.Turn = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
