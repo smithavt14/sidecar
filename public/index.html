@@ -56,6 +56,7 @@
 <script src="/turn.js"></script>   <!-- whose turn is it: the panel's badges and the inbox; server.js requires the same file -->
 <script src="/stability.js"></script>   <!-- freeze / last known position / orphan grace for the docked rail; Node tests require the same file -->
 <script src="/focus.js"></script>   <!-- where the page sits for the caret's line to rest at 45%; pure numbers in/out, Node tests require the same file -->
+<script src="/listkeys.js"></script>   <!-- Enter / Backspace / Tab inside a list item; pure elements in/out, Node tests require the same file -->
 <script src="/assetframe.js"></script>   <!-- an .html asset → the sandboxed frame's srcdoc; Node tests require the same file -->
 <script src="/lib/marked/marked.min.js"></script>
 <script src="/lib/dompurify/dist/purify.min.js"></script>   <!-- marked v12 has no sanitizer; scrub its HTML before it hits innerHTML (XSS) -->
@@ -2167,6 +2168,8 @@ $('doc').addEventListener('keydown', (e) => {
   if (e.key !== 'Backspace' || e.shiftKey || e.metaKey || e.altKey || e.ctrlKey) return;
   const s = getSelection();
   if (!s.isCollapsed || !s.rangeCount) return;
+  if (ListKeys.itemAt(s.anchorNode, $('doc'))) return; // a list item belongs to the list handler below, and
+                                                       // exactly one handler may act on one keystroke
   const b = caretBlock(); if (!b) return;
   const probe = s.getRangeAt(0).cloneRange();          // is the caret at the very start of this block?
   probe.selectNodeContents(b); probe.setEnd(s.anchorNode, s.anchorOffset);
@@ -2199,6 +2202,44 @@ $('doc').addEventListener('keydown', (e) => {
   inner.replaceWith(pre);
   const r = document.createRange(); r.setStart(tn, 1); r.collapse(true);
   const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+  dirty = true; setStatus('editing…'); scheduleSave();
+});
+// Lists: Enter on an empty item, Backspace at the start of one, Tab and Shift+Tab. A contenteditable
+// gives a list only the browser's raw behaviour, which leaves an empty bullet no way out except
+// deleting the marker by hand and gives nesting no keyboard at all. The three rules are
+// public/listkeys.js and are tested there; what is here is reading the caret, placing it in whatever
+// comes back, and marking the document dirty.
+$('doc').addEventListener('keydown', (e) => {
+  if (e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (!['Enter', 'Backspace', 'Tab'].includes(e.key)) return;
+  if (e.shiftKey && e.key !== 'Tab') return;           // Shift+Enter is a soft break and stays one
+  const s = getSelection();
+  if (!s.isCollapsed || !s.rangeCount) return;         // a range selection is never intercepted
+  const li = ListKeys.itemAt(s.anchorNode, $('doc'));
+  if (!li) return;                                     // outside a list item Tab still moves focus
+  let landed = null;
+  if (e.key === 'Tab') {
+    const off = caretOffsetIn(li);
+    // preventDefault even when the move is impossible (the first item of a list has nothing to nest
+    // under): a literal tab character typed into an <li> is never what the key meant.
+    e.preventDefault();
+    landed = e.shiftKey ? ListKeys.outdent(li) : ListKeys.indent(li);
+    if (landed) setCaretOffset(landed, off);
+  } else {
+    if (e.key === 'Enter') {
+      if (!ListKeys.isEmptyItem(li)) return;           // a non-empty item keeps the browser's native split
+    } else {
+      const probe = s.getRangeAt(0).cloneRange();      // is the caret at the very start of THIS item?
+      probe.selectNodeContents(li); probe.setEnd(s.anchorNode, s.anchorOffset);
+      if (probe.toString().length) return;             // text before the caret → ordinary backspace
+    }
+    // Backspace turns the item into a paragraph rather than merging it into the block above. The merge
+    // is still one keystroke away: a second Backspace now starts in a paragraph and falls through.
+    e.preventDefault();
+    landed = ListKeys.lift(li);
+    if (landed) setCaretOffset(landed, 0);
+  }
+  if (!landed) return;                                 // nothing moved, so nothing to save
   dirty = true; setStatus('editing…'); scheduleSave();
 });
 
@@ -3750,7 +3791,7 @@ function paintReading() {
 paintReading();
 
 // ⌘⇧F / Ctrl+Shift+F in, Escape out. Neither is taken: the page's other keydown handlers are Alt and
-// Shift over an asset frame, Backspace and Enter inside the document, and the arrow keys on the two
+// Shift over an asset frame, Backspace, Enter and Tab inside the document, and the arrow keys on the two
 // resize grips. Escape only acts while reading AND while the lightbox is shut, since the lightbox has
 // its own Escape and a picture opened from the document is the nearer thing to dismiss.
 window.addEventListener('keydown', (e) => {
