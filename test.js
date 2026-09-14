@@ -798,6 +798,27 @@ test('lift: a promoted sublist joins the tail only where the numbering runs stra
   assert.equal(zero.save(), 'a\n\n0. b\n1. c\n');
 });
 
+test('lift: the task-list marker goes and a checkbox the author wrote stays', () => {
+  // The marker box is the item's first node, or the first node of its <p> in a loose list. Everything
+  // else is prose the author typed, and a lift that swept the item for input[type=checkbox] deleted a
+  // control the document really contained. (What turndown then writes for inline HTML in a rewritten
+  // block is the serializer's own long-standing behaviour and is no business of the lift.)
+  const authored = listDoc('- X <input type="checkbox"> keep\n- b\n');
+  const p = ListKeys.lift(authored.doc.querySelector('li'));
+  assert.equal(p.querySelectorAll('input').length, 1, 'the control the author wrote survives');
+  assert.equal(p.textContent, 'X  keep');
+  // Both boxes in one item: the marker's, and one in the prose after it.
+  const both = listDoc('- [ ] todo <input type="checkbox"> extra\n- b\n');
+  const q = ListKeys.lift(both.doc.querySelector('li'));
+  assert.equal(q.querySelectorAll('input').length, 1, 'exactly one box went');
+  assert.equal(q.firstChild.textContent, 'todo ', 'and it was the leading one, space and all');
+  // A loose list wraps the item in a <p>, and the marker sits first inside that.
+  const loose = listDoc('- [ ] todo\n\n- [x] done\n');
+  const r = ListKeys.lift(loose.doc.querySelector('li'));
+  assert.equal(r.querySelector('input'), null);
+  assert.equal(r.textContent.trim(), 'todo');
+});
+
 test('isEmptyItem: an item is empty on its own text, whatever it carries below it', () => {
   const d = listDoc('- a\n  - b\n- c\n');
   assert.equal(ListKeys.isEmptyItem(d.item('c')), false);

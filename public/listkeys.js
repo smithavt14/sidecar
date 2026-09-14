@@ -28,6 +28,21 @@
     return Number.isInteger(n) && n >= 0 ? n : 1;
   }
 
+  // The item's first content node, skipping the whitespace marked pretty-prints between tags.
+  const firstNode = (el) => {
+    for (const n of el.childNodes) { if (n.nodeType === 3 && !n.textContent.trim()) continue; return n; }
+    return null;
+  };
+
+  // The checkbox the marker `- [ ] ` renders, or null. It is the item's first node, or the first node
+  // of the item's <p> in a loose list; a checkbox anywhere else in the item is prose the author wrote.
+  function markerBox(li) {
+    const lead = firstNode(li);
+    const head = firstNode(lead && lead.nodeName === 'P' ? lead : li);
+    if (!head || head.nodeName !== 'INPUT') return null;
+    return (head.getAttribute('type') || '').toLowerCase() === 'checkbox' ? head : null;
+  }
+
   // The <li> holding a node, or null. An atomic block (a rendered ```flow diagram, a raw-HTML island)
   // carries its own source markdown and is not editable, so a list drawn inside one is a picture of a
   // list: the keys must fall through to the browser there, same as every other input rule.
@@ -112,16 +127,17 @@
     subs.forEach((s) => s.remove());
     // A task list's checkbox is markup the marker `- [ ] ` carries. A paragraph has no marker, so the
     // box would serialize to a literal `[ ]` sitting in the prose. The space marked left between the
-    // box and the label goes with it, or the paragraph starts one character in.
-    const boxes = [...li.querySelectorAll('input[type=checkbox]')];
-    boxes.forEach((box) => box.remove());
+    // box and the label goes with it, or the paragraph starts one character in. Only that one box
+    // goes: a checkbox the author wrote into the item's prose is content and survives the lift.
+    const box = markerBox(li);
+    if (box) box.remove();
 
     const p = doc.createElement('p');
     const kids = [...li.childNodes].filter((n) => n.nodeType !== 3 || n.textContent.trim());
     // A loose list renders <li><p>text</p></li>, and moving that <p> inside a fresh one would nest two.
     const from = kids.length === 1 && kids[0].nodeName === 'P' ? kids[0] : li;
     while (from.firstChild) p.appendChild(from.firstChild);
-    if (boxes.length && p.firstChild && p.firstChild.nodeType === 3) {
+    if (box && p.firstChild && p.firstChild.nodeType === 3) {
       p.firstChild.textContent = p.firstChild.textContent.replace(/^\s+/, '');
     }
 
