@@ -3,6 +3,27 @@
 All notable changes to sidecar. Versions follow [semver](https://semver.org); dates are the day the
 version was tagged.
 
+## 1.12.0 (2026-09-14)
+
+**A list has a keyboard.** The editor is a contenteditable, so a list had only the browser's raw
+behaviour: an empty bullet had no way out except deleting the marker by hand, and nesting had no keys
+at all. Three rules now sit on top, the ones Google Docs, Notion and ProseMirror all share. Enter on an
+empty item outdents a nested one and lifts a top-level one to a paragraph, splitting the list around it
+with the ordered numbering kept. Backspace at the start of an item does the same lift, so the second
+Backspace is the merge into the line above. Tab and Shift+Tab nest and unnest, and an item's own
+sublist travels with it. The rules are `public/listkeys.js`, elements in and the element the caret lands
+in out, and the Node tests run the same file against a jsdom document and the page's own turndown.
+
+**A long thread folds in its middle.** A working conversation between a human and an agent runs to ten
+messages of several paragraphs, and the card drew every one at full height; the card-level clip cut at
+a pixel height, which hid the newest messages, the ones being read. A thread past four messages now
+draws the opening comment, one row reading `N earlier replies`, and the last two replies, since the
+newest is usually an answer and the one before it the question it answers. The row expands the thread
+in place and folds it back. A single message past twelve rendered lines clamps with **more**, and the
+newest never does. Both choices last the page's lifetime only, the same rule as the pill fold, and the
+sidecar file is untouched. `Turn.foldThread` in `public/turn.js` holds the arithmetic. A screenshot in
+a reply that loads after the card was measured now measures the rail again, which nothing did before.
+
 ## 1.11.0 (2026-09-13)
 
 **Sidecar follows the room.** Two themes shipped as one set of tokens declared twice, and the page
