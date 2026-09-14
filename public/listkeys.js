@@ -157,8 +157,16 @@
   // as a checkbox and the text node " todo", so the caret where the reader sees the start of the line
   // has the marker's separator space behind it. A space anywhere else, inside a code span or opening a
   // line the author indented, is content, and Backspace on it deletes a character.
+  // `before` is the Range from the item's start to the caret, or the text of one. A picture in front of
+  // the caret is content the text cannot see: with `- ![x](x.png)todo` and the caret before the t,
+  // Backspace is a delete at the image's edge, and the item is not at its start.
   function atItemStart(li, before) {
-    const text = before || '';
+    const range = before && typeof before === 'object' && typeof before.cloneContents === 'function' ? before : null;
+    if (range) {
+      const frag = range.cloneContents();
+      if ([...frag.querySelectorAll('*')].some((el) => MEDIA.includes(el.nodeName.toUpperCase()))) return false;
+    }
+    const text = range ? range.toString() : (before || '');
     if (!text.length) return true;
     return !text.trim().length && !!markerBox(li);
   }

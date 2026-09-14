@@ -2248,7 +2248,7 @@ $('doc').addEventListener('keydown', (e) => {
       // What counts as the start is ListKeys.atItemStart: nothing in front of the caret, or whitespace
       // in front of it in a task item, where the checkbox leaves the marker's separator space behind
       // the first letter. A space the author wrote is content and Backspace deletes it.
-      if (!ListKeys.atItemStart(li, probe.toString())) return;
+      if (!ListKeys.atItemStart(li, probe)) return;      // the Range, so a picture in front counts too
     }
     // Backspace turns the item into a paragraph rather than merging it into the block above. The merge
     // is still one keystroke away: a second Backspace now starts in a paragraph and falls through.

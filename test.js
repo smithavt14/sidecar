@@ -882,6 +882,18 @@ test('atItemStart: nothing in front of the caret, or a task marker\'s separator 
   assert.equal(ListKeys.atItemStart(code.doc.querySelector('li'), r.toString()), false,
     'a space the author wrote is a character Backspace deletes');
   assert.equal(ListKeys.atItemStart(code.doc.querySelector('li'), ''), true, 'the real start still lifts');
+
+  // A picture in front of the caret. The Range's text is empty, so the text alone would call this the
+  // start and lift the whole item; the Range itself carries the image.
+  const pic = listDoc('- ![x](x.png)todo\n');
+  const pli = pic.doc.querySelector('li');
+  const ptext = [...pli.childNodes].find((n) => n.nodeType === 3 && n.textContent === 'todo');
+  const pr = pli.ownerDocument.createRange();
+  pr.selectNodeContents(pli); pr.setEnd(ptext, 0);    // the caret before the t, the image behind it
+  assert.equal(pr.toString(), '', 'no text in front of the caret');
+  assert.equal(ListKeys.atItemStart(pli, pr), false, 'Backspace here deletes at the image, not the item');
+  pr.setEnd(pli, 0);
+  assert.equal(ListKeys.atItemStart(pli, pr), true, 'in front of the image is the real start');
 });
 
 test('ownOffset / caretTarget: the caret is counted over the item\'s own text, both ways', () => {
@@ -1059,7 +1071,7 @@ test('the list handler places the caret in the item itself, never in a list belo
   assert.match(handler, /setItemCaret\(landed, off\)/, 'the Tab branch places it');
   assert.match(handler, /setItemCaret\(landed, 0\)/, 'and so does the lift branch');
   assert.doesNotMatch(handler, /setCaretOffset\(landed/, 'the walk-everything setter is not used here');
-  assert.match(handler, /ListKeys\.atItemStart\(li, probe\.toString\(\)\)/,
+  assert.match(handler, /ListKeys\.atItemStart\(li, probe\)/,
     'and Backspace asks the module what the start of an item is');
   const fnAt = page.indexOf('function setItemCaret');
   assert.ok(fnAt > 0, 'the setter is still findable');
