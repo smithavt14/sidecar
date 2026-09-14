@@ -681,6 +681,189 @@ test('reindex refreshes baselines after a tight save so the next diff measures a
   assert.equal(again.tight, true);
 });
 
+// ---- the list keys (public/listkeys.js) under the same jsdom #doc, serialized by the same save path ----
+// The three rules a bare contenteditable does not have: Enter on an empty item, Backspace at the start
+// of one, Tab and Shift+Tab. Every case below asserts BOTH halves — the DOM the transform leaves and the
+// markdown the page's own turndown writes out of it — because a transform that reads right on screen and
+// serializes wrong is the only kind of bug here that reaches the file.
+const ListKeys = require('./public/listkeys.js');   // the SAME file index.html loads via <script>
+
+// A list fixture built by the same buildDoc the serialize tests use, plus two conveniences: find an item
+// by its OWN text (a parent item's textContent swallows its children's), and run the real save path.
+function listDoc(md) {
+  const built = buildDoc(md);
+  const item = (text) => [...built.doc.querySelectorAll('li')].find((li) => {
+    let own = '';
+    for (const n of li.childNodes) if (!['UL', 'OL'].includes(n.nodeName)) own += n.textContent || '';
+    return own.trim() === text;
+  });
+  return { ...built, item,
+    // Whitespace between tags is marked's pretty-printing and means nothing to a list, so the shape
+    // assertions read the structure rather than the indentation it arrived with.
+    html: () => built.doc.querySelector('.block').innerHTML.replace(/\s*\n\s*/g, '').trim(),
+    save: () => Serialize.serialize(built.doc, built.blocks, built.td).md };
+}
+
+test('lift: a top-level item becomes a paragraph and the list splits around it', () => {
+  const d = listDoc('- a\n- b\n- c\n');
+  const p = ListKeys.lift(d.item('b'));
+  assert.equal(p.nodeName, 'P', 'the caret lands in the new paragraph');
+  assert.equal(d.html(), '<ul><li>a</li></ul><p>b</p><ul><li>c</li></ul>');
+  assert.equal(d.save(), '- a\n\nb\n\n- c\n', 'the item that was b is now prose between two lists');
+});
+
+test('lift: an ordered list keeps its numbering across the split, via start', () => {
+  const d = listDoc('1. a\n2. b\n3. c\n');
+  ListKeys.lift(d.item('b'));
+  assert.equal(d.doc.querySelectorAll('ol')[1].getAttribute('start'), '3', 'c is still the third item');
+  assert.equal(d.save(), '1. a\n\nb\n\n3. c\n', 'a keystroke must not renumber the list under it');
+  // A list that already started somewhere else counts from there.
+  const e = listDoc('3. a\n4. b\n5. c\n');
+  ListKeys.lift(e.item('b'));
+  assert.equal(e.save(), '3. a\n\nb\n\n5. c\n');
+});
+
+test('lift: the first and the last item each leave one list behind, not two', () => {
+  const first = listDoc('- a\n- b\n');
+  ListKeys.lift(first.item('a'));
+  assert.equal(first.html(), '<p>a</p><ul><li>b</li></ul>', 'the emptied head list is removed');
+  assert.equal(first.save(), 'a\n\n- b\n');
+  const last = listDoc('- a\n- b\n');
+  ListKeys.lift(last.item('b'));
+  assert.equal(last.html(), '<ul><li>a</li></ul><p>b</p>', 'no empty tail list is created');
+  assert.equal(last.save(), '- a\n\nb\n');
+  const only = listDoc('- a\n');
+  ListKeys.lift(only.item('a'));
+  assert.equal(only.html(), '<p>a</p>');
+  assert.equal(only.save(), 'a\n');
+});
+
+test('lift: a nested item outdents one level rather than leaving the list', () => {
+  const d = listDoc('- a\n  - b\n');
+  const li = d.item('b');
+  assert.equal(ListKeys.lift(li), li, 'the caret stays in the item it was in');
+  assert.equal(d.html(), '<ul><li>a</li><li>b</li></ul>');
+  assert.equal(d.save(), '- a\n- b\n');
+});
+
+test("lift: the item's own sublist comes with it and joins the tail at the shallower depth", () => {
+  const d = listDoc('- a\n  - b\n- c\n');
+  ListKeys.lift(d.item('a'));
+  assert.equal(d.html(), '<p>a</p><ul><li>b</li><li>c</li></ul>', 'one list, not two adjacent ones');
+  assert.equal(d.save(), 'a\n\n- b\n- c\n');
+  // The same, ordered: the tail's start walks back so c keeps the number it had.
+  const e = listDoc('1. a\n   1. b\n2. c\n');
+  ListKeys.lift(e.item('a'));
+  assert.equal(e.save(), 'a\n\n1. b\n2. c\n');
+  // A bullet sublist under a numbered tail cannot join it, so it stands on its own.
+  const f = listDoc('1. a\n   - b\n2. c\n');
+  ListKeys.lift(f.item('a'));
+  assert.equal(f.html(), '<p>a</p><ul><li>b</li></ul><ol start="2"><li>c</li></ol>');
+});
+
+test('lift: a task-list item drops its checkbox on the way to being a paragraph', () => {
+  const d = listDoc('- [ ] todo\n- [x] done\n');
+  const p = ListKeys.lift(d.item('todo'));
+  assert.equal(p.querySelector('input'), null, 'a paragraph has no marker to carry a box');
+  assert.equal(p.textContent, 'todo', 'and no leading space where the box was');
+  assert.match(d.save(), /^todo\n\n- \[x\]/, 'the box would otherwise serialize as a literal [ ] in the prose');
+  assert.match(d.save(), /\[x\]/, 'the item that was not lifted keeps its box');
+});
+
+test('isEmptyItem: an item is empty on its own text, whatever it carries below it', () => {
+  const d = listDoc('- a\n  - b\n- c\n');
+  assert.equal(ListKeys.isEmptyItem(d.item('c')), false);
+  const parent = d.item('a');
+  parent.firstChild.textContent = '';
+  assert.equal(ListKeys.isEmptyItem(parent), true, 'an item with children but no text of its own is empty');
+  const z = listDoc('- x\n');
+  const only = z.item('x');
+  only.firstChild.textContent = '​';
+  assert.equal(ListKeys.isEmptyItem(only), true, 'the inline rule caret escape is not content');
+});
+
+test('outdent: the following siblings become children of the item that moved up', () => {
+  const d = listDoc('- a\n  - b\n  - c\n  - d\n');
+  assert.equal(ListKeys.outdent(d.item('b')).nodeName, 'LI');
+  assert.equal(d.html(), '<ul><li>a</li><li>b<ul><li>c</li><li>d</li></ul></li></ul>',
+    'c and d sat below b and still do');
+  assert.equal(d.save(), '- a\n- b\n  - c\n  - d\n');
+});
+
+test('outdent: a top-level item has nowhere to go and the document is left alone', () => {
+  const d = listDoc('- a\n- b\n');
+  assert.equal(ListKeys.outdent(d.item('b')), null, 'null is the caller\'s signal that nothing changed');
+  assert.equal(d.save(), '- a\n- b\n');
+});
+
+test('indent: the item moves into the previous item\'s sublist, or into a fresh one of the same type', () => {
+  const fresh = listDoc('- a\n- b\n- c\n');
+  assert.equal(ListKeys.indent(fresh.item('b')).nodeName, 'LI');
+  assert.equal(fresh.html(), '<ul><li>a<ul><li>b</li></ul></li><li>c</li></ul>');
+  assert.equal(fresh.save(), '- a\n  - b\n- c\n');
+  const existing = listDoc('- a\n  - x\n- b\n');
+  ListKeys.indent(existing.item('b'));
+  assert.equal(existing.html(), '<ul><li>a<ul><li>x</li><li>b</li></ul></li></ul>', 'joins the sublist already there');
+  assert.equal(existing.save(), '- a\n  - x\n  - b\n');
+  const ordered = listDoc('1. a\n2. b\n');
+  ListKeys.indent(ordered.item('b'));
+  assert.equal(ordered.doc.querySelector('li ol') && ordered.doc.querySelector('li ul'), null);
+  assert.ok(ordered.doc.querySelector('li > ol'), 'a numbered list nests a numbered one');
+});
+
+test('indent: the first item of a list has nothing to nest under', () => {
+  const d = listDoc('- a\n- b\n');
+  assert.equal(ListKeys.indent(d.item('a')), null);
+  assert.equal(d.save(), '- a\n- b\n', 'the document is untouched');
+  // Nor does the first item of a SUBLIST indent again inside it.
+  const nested = listDoc('- a\n  - b\n  - c\n');
+  assert.equal(ListKeys.indent(nested.item('b')), null);
+  assert.equal(nested.save(), '- a\n  - b\n  - c\n');
+});
+
+test('indent: an item carries its own sublist down with it', () => {
+  const d = listDoc('- a\n- b\n  - b1\n');
+  ListKeys.indent(d.item('b'));
+  assert.equal(d.html(), '<ul><li>a<ul><li>b<ul><li>b1</li></ul></li></ul></li></ul>');
+  assert.equal(d.save(), '- a\n  - b\n    - b1\n');
+});
+
+test('itemAt: the item holding the caret, and nothing inside an atomic block', () => {
+  const d = listDoc('- a\n  - b\n');
+  const text = d.item('b').firstChild;
+  assert.equal(ListKeys.itemAt(text, d.doc), d.item('b'), 'the NEAREST item, not the one wrapping it');
+  assert.equal(ListKeys.itemAt(d.doc, d.doc), null, 'the document itself is in no item');
+  assert.equal(ListKeys.itemAt(null, d.doc), null);
+  // A raw-HTML island carries its own source markdown and is not editable: a list drawn inside one is a
+  // picture of a list, so the keys have to fall through to the browser exactly as every input rule does.
+  const atomic = listDoc('<ul><li>raw</li></ul>\n');
+  const inside = atomic.doc.querySelector('.block[data-atomic] li');
+  assert.ok(inside, 'the fixture really is an atomic block');
+  assert.equal(ListKeys.itemAt(inside, atomic.doc), null);
+});
+
+test('index.html loads listkeys.js and wires the three keys to it', () => {
+  const page = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+  assert.match(page, /<script src="\/listkeys\.js"><\/script>/, 'the module the rules live in is loaded');
+  const at = page.indexOf('// Lists: Enter on an empty item');
+  assert.ok(at > 0, 'the list handler is still findable');
+  const handler = page.slice(at, page.indexOf('async function saveDoc', at));
+  assert.match(handler, /!\['Enter', 'Backspace', 'Tab'\]\.includes\(e\.key\)/, 'all three keys');
+  assert.match(handler, /ListKeys\.indent\(li\)/, 'Tab indents');
+  assert.match(handler, /ListKeys\.outdent\(li\)/, 'Shift+Tab outdents');
+  assert.match(handler, /ListKeys\.lift\(li\)/, 'Enter and Backspace both lift');
+  assert.match(handler, /ListKeys\.isEmptyItem\(li\)/, 'Enter only on an empty item');
+  // Guards, the same ones every other handler in the editor carries.
+  assert.match(handler, /e\.isComposing \|\| e\.metaKey \|\| e\.ctrlKey \|\| e\.altKey/);
+  assert.match(handler, /!s\.isCollapsed/, 'a range selection is never intercepted');
+  assert.match(handler, /dirty = true; setStatus\('editing…'\); scheduleSave\(\);/);
+  // The table/code Backspace guard must still fire for a paragraph after a table, so exactly one of the
+  // two handlers may act on one keystroke: the older one stands down while the caret is in an item.
+  assert.match(page, /if \(ListKeys\.itemAt\(s\.anchorNode, \$\('doc'\)\)\) return;/,
+    'the table guard defers to the list handler');
+  assert.match(page, /\['TABLE', 'PRE'\]\.includes/, 'and is otherwise unchanged');
+});
+
 // ---------- P1: turn/session, threaded suggestions, the wait loop ----------
 
 test('review PUT preserves top-level session — last-writer-wins by `at` (no regress of a decision)', async () => {
