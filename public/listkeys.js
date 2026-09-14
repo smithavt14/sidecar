@@ -130,16 +130,25 @@
   // and toMd strips it before anything is saved.
   function caretTarget(li, off) {
     const texts = ownTexts(li);
+    // An item with no own characters has nowhere to hold a caret. A range at (li, 0) sits in front of
+    // the sublist, and so does a range inside an EMPTY text node, which is what the browser leaves
+    // when the last letter is deleted: every engine normalizes both into the sublist's first item, so
+    // the next letter typed edits the child. The zero-width space is the caret host the inline rules
+    // already use; isEmptyItem reads through it and toMd strips it before anything is saved.
+    // Whitespace is not a character to land on either: marked pretty-prints a list with a newline
+    // between an item's text and its sublist, and a caret in that newline normalizes the same way.
+    if (!texts.some((t) => t.data.replace(/\s/g, '').length)) {
+      let host = texts[0];
+      if (!host) { host = li.ownerDocument.createTextNode(''); li.insertBefore(host, li.firstChild); }
+      host.textContent = '​';
+      return { node: host, offset: host.length };
+    }
     let acc = 0;
     for (const t of texts) {
       if (acc + t.length >= off) return { node: t, offset: Math.max(0, off - acc) };
       acc += t.length;
     }
-    let last = texts[texts.length - 1];
-    if (!last) {
-      last = li.ownerDocument.createTextNode('​');
-      li.insertBefore(last, li.firstChild);
-    }
+    const last = texts[texts.length - 1];
     return { node: last, offset: last.length };
   }
 

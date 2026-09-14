@@ -923,6 +923,12 @@ test('caretTarget: an item with no own text is given a node to hold the caret', 
   assert.equal(t.node.nodeType, 3, 'a text node, not the item');
   assert.equal(t.node.parentNode, li, 'the item\'s own, not the child\'s');
   assert.equal(li.querySelector('li').contains(t.node), false, 'nowhere near the item below');
+  // The node has to hold a character. Chrome verified 2026-09-14: a caret in an EMPTY own text node in
+  // front of the sublist normalizes into the child exactly as a range at (li, 0) does, and the letter
+  // typed after an Enter that outdented the item landed in the child.
+  assert.equal(t.node.length, 1, 'an empty text node is no host either');
+  assert.equal(t.node.textContent, '\u200b', 'the same host the inline rules use');
+  assert.equal(ListKeys.isEmptyItem(li), true, 'and the host is not content');
 
   // An item that has no own text node at all is given one, since a range at (li, 0) sits in front of
   // the sublist and normalizes into it.
