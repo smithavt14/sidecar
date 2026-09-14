@@ -913,6 +913,55 @@ test('index.html loads listkeys.js and wires the three keys to it', () => {
   assert.match(page, /\['TABLE', 'PRE'\]\.includes/, 'and is otherwise unchanged');
 });
 
+test('the list handler measures the start of a task item by trimming, not by length', () => {
+  // Marked renders `- [ ] todo` as a checkbox and the text node " todo", so the caret sitting where
+  // the reader sees the start of the line has the separator space behind it. A probe measured by
+  // length reads that space as text before the caret and hands the item back to the browser.
+  const d = listDoc('- [ ] todo\n- [x] done\n');
+  const li = d.doc.querySelector('li');
+  const label = li.childNodes[1];
+  assert.equal(label.textContent, ' todo', 'the box, then a text node the space belongs to');
+  const probe = li.ownerDocument.createRange();
+  probe.selectNodeContents(li);
+  probe.setEnd(label, 1);                              // the caret immediately before the t
+  assert.equal(probe.toString(), ' ', 'one character behind the caret, and it is whitespace');
+  assert.equal(probe.toString().trim().length, 0, 'which is what the handler has to measure');
+  const page = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+  const at = page.indexOf('// Lists: Enter on an empty item');
+  const handler = page.slice(at, page.indexOf('async function saveDoc', at));
+  assert.match(handler, /probe\.toString\(\)\.trim\(\)\.length/, 'and it measures it that way');
+});
+
+test('the list handler places the caret in the item itself, never in a list below it', () => {
+  // setCaretOffset walks every text node under the element it is given. An item whose own text is
+  // empty and whose sublist holds the only text in it would take the caret into the child, so the
+  // next letter typed edits the child. setItemCaret counts the item's own text only.
+  const page = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+  const at = page.indexOf('// Lists: Enter on an empty item');
+  const handler = page.slice(at, page.indexOf('async function saveDoc', at));
+  assert.match(handler, /setItemCaret\(landed, off\)/, 'the Tab branch places it');
+  assert.match(handler, /setItemCaret\(landed, 0\)/, 'and so does the lift branch');
+  assert.doesNotMatch(handler, /setCaretOffset\(landed/, 'the walk-everything setter is not used here');
+  const fnAt = page.indexOf('function setItemCaret');
+  assert.ok(fnAt > 0, 'the setter is still findable');
+  const fn = page.slice(fnAt, page.indexOf('\n}', fnAt));
+  assert.match(fn, /\['UL', 'OL'\]\.includes\(p\.nodeName\)/, 'text inside a nested list is not the item\'s own');
+  assert.match(fn, /el\.insertBefore\(last, el\.firstChild\)/,
+    'an item with no own text is given one, since a range in front of a sublist lands inside it');
+  // The shape the bug needs: an empty item between a parent and a child, where the only text under the
+  // item that Enter lifts belongs to the item below it. Markdown cannot write an empty item (a bare
+  // `-` under a line is a setext heading), so it is emptied here the way the browser empties one.
+  const d = listDoc('- parent\n  - x\n  - child\n');
+  const empty = d.item('x');
+  empty.firstChild.textContent = '';
+  assert.equal(ListKeys.isEmptyItem(empty), true, 'the fixture really has an empty item');
+  const landed = ListKeys.lift(empty);
+  assert.equal(landed.nodeName, 'LI', 'a nested item outdents rather than leaving the list');
+  assert.equal(landed.textContent.trim(), 'child', 'and child is the only text under it');
+  const own = [...landed.childNodes].filter((n) => !['UL', 'OL'].includes(n.nodeName));
+  assert.equal(own.map((n) => n.textContent).join('').trim(), '', 'none of which is the item\'s own');
+});
+
 // ---------- P1: turn/session, threaded suggestions, the wait loop ----------
 
 test('review PUT preserves top-level session — last-writer-wins by `at` (no regress of a decision)', async () => {
