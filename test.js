@@ -831,6 +831,30 @@ test('isEmptyItem: an item is empty on its own text, whatever it carries below i
   assert.equal(ListKeys.isEmptyItem(only), true, 'the inline rule caret escape is not content');
 });
 
+test('isEmptyItem: an item holding a picture is not empty', () => {
+  // An image carries no text, so a text-only test reads `- ![alt](x.png)` as an empty item and Enter
+  // lifts the picture out of the list the author put it in.
+  const d = listDoc('- ![alt](x.png)\n- b\n');
+  const img = d.doc.querySelector('li');
+  assert.ok(img.querySelector('img'), 'the fixture really holds an image');
+  assert.equal(ListKeys.isEmptyItem(img), false);
+  // Wrapped a level down, as a loose list renders it.
+  const loose = listDoc('- ![alt](x.png)\n\n- b\n');
+  assert.equal(ListKeys.isEmptyItem(loose.doc.querySelector('li')), false, 'inside the item\'s <p> too');
+  // The media belongs to the item only when it is the item's own. A sublist of pictures leaves the
+  // parent as empty as any other sublist does.
+  const below = listDoc('- parent\n  - ![alt](x.png)\n');
+  const parent = below.item('parent');
+  parent.firstChild.textContent = '';
+  assert.equal(ListKeys.isEmptyItem(parent), true, 'an item holding only a sublist is still empty');
+  // The task marker's checkbox is markup, not content: an unlabelled todo is an empty item.
+  const todo = listDoc('- [ ] todo\n- b\n');
+  const box = todo.doc.querySelector('li');
+  box.childNodes[1].textContent = '';
+  assert.ok(box.querySelector('input'), 'the box is still there');
+  assert.equal(ListKeys.isEmptyItem(box), true);
+});
+
 test('outdent: the following siblings become children of the item that moved up', () => {
   const d = listDoc('- a\n  - b\n  - c\n  - d\n');
   assert.equal(ListKeys.outdent(d.item('b')).nodeName, 'LI');

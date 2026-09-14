@@ -57,13 +57,29 @@
     return li;
   }
 
+  // Content an item can hold that carries no text. An item whose whole body is an image reads as empty
+  // to a text test, and Enter would lift the picture out of the list the author put it in.
+  const MEDIA = ['IMG', 'SVG', 'VIDEO', 'IFRAME', 'OBJECT', 'EMBED'];
+
+  // Every element under the item that belongs to the item: a nested list is the item below, not this
+  // one. SVG keeps its authored case in the DOM, so the name is normalized before it is compared.
+  function ownElements(li) {
+    const out = [];
+    (function walk(parent) {
+      for (const n of parent.children) { if (isList(n)) continue; out.push(n); walk(n); }
+    })(li);
+    return out;
+  }
+
   // Is this item empty, ignoring the sublist it carries? An item with children but no text of its own
   // is still an empty item: Enter on it should lift it, and its children ride along. The zero-width
   // space is the caret escape an inline input rule leaves behind (see tryInlineRule), never content.
+  // An image, a diagram or a video is content the reader can see and keeps the item non-empty.
   function isEmptyItem(li) {
     let text = '';
     for (const n of li.childNodes) if (!isList(n)) text += n.textContent || '';
-    return !text.replace(/[\s​]+/g, '').length;
+    if (text.replace(/[\s​]+/g, '').length) return false;
+    return !ownElements(li).some((el) => MEDIA.includes(el.nodeName.toUpperCase()));
   }
 
   // Tab: the item becomes a child of the item above it. The first item of a list has nothing to nest
