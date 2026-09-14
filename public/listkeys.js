@@ -16,6 +16,18 @@
   const itemsOf = (list) => [...list.children].filter((c) => c.nodeName === 'LI');
   const subListsOf = (li) => [...li.children].filter(isList);
 
+  // The first number an ordered list carries. `start` is absent on a list beginning at 1, and
+  // CommonMark lets one begin at 0, so a 0 has to survive: the attribute is read before it is
+  // converted, since Number('') is 0 and would turn a missing start into a zero-based list. Anything
+  // that is not a whole number at or above 0 reads as 1.
+  function startOf(list) {
+    if (!list || list.nodeName !== 'OL') return 1;
+    const raw = (list.getAttribute('start') || '').trim();
+    if (!raw) return 1;
+    const n = Number(raw);
+    return Number.isInteger(n) && n >= 0 ? n : 1;
+  }
+
   // The <li> holding a node, or null. An atomic block (a rendered ```flow diagram, a raw-HTML island)
   // carries its own source markdown and is not editable, so a list drawn inside one is a picture of a
   // list: the keys must fall through to the browser there, same as every other input rule.
@@ -123,21 +135,22 @@
       if (list.nodeName === 'OL') {
         // The tail has to keep counting from where the head stopped, or `1. a / 2. b / 3. c` comes back
         // from turndown as `1. a` and `1. c` and the document has been renumbered by a keystroke.
-        const start = Number(list.getAttribute('start') || 1) || 1;
-        tail.setAttribute('start', String(start + i + 1));
+        tail.setAttribute('start', String(startOf(list) + i + 1));
       }
       tailItems.forEach((n) => tail.appendChild(n));
     }
     // The sublist and the tail now sit at the same depth, so one list of the same type holds both: two
     // adjacent lists in the DOM come back from turndown as one blank-line-separated list anyway, which
-    // is a loose list the reader did not ask for and, when it is ordered, a renumbered one. The tail's
-    // `start` walks back by however many items joined ahead of it so its own items keep their numbers,
-    // and a start that would walk below 1 keeps the two lists apart instead.
+    // is a loose list the reader did not ask for and, when it is ordered, a renumbered one. Two ordered
+    // lists join only when the numbering runs straight through them: the sublist's own first number
+    // plus its item count has to be the tail's first number. `1. a / 5. b / 2. c` lifted at a would
+    // make b the 1 it never was, so a pair like that stays apart and each list keeps its own start.
     const promoted = subs.length === 1 && tail && subs[0].nodeName === tail.nodeName ? subs[0] : null;
     const joined = promoted ? itemsOf(promoted) : [];
-    const tailStart = tail && tail.hasAttribute('start') ? Number(tail.getAttribute('start')) : 0;
-    if (promoted && (!tailStart || tailStart - joined.length >= 1)) {
-      if (tailStart) tail.setAttribute('start', String(tailStart - joined.length));
+    const contiguous = promoted &&
+      (tail.nodeName !== 'OL' || startOf(promoted) + joined.length === startOf(tail));
+    if (contiguous) {
+      if (tail.nodeName === 'OL') tail.setAttribute('start', String(startOf(promoted)));
       joined.reverse().forEach((n) => tail.insertBefore(n, tail.firstChild));
       subs.length = 0;
     }

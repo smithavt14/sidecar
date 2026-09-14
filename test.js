@@ -770,6 +770,34 @@ test('lift: a task-list item drops its checkbox on the way to being a paragraph'
   assert.match(d.save(), /\[x\]/, 'the item that was not lifted keeps its box');
 });
 
+test('lift: an ordered list that starts at 0 keeps counting from 0', () => {
+  // CommonMark lets a list begin at zero and marked renders <ol start="0">, so a start has to be read
+  // as present-or-absent rather than truthy: `Number(start || 1) || 1` reads that 0 as a 1 and the
+  // tail comes back renumbered by a keystroke.
+  const d = listDoc('0. a\n1. b\n2. c\n');
+  ListKeys.lift(d.item('b'));
+  assert.equal(d.doc.querySelectorAll('ol')[1].getAttribute('start'), '2', 'c is still the third item');
+  assert.equal(d.save(), '0. a\n\nb\n\n2. c\n');
+  const first = listDoc('0. a\n1. b\n2. c\n');
+  ListKeys.lift(first.item('a'));
+  assert.equal(first.save(), 'a\n\n1. b\n2. c\n', 'b was the 1 and stays the 1');
+});
+
+test('lift: a promoted sublist joins the tail only where the numbering runs straight through', () => {
+  // The sublist comes up to the tail's depth, and joining renumbers whichever list gives way. Join
+  // when the sublist's own start plus its item count is the tail's start, and leave them apart when it
+  // is not: b is the 5 the author wrote, and one list holding both would make it the 1.
+  const apart = listDoc('1. a\n   5. b\n2. c\n');
+  ListKeys.lift(apart.item('a'));
+  assert.equal(apart.html(), '<p>a</p><ol start="5"><li>b</li></ol><ol start="2"><li>c</li></ol>');
+  assert.equal(apart.save(), 'a\n\n5. b\n\n2. c\n', 'each list keeps the numbers it had');
+  // Contiguous, and zero-based: 0 + one item is the tail's 1, so the two become one list from 0.
+  const zero = listDoc('0. a\n   0. b\n1. c\n');
+  ListKeys.lift(zero.item('a'));
+  assert.equal(zero.html(), '<p>a</p><ol start="0"><li>b</li><li>c</li></ol>');
+  assert.equal(zero.save(), 'a\n\n0. b\n1. c\n');
+});
+
 test('isEmptyItem: an item is empty on its own text, whatever it carries below it', () => {
   const d = listDoc('- a\n  - b\n- c\n');
   assert.equal(ListKeys.isEmptyItem(d.item('c')), false);
