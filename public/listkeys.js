@@ -64,6 +64,10 @@
   // Content an item can hold that carries no text. An item whose whole body is an image reads as empty
   // to a text test, and Enter would lift the picture out of the list the author put it in.
   const MEDIA = ['IMG', 'SVG', 'VIDEO', 'IFRAME', 'OBJECT', 'EMBED'];
+  // What a Range can hold in front of the caret with no text in it and still be something the reader
+  // sees: the media above, a line break, a sound. A formatting wrapper (<strong>, <code>) opened at the
+  // caret is not on this list on purpose, or the start of a bold item would stop counting as the start.
+  const VISIBLE = MEDIA.concat(['BR', 'AUDIO', 'PICTURE', 'CANVAS', 'HR']);
 
   // Every element under the item that belongs to the item: a nested list is the item below, not this
   // one. SVG keeps its authored case in the DOM, so the name is normalized before it is compared.
@@ -137,10 +141,12 @@
     // already use; isEmptyItem reads through it and toMd strips it before anything is saved.
     // Whitespace is not a character to land on either: marked pretty-prints a list with a newline
     // between an item's text and its sublist, and a caret in that newline normalizes the same way.
+    // The host is a fresh node at the front of the item. Overwriting a whitespace node that is there
+    // would rewrite content: a code span holding one space is an item with no character to land on
+    // and still an item whose space the author typed.
     if (!texts.some((t) => t.data.replace(/\s/g, '').length)) {
-      let host = texts[0];
-      if (!host) { host = li.ownerDocument.createTextNode(''); li.insertBefore(host, li.firstChild); }
-      host.textContent = '​';
+      const host = li.ownerDocument.createTextNode('​');
+      li.insertBefore(host, li.firstChild);
       return { node: host, offset: host.length };
     }
     let acc = 0;
@@ -164,7 +170,7 @@
     const range = before && typeof before === 'object' && typeof before.cloneContents === 'function' ? before : null;
     if (range) {
       const frag = range.cloneContents();
-      if ([...frag.querySelectorAll('*')].some((el) => MEDIA.includes(el.nodeName.toUpperCase()))) return false;
+      if ([...frag.querySelectorAll('*')].some((el) => VISIBLE.includes(el.nodeName.toUpperCase()))) return false;
     }
     const text = range ? range.toString() : (before || '');
     if (!text.length) return true;

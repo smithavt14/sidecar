@@ -894,6 +894,16 @@ test('atItemStart: nothing in front of the caret, or a task marker\'s separator 
   assert.equal(ListKeys.atItemStart(pli, pr), false, 'Backspace here deletes at the image, not the item');
   pr.setEnd(pli, 0);
   assert.equal(ListKeys.atItemStart(pli, pr), true, 'in front of the image is the real start');
+  // A line break is visible too, and a bold item's start is still its start.
+  const br = listDoc('- x<br>todo\n');
+  const bli = br.doc.querySelector('li');
+  const btext = [...bli.childNodes].find((n) => n.nodeType === 3 && n.textContent === 'todo');
+  const br0 = bli.ownerDocument.createRange(); br0.selectNodeContents(bli); br0.setEnd(btext, 0);
+  assert.equal(ListKeys.atItemStart(bli, br0), false, 'the break in front of the caret is content');
+  const bold = listDoc('- **bold** item\n');
+  const bl = bold.doc.querySelector('li'), st = bl.querySelector('strong');
+  const bs = bl.ownerDocument.createRange(); bs.selectNodeContents(bl); bs.setEnd(st.firstChild, 0);
+  assert.equal(ListKeys.atItemStart(bl, bs), true, 'a wrapper opened at the caret is not content');
 });
 
 test('ownOffset / caretTarget: the caret is counted over the item\'s own text, both ways', () => {
@@ -941,6 +951,12 @@ test('caretTarget: an item with no own text is given a node to hold the caret', 
   assert.equal(t.node.length, 1, 'an empty text node is no host either');
   assert.equal(t.node.textContent, '\u200b', 'the same host the inline rules use');
   assert.equal(ListKeys.isEmptyItem(li), true, 'and the host is not content');
+  // The host is added, never written over what is there: a code span holding one space keeps it.
+  const sp = listDoc('- ` `\n');
+  const sli = sp.doc.querySelector('li');
+  const before = sli.querySelector('code').textContent;
+  ListKeys.caretTarget(sli, 0);
+  assert.equal(sli.querySelector('code').textContent, before, 'the authored space survives');
 
   // An item that has no own text node at all is given one, since a range at (li, 0) sits in front of
   // the sublist and normalizes into it.
