@@ -2257,7 +2257,10 @@ $('doc').addEventListener('keydown', (e) => {
     if (landed) setItemCaret(landed, 0);
   }
   if (!landed) return;                                 // nothing moved, so nothing to save
-  dirty = true; setStatus('editing…'); scheduleSave();
+  // A list move changes the height of everything below it, and the docked cards are positioned against
+  // those heights. The 'input' listener redocks after an ordinary edit, and preventDefault means no
+  // input event fires here, so the rail is redocked from this handler.
+  dirty = true; setStatus('editing…'); scheduleSave(); scheduleDock();
 });
 
 async function saveDoc() {

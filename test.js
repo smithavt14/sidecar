@@ -1029,7 +1029,9 @@ test('index.html loads listkeys.js and wires the three keys to it', () => {
   // Guards, the same ones every other handler in the editor carries.
   assert.match(handler, /e\.isComposing \|\| e\.metaKey \|\| e\.ctrlKey \|\| e\.altKey/);
   assert.match(handler, /!s\.isCollapsed/, 'a range selection is never intercepted');
-  assert.match(handler, /dirty = true; setStatus\('editing…'\); scheduleSave\(\);/);
+  assert.match(handler, /dirty = true; setStatus\('editing…'\); scheduleSave\(\); scheduleDock\(\);/,
+    'a list move changes the height of the blocks below it, and preventDefault fires no input event, ' +
+    'so the handler redocks the rail the way the input listener does');
   // The table/code Backspace guard must still fire for a paragraph after a table, so exactly one of the
   // two handlers may act on one keystroke: the older one stands down while the caret is in an item.
   assert.match(page, /if \(ListKeys\.itemAt\(s\.anchorNode, \$\('doc'\)\)\) return;/,
