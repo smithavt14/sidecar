@@ -226,6 +226,18 @@ and both surfaces read it: `replyingHtml` draws the full card's row, `replyingPi
 the pill (a span, since a button holds phrasing content), sharing the shimmer and its reduced-motion
 fallback. Hidden is the exception, and only because it draws no cards to carry anything.
 
+**A long thread folds in its middle, and a long message clips.** The densities are about which CARDS are
+drawn; these two are about what one card draws, and they compose in that order. `Turn.foldThread` owns the
+arithmetic, beside the density it is measured against: a thread of more than four messages draws its opening
+comment, one row naming the hidden count, and the last two replies, which is the newest (usually an answer)
+and the question it answers. The row sits between the two halves in both states, so opening the fold changes
+the label under the pointer rather than moving the control. A message taller than twelve lines of its own
+rendered line height clips with a `more` of its own, which is a MEASUREMENT and so lives in `index.html`
+beside the `CARD_CAP` pass; the newest message in a thread is never clipped, since it is what the card was
+opened to read. Both choices are held per page lifetime and `resetDocState` clears them, exactly as
+`cardFold` is. `CARD_CAP` is still there as the last resort, and the fold runs before the card is measured,
+so a folded thread with two short replies does not reach it.
+
 **The anchor mark is a wash now, not a rule.** `#ffeb00` as a 2px solid underline was the highest-energy
 element on a near-monochrome page and it sat under prose, inside the reading column; Bear's red and iA's
 blue are watermarks (a cursor, a link) and neither draws a line under a sentence. So the colour drops to
