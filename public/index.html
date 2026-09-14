@@ -860,11 +860,13 @@
   .side-list.docked .card.clipped .cbody { overflow:hidden; }
   .side-list.docked .card.clipped .cbody::after { content:''; position:absolute; left:0; right:0; bottom:0;
     height:44px; pointer-events:none; background:linear-gradient(to bottom, var(--card-fade), var(--card)); }
-  .side-list .card .more { display:none; }
-  .side-list.docked .card.has-more .more { display:block; width:100%; text-align:center; margin:7px 0 0;
+  /* A direct child of the card, which is what the toggle is: a message carries one of its own now
+     (.side-list .card .msg .more), and it is neither hidden with this one nor centred with it. */
+  .side-list .card > .more { display:none; }
+  .side-list.docked .card.has-more > .more { display:block; width:100%; text-align:center; margin:7px 0 0;
     padding:2px 0; border:0; background:none; box-shadow:none; cursor:pointer;
     font:600 var(--t-2) 'Geist', ui-sans-serif, sans-serif; color:var(--muted); }
-  .side-list.docked .card.has-more .more:hover { color:var(--ink); background:none; }
+  .side-list.docked .card.has-more > .more:hover { color:var(--ink); background:none; }
   /* review card: no border, a soft depth shadow lifts it off the rail.
      `position:relative` is for the fold control in the corner; the docked rule below overrides it to
      absolute, which positions the same way. */
@@ -982,7 +984,10 @@
   .msg .who::before { display:inline-block; vertical-align:middle; margin-right:5px; }
   .msg .who.agent { color:var(--chip-fg); }
   .msg .who.human { color:var(--ink); }
-  .msg .t { color:var(--fg); }
+  /* A block rather than the span it renders as, in every message rather than only in a clipped one:
+     clampMessages measures each message body against twelve lines, and an inline box has no height to
+     measure and nothing to clip. `.who` above it is already a block, so nothing moves. */
+  .msg .t { color:var(--fg); display:block; position:relative; }
   /* A message body is rendered markdown (proseHtml). One-paragraph bodies come back inline and sit on
      the author's line; anything structured brings real blocks, styled tight so a card stays scannable. */
   .msg .t > :first-child { margin-top:0; }
@@ -1006,6 +1011,31 @@
      opens. zoom-in says so before the click does. */
   .msg .t img { max-width:100%; height:auto; border-radius:var(--r-1); display:block; margin:7px 0;
     border:1px solid var(--line-2); cursor:zoom-in; background:var(--fill); }
+  /* ---------- a long thread folds in its middle, and a long message clips ----------
+     The row that stands in for the hidden replies (public/turn.js: foldThread). It sits where the
+     messages it replaces sat, with a hairline running out to each side, so it reads as a gap in the
+     conversation rather than as another thing said in it. Same type as the card's own `more` toggle:
+     one vocabulary in the rail for "there is more here than is drawn". */
+  .side-list .msgfold { display:flex; align-items:center; gap:9px; width:100%; margin:9px 0; padding:0;
+    border:0; background:none; box-shadow:none; cursor:pointer; color:var(--muted);
+    font:600 var(--t-2) 'Geist', ui-sans-serif, sans-serif; }
+  .side-list .msgfold::before, .side-list .msgfold::after { content:''; flex:1; height:1px; background:var(--line); }
+  .side-list .msgfold:hover { color:var(--ink); background:none; }
+  /* A message taller than twelve lines clips to them (clampMessages). The fade runs to the message's
+     own ground, which is the human's well or the agent's chip. */
+  .side-list .msg.clamped .t { overflow:hidden; }
+  .side-list .msg.clamped .t::after { content:''; position:absolute; left:0; right:0; bottom:0; height:32px;
+    pointer-events:none; background:linear-gradient(to bottom, transparent, var(--fill)); }
+  .side-list .msg.by-agent.clamped .t::after { background:linear-gradient(to bottom, transparent, var(--chip)); }
+  /* The clamp's toggle. It carries a class more than the card's own two rules do and sits after both,
+     which it needs for each of them: the first hides every `.more` until a card is docked, and this one
+     has to draw on a phone too, since a message is as long there as it is on a desktop; the second
+     centres the card's toggle across the full width, and this one is left-aligned under the text it
+     belongs to, which is how a reader tells the two apart. */
+  .side-list .card .msg .more { display:block; margin:5px 0 0; padding:0; border:0; background:none;
+    box-shadow:none; cursor:pointer; color:var(--muted);
+    font:600 var(--t-2) 'Geist', ui-sans-serif, sans-serif; }
+  .side-list .card .msg .more:hover { color:var(--ink); background:none; }
   /* full-size view of an attached image — click anywhere or Esc to dismiss */
   #lightbox { position:fixed; inset:0; z-index:60; display:none; place-items:center; padding:24px;
     background:var(--scrim); cursor:zoom-out; }
@@ -2872,7 +2902,7 @@ function nestedSugHtml(sug) {
     // Its thread renders, but it gets no reply box of its own: this card already sits inside the parent
     // comment's thread, whose compose box is a few pixels below. A second box in the same card would
     // make "which one am I answering" a question the human has to ask.
-    + threadHtml(sug.thread)
+    + threadHtml(sug.thread, sug.id)
     + `<div class="row"><button class="primary" data-action="accept">accept</button>
        <button data-action="reject">reject</button></div></div>`;
 }
@@ -3018,6 +3048,59 @@ function dockCards() {
   list.style.height = cursor + 'px';   // absolute children don't size the parent; the page needs this to scroll
   syncFreeze(list);   // …and now that every card has a final position, pin the one being typed into
 }
+// ---------- one message, twelve lines ----------
+// The thread fold (public/turn.js) takes the middle out of a long CONVERSATION. This takes the tail off
+// a long MESSAGE, and it is a measurement rather than arithmetic, so it lives here beside the CARD_CAP
+// pass and not in turn.js. Twelve lines is about a paragraph and a half: enough to tell what a message
+// is about and to decide whether to open it.
+//
+// Measured against the line height the message actually renders at rather than counted in characters,
+// because the card holds rendered markdown: a list, a table and a code block are all far taller per
+// character than prose, and a count would clip them at wildly different heights.
+const MSG_LINES = 12;
+// Which messages a reader has opened, keyed `<thread id>:<index>`, and which long threads are unfolded.
+// Both are the page's lifetime only and resetDocState clears them, for the reason cardFold gives: what
+// a reader opened while working through one document says nothing about the next, and an item id is
+// unique only inside one review.
+const msgOpen = new Set();
+const threadOpen = new Set();
+function clampMessages() {
+  const list = $('side').querySelector('.side-list');
+  if (!list) return;
+  // Every rail draws this, docked or not: a message is as long on a phone as it is on a desktop, and
+  // the archived tab holds the same conversations the active one does.
+  for (const msg of list.querySelectorAll('.msg[data-i]')) {
+    const t = msg.querySelector(':scope > .t');
+    const holder = msg.closest('[data-id]');
+    if (!t || !holder) continue;
+    const key = holder.dataset.id + ':' + msg.dataset.i;
+    const open = msgOpen.has(key);
+    // Measure unclipped, the same order the card's own cap uses: "is this too tall?" is a question
+    // about the real content height, and asking it of an already-clipped box answers yes forever.
+    t.style.maxHeight = ''; msg.classList.remove('clamped');
+    let more = msg.querySelector(':scope > .more');
+    // The newest message is what the card is opened to read, so it is never clipped, and a fold that
+    // left a toggle on it would offer to reveal something nothing is hiding.
+    if (msg.classList.contains('newest')) { if (more) more.remove(); continue; }
+    // A box with no width wraps every word onto its own line, so a two-line message measures as twenty
+    // and every message in the rail clips. That is what a render into a page the browser has not laid
+    // out looks like (a background tab, a hidden pane), and the honest answer there is to clamp
+    // nothing: scheduleDock runs this again on the next resize, by which time there is a width.
+    if (!t.clientWidth) { if (more) more.remove(); continue; }
+    const cs = getComputedStyle(t);
+    const lh = parseFloat(cs.lineHeight) || (parseFloat(cs.fontSize) * 1.45);
+    const cap = Math.round(lh * MSG_LINES);
+    // One line of tolerance, the same idea as the card cap's 12px: a message that overruns by half a
+    // sentence would otherwise grow a toggle that reveals half a sentence.
+    const tall = t.scrollHeight > cap + lh;
+    if (tall && !open) { t.style.maxHeight = cap + 'px'; msg.classList.add('clamped'); }
+    if (tall) {
+      if (!more) { more = document.createElement('button'); more.className = 'more'; more.dataset.action = 'msgmore'; msg.appendChild(more); }
+      more.dataset.i = msg.dataset.i;
+      more.textContent = open ? 'less' : 'more';
+    } else if (more) more.remove();
+  }
+}
 // ---------- unsent replies, for the page's lifetime ----------
 // What a human has typed and not sent, keyed by item id. It is kept OFF the card because the card is
 // not where it is safe: renderSide rebuilds every textarea, a fold at compact replaces the box with a
@@ -3086,7 +3169,13 @@ let dockQueued = false;
 function scheduleDock() {
   if (dockQueued) return;
   dockQueued = true;
-  requestAnimationFrame(() => { dockQueued = false; try { dockCards(); } catch (e) { console.error('sidecar: dock failed', e); } });
+  // The clamp comes first here for the reason it does in renderSide: it changes how tall a card is, and
+  // dockCards measures that height. A resize is also the moment a rail that had no width to measure
+  // against finally has one, so this is where a message left unclamped by a zero-width render is caught.
+  requestAnimationFrame(() => {
+    dockQueued = false;
+    try { clampMessages(); dockCards(); } catch (e) { console.error('sidecar: dock failed', e); }
+  });
 }
 function renderSide() {
   const side = $('side');
@@ -3170,6 +3259,7 @@ function renderSide() {
   // review data, because renderSide also fires on presence heartbeats where nothing has changed.
   markEntering(side);
   markAnchors();   // refresh the in-doc highlight cues to match the current items
+  clampMessages(); // clip any message longer than twelve lines BEFORE the cards are measured…
   dockCards();     // …then place each card level with the mark markAnchors just laid down (order matters)
   renderTurn();    // right cluster: open / orphaned counts
   renderPresence();// center: the agent, while it is here
@@ -3245,7 +3335,7 @@ function renderActive(list, top, childSug) {
     if (it.kind === 'suggestion') {
       body += diffHtml(it.anchor.quote, it.replacement);
       if (it.note) body += `<div class="msg"><span class="t">${proseHtml(it.note)}</span></div>`;
-      body += threadHtml(it.thread);
+      body += threadHtml(it.thread, it.id);
       // A suggestion is discussable before it is decided: same thread and same reply box a comment
       // gets, so a question about a change can be asked on the change itself instead of accept/reject
       // being the only two things sayable about it.
@@ -3260,7 +3350,7 @@ function renderActive(list, top, childSug) {
                  ${imgBtn('data-action="image"')}<span class="spacer"></span>
                  <button data-action="send">send</button></div>`;
     } else {
-      body += threadHtml(it.thread);
+      body += threadHtml(it.thread, it.id);
       for (const sug of (childSug[it.id] || [])) if (['pending', 'orphaned'].includes(sug.status)) body += nestedSugHtml(sug);
       actions = `<div class="row"><textarea class="reply" rows="1" placeholder="reply…" oninput="autogrow(this)" data-action="reply"></textarea></div>
                  <div class="row"><button class="ghost" data-action="resolve">resolve</button>
@@ -3317,9 +3407,9 @@ function renderArchived(list, archived, childSug) {
       if (it.note) body += `<div class="msg"><span class="t">${proseHtml(it.note)}</span></div>`;
       // The conversation is half the record of why this was accepted or rejected. Dropping it here
       // would archive the decision and lose the argument that produced it.
-      body += threadHtml(it.thread);
+      body += threadHtml(it.thread, it.id);
     } else {
-      body += threadHtml(it.thread);
+      body += threadHtml(it.thread, it.id);
       for (const sug of (childSug[it.id] || [])) if (['accepted', 'rejected'].includes(sug.status))
         body += `<div class="subcard"><span class="who agent">claude</span> <span class="badge ${sug.status}">${sug.status}</span>`
               + diffHtml(sug.anchor.quote, sug.replacement)
@@ -3367,9 +3457,29 @@ const foldBtn = () => foldable()
 // insertion order IS chronological, and it can't be scrambled by a wrong timestamp. (An agent stamping a
 // guessed `at` reordered a thread on 2026-07-22 — reply above the comment it answered.) The server's
 // thread merge preserves the same order.
-function threadHtml(thread) {
-  return (thread || [])
-    .map(m => `<div class="msg by-${whoCls(m.by)}"><span class="who ${whoCls(m.by)}">${esc(m.by)}</span><span class="t">${proseHtml(m.text)}</span></div>`).join('');
+//
+// A thread of more than four messages draws its opening comment, one row naming the replies it is not
+// drawing, and the last two (public/turn.js: foldThread, which owns the arithmetic and the reasoning).
+// The row is the toggle both ways, and it keeps its place in the thread when the fold opens: the label
+// changes from a count to `fold` and the pointer is already on it.
+function threadHtml(thread, id) {
+  const all = thread || [];
+  const fold = Turn.foldThread(all, threadOpen.has(id));
+  const last = all.length - 1;
+  const at = all.length - fold.tail.length;
+  // The fold never hides fewer than two, so the count is always plural (public/turn.js: foldThread).
+  const row = fold.hiddenCount ? `${fold.hiddenCount} earlier replies` : (fold.foldable ? 'fold' : '');
+  return fold.head.map((m, i) => msgHtml(m, i, i === last)).join('')
+    + (row ? `<button class="msgfold" data-action="threadfold">${row}</button>` : '')
+    + fold.tail.map((m, i) => msgHtml(m, at + i, at + i === last)).join('');
+}
+// One message. `data-i` is its index in the whole thread and not in the half being drawn, because the
+// clamp is remembered per (thread, index) and a fold that renumbered the tail would move every
+// remembered clamp onto a different message. `newest` is never clamped: it is the one everybody opens
+// the card to read.
+function msgHtml(m, i, newest) {
+  return `<div class="msg by-${whoCls(m.by)}${newest ? ' newest' : ''}" data-i="${i}">`
+    + `<span class="who ${whoCls(m.by)}">${esc(m.by)}</span><span class="t">${proseHtml(m.text)}</span></div>`;
 }
 // Right cluster — pure STATUS: the open + orphaned counts (no actions, no presence).
 function renderTurn() {
@@ -3502,6 +3612,18 @@ $('side').addEventListener('click', (e) => {
     // built from different markup in each state, and everything below it has to re-dock either way.
     case 'unfold': cardFold.set(id, 'full'); renderSide(); break;
     case 'fold': cardFold.set(id, 'collapsed'); renderSide(); break;
+    // Take the middle of a long thread out, or put it back. A re-render rather than a class toggle, for
+    // the reason the two above are: the card is built from a different set of messages in each state.
+    // The card's own height changes under the reader who asked for it, which is expected; everything
+    // below it re-docks, and a frozen card stays where it was pinned.
+    case 'threadfold': threadOpen.has(id) ? threadOpen.delete(id) : threadOpen.add(id); renderSide(); break;
+    // One message's clamp. No re-render: the markup is already right and only the clip changes, so the
+    // pass that measures it runs again and the cards below re-dock around the new height.
+    case 'msgmore': {
+      const key = id + ':' + el.dataset.i;
+      msgOpen.has(key) ? msgOpen.delete(key) : msgOpen.add(key);
+      clampMessages(); dockCards(); break;
+    }
     case 'locate': locate(id); break;
     case 'accept': decide(id, 'accept'); break;
     case 'reject': decide(id, 'reject'); break;
@@ -4558,6 +4680,8 @@ function resetDocState() {
   // Which threads were folded open is an answer about the outgoing document's items, and an item id is
   // only unique within one review.
   cardFold.clear(); litId = null;
+  // …and so are the threads a reader unfolded and the long messages they opened, for the same reason.
+  threadOpen.clear(); msgOpen.clear();
   // An unsent reply is a reply to one of the outgoing document's threads, so it leaves with them.
   replyDrafts.clear(); draftFocus = null;
   // Every remembered card position was measured in the OUTGOING document, so it says nothing true
