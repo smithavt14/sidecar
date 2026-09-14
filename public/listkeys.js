@@ -143,6 +143,17 @@
     return { node: last, offset: last.length };
   }
 
+  // Is the caret at the start of the item, given the text the caller measured in front of it? Nothing
+  // in front is the start. Whitespace in front is the start for one shape only: `- [ ] todo` renders
+  // as a checkbox and the text node " todo", so the caret where the reader sees the start of the line
+  // has the marker's separator space behind it. A space anywhere else, inside a code span or opening a
+  // line the author indented, is content, and Backspace on it deletes a character.
+  function atItemStart(li, before) {
+    const text = before || '';
+    if (!text.length) return true;
+    return !text.trim().length && !!markerBox(li);
+  }
+
   // Tab: the item becomes a child of the item above it. The first item of a list has nothing to nest
   // under and returns null. An existing trailing sublist on the previous item is reused whatever its
   // type, since that is the list the reader can see; only a previous item with no sublist at all gets
@@ -253,6 +264,6 @@
     return p;
   }
 
-  const API = { itemAt, isEmptyItem, ownOffset, caretTarget, indent, outdent, lift };
+  const API = { itemAt, isEmptyItem, atItemStart, ownOffset, caretTarget, indent, outdent, lift };
   if (typeof module !== 'undefined' && module.exports) module.exports = API; else root.ListKeys = API;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

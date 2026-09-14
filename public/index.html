@@ -2245,10 +2245,10 @@ $('doc').addEventListener('keydown', (e) => {
     } else {
       const probe = s.getRangeAt(0).cloneRange();      // is the caret at the very start of THIS item?
       probe.selectNodeContents(li); probe.setEnd(s.anchorNode, s.anchorOffset);
-      // Whitespace ahead of the caret still counts as the start. `- [ ] todo` renders as a checkbox
-      // and the text node " todo", so the caret before the t has one space behind it and a length
-      // test would hand a task item back to the browser.
-      if (probe.toString().trim().length) return;      // text before the caret → ordinary backspace
+      // What counts as the start is ListKeys.atItemStart: nothing in front of the caret, or whitespace
+      // in front of it in a task item, where the checkbox leaves the marker's separator space behind
+      // the first letter. A space the author wrote is content and Backspace deletes it.
+      if (!ListKeys.atItemStart(li, probe.toString())) return;
     }
     // Backspace turns the item into a paragraph rather than merging it into the block above. The merge
     // is still one keystroke away: a second Backspace now starts in a paragraph and falls through.

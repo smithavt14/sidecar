@@ -855,6 +855,35 @@ test('isEmptyItem: an item holding a picture is not empty', () => {
   assert.equal(ListKeys.isEmptyItem(box), true);
 });
 
+test('atItemStart: nothing in front of the caret, or a task marker\'s separator space', () => {
+  // `- [ ] todo` renders as a checkbox and the text node " todo", so the caret where the reader sees
+  // the start of the line has one space behind it. That space is the marker's. A space the author
+  // wrote is content, and trimming every kind of whitespace mistook one for the other.
+  const task = listDoc('- [ ] todo\n- [x] done\n');
+  const li = task.doc.querySelector('li');
+  const label = li.childNodes[1];
+  assert.equal(label.textContent, ' todo', 'the box, then a text node the space belongs to');
+  const probe = li.ownerDocument.createRange();
+  probe.selectNodeContents(li);
+  probe.setEnd(label, 1);                              // the caret immediately before the t
+  assert.equal(probe.toString(), ' ', 'one character behind the caret, and it is whitespace');
+  assert.equal(ListKeys.atItemStart(li, probe.toString()), true, 'Backspace here lifts the item');
+  probe.setEnd(label, 3);
+  assert.equal(ListKeys.atItemStart(li, probe.toString()), false, 'further into the label it does not');
+
+  // A code span opening with a space, in an item with no marker at all.
+  const code = listDoc('- ` foo`\n- b\n');
+  const span = code.doc.querySelector('li code').firstChild;
+  assert.equal(span.textContent, ' foo');
+  const r = code.doc.querySelector('li').ownerDocument.createRange();
+  r.selectNodeContents(code.doc.querySelector('li'));
+  r.setEnd(span, 1);                                   // the caret after the space, inside the code
+  assert.equal(r.toString(), ' ', 'whitespace in front of the caret, same as the task item');
+  assert.equal(ListKeys.atItemStart(code.doc.querySelector('li'), r.toString()), false,
+    'a space the author wrote is a character Backspace deletes');
+  assert.equal(ListKeys.atItemStart(code.doc.querySelector('li'), ''), true, 'the real start still lifts');
+});
+
 test('ownOffset / caretTarget: the caret is counted over the item\'s own text, both ways', () => {
   // A loose item with a sublist between its two paragraphs: `- a` / `  - b` / blank / `  continued`.
   // The item's own text is "a" and "continued"; "b" belongs to the item below. A caret measured
@@ -1008,25 +1037,6 @@ test('index.html loads listkeys.js and wires the three keys to it', () => {
   assert.match(page, /\['TABLE', 'PRE'\]\.includes/, 'and is otherwise unchanged');
 });
 
-test('the list handler measures the start of a task item by trimming, not by length', () => {
-  // Marked renders `- [ ] todo` as a checkbox and the text node " todo", so the caret sitting where
-  // the reader sees the start of the line has the separator space behind it. A probe measured by
-  // length reads that space as text before the caret and hands the item back to the browser.
-  const d = listDoc('- [ ] todo\n- [x] done\n');
-  const li = d.doc.querySelector('li');
-  const label = li.childNodes[1];
-  assert.equal(label.textContent, ' todo', 'the box, then a text node the space belongs to');
-  const probe = li.ownerDocument.createRange();
-  probe.selectNodeContents(li);
-  probe.setEnd(label, 1);                              // the caret immediately before the t
-  assert.equal(probe.toString(), ' ', 'one character behind the caret, and it is whitespace');
-  assert.equal(probe.toString().trim().length, 0, 'which is what the handler has to measure');
-  const page = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
-  const at = page.indexOf('// Lists: Enter on an empty item');
-  const handler = page.slice(at, page.indexOf('async function saveDoc', at));
-  assert.match(handler, /probe\.toString\(\)\.trim\(\)\.length/, 'and it measures it that way');
-});
-
 test('the list handler places the caret in the item itself, never in a list below it', () => {
   // setCaretOffset walks every text node under the element it is given. An item whose own text is
   // empty and whose sublist holds the only text in it would take the caret into the child, so the
@@ -1041,6 +1051,8 @@ test('the list handler places the caret in the item itself, never in a list belo
   assert.match(handler, /setItemCaret\(landed, off\)/, 'the Tab branch places it');
   assert.match(handler, /setItemCaret\(landed, 0\)/, 'and so does the lift branch');
   assert.doesNotMatch(handler, /setCaretOffset\(landed/, 'the walk-everything setter is not used here');
+  assert.match(handler, /ListKeys\.atItemStart\(li, probe\.toString\(\)\)/,
+    'and Backspace asks the module what the start of an item is');
   const fnAt = page.indexOf('function setItemCaret');
   assert.ok(fnAt > 0, 'the setter is still findable');
   const fn = page.slice(fnAt, page.indexOf('\n}', fnAt));
