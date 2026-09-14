@@ -1049,6 +1049,14 @@ test('itemAt: the item holding the caret, and nothing inside an atomic block', (
   assert.equal(ListKeys.itemAt(inside, atomic.doc), null);
 });
 
+test('the rail measures again when a picture in a message finishes loading', () => {
+  // clampMessages and dockCards both measure heights, and a screenshot in a reply has none until it
+  // loads. `load` does not bubble, so the listener has to be a capturing one on the rail.
+  const page = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+  assert.match(page, /\$\('side'\)\.addEventListener\('load', \(e\) => \{[^\n]*tagName === 'IMG'[^\n]*scheduleDock\(\)[^\n]*\}, true\);/,
+    'a capturing load listener on the rail that reschedules the dock for an image');
+});
+
 test('index.html loads listkeys.js and wires the three keys to it', () => {
   const page = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
   assert.match(page, /<script src="\/listkeys\.js"><\/script>/, 'the module the rules live in is loaded');

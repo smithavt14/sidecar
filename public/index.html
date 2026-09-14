@@ -3177,6 +3177,11 @@ function scheduleDock() {
     try { clampMessages(); dockCards(); } catch (e) { console.error('sidecar: dock failed', e); }
   });
 }
+// A screenshot in a reply arrives after the card was measured: the message is clamped, or not, at the
+// height it had with an empty box where the picture will be, and the cards below were docked to that.
+// `load` does not bubble, so the rail listens in the capture phase and every image in every card
+// reports to the one scheduler, which measures again once the picture has its height.
+$('side').addEventListener('load', (e) => { if (e.target && e.target.tagName === 'IMG') scheduleDock(); }, true);
 function renderSide() {
   const side = $('side');
   // Preserve any reply the user is mid-typing. renderSide rebuilds every card via innerHTML, and it
