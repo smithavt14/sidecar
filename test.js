@@ -855,6 +855,77 @@ test('isEmptyItem: an item holding a picture is not empty', () => {
   assert.equal(ListKeys.isEmptyItem(box), true);
 });
 
+test('ownOffset / caretTarget: the caret is counted over the item\'s own text, both ways', () => {
+  // A loose item with a sublist between its two paragraphs: `- a` / `  - b` / blank / `  continued`.
+  // The item's own text is "a" and "continued"; "b" belongs to the item below. A caret measured
+  // against the whole item counts "b" as well, and Tab then placed it that many characters along.
+  const d = listDoc('- a\n  - b\n\n  continued\n');
+  const li = d.doc.querySelector('li');
+  const cont = [...li.querySelectorAll('p')].find((p) => p.textContent === 'continued').firstChild;
+  assert.equal(li.querySelector('li').textContent, 'b', 'the fixture really nests an item between them');
+  const off = ListKeys.ownOffset(li, cont, 3);         // the caret after "con"
+  const back = ListKeys.caretTarget(li, off);
+  assert.equal(back.node, cont, 'it round-trips to the node the caret was in');
+  assert.equal(back.offset, 3, 'at the character it was on');
+  // The whole-item measurement the Tab branch used to take counts the sublist's text as well, so the
+  // caret came back that many characters further along.
+  const whole = li.ownerDocument.createRange();
+  whole.selectNodeContents(li); whole.setEnd(cont, 3);
+  const sub = li.querySelector('ul').textContent;
+  assert.ok(sub.includes('b'), 'the sublist holds text of its own');
+  assert.equal(whole.toString().length - off, sub.length, 'and that is the whole difference');
+  assert.notEqual(ListKeys.caretTarget(li, whole.toString().length).offset, 3,
+    'which is why the old measurement did not round-trip');
+
+  // Text before the sublist: the caret lands in that node, not in the child.
+  const head = ListKeys.caretTarget(li, 1);
+  assert.equal(head.node.textContent, 'a');
+  assert.equal(head.offset, 1);
+  assert.equal(ListKeys.ownOffset(li, head.node, 1), 1, 'and reads back as the same offset');
+});
+
+test('caretTarget: an item with no own text is given a node to hold the caret', () => {
+  // A range at (li, 0) sits in front of the sublist, and every engine normalizes that into the
+  // sublist's first item, so the next letter typed edits the child.
+  const d = listDoc('- parent\n  - child\n');
+  const li = d.doc.querySelector('li');
+  li.firstChild.textContent = '';                      // the item the browser leaves behind
+  const t = ListKeys.caretTarget(li, 0);
+  assert.equal(t.node.nodeType, 3, 'a text node, not the item');
+  assert.equal(t.node.parentNode, li, 'the item\'s own, not the child\'s');
+  assert.equal(li.querySelector('li').contains(t.node), false, 'nowhere near the item below');
+
+  // An item that has no own text node at all is given one, since a range at (li, 0) sits in front of
+  // the sublist and normalizes into it.
+  const e = listDoc('- parent\n  - child\n');
+  const bare = e.doc.querySelector('li');
+  [...bare.childNodes].filter((n) => n.nodeType === 3).forEach((n) => n.remove());
+  const seeded = ListKeys.caretTarget(bare, 0);
+  assert.equal(seeded.node.textContent, '​', 'the zero-width space the inline rules already use');
+  assert.equal(seeded.node.parentNode, bare);
+  assert.equal(seeded.offset, seeded.node.length);
+  assert.equal(ListKeys.isEmptyItem(bare), true, 'and the item still reads as empty through it');
+  assert.equal(e.save().includes('​'), false, 'the seeded space never reaches the file');
+});
+
+test('ownOffset: an element anchor, and a caret the browser left in a nested item', () => {
+  const d = listDoc('- a\n  - b\n\n  continued\n');
+  const li = d.doc.querySelector('li');
+  const kids = [...li.childNodes].filter((n) => n.nodeType === 1);
+  const ownText = [...li.childNodes]
+    .filter((n) => !['UL', 'OL'].includes(n.nodeName)).map((n) => n.textContent).join('');
+  // An element anchor is an index into the children, not a character offset.
+  assert.equal(ListKeys.ownOffset(li, li, 0), 0, 'in front of everything');
+  assert.equal(ListKeys.ownOffset(li, li, li.childNodes.length), ownText.length, 'every own character');
+  assert.equal(kids[0].nodeName, 'P');
+  assert.equal(ListKeys.ownOffset(li, kids[0], 1), 1, 'past the first paragraph, which holds "a"');
+  // A caret the browser left inside the sublist counts none of that sublist's text toward this item.
+  const child = li.querySelector('li').firstChild;
+  assert.equal(child.textContent, 'b');
+  assert.equal(ListKeys.ownOffset(li, child, 1), ListKeys.ownOffset(li, child, 0),
+    'nothing inside a nested item counts toward the item holding it');
+});
+
 test('outdent: the following siblings become children of the item that moved up', () => {
   const d = listDoc('- a\n  - b\n  - c\n  - d\n');
   assert.equal(ListKeys.outdent(d.item('b')).nodeName, 'LI');
@@ -959,19 +1030,22 @@ test('the list handler measures the start of a task item by trimming, not by len
 test('the list handler places the caret in the item itself, never in a list below it', () => {
   // setCaretOffset walks every text node under the element it is given. An item whose own text is
   // empty and whose sublist holds the only text in it would take the caret into the child, so the
-  // next letter typed edits the child. setItemCaret counts the item's own text only.
+  // next letter typed edits the child. The arithmetic that avoids that is ListKeys.ownOffset and
+  // ListKeys.caretTarget, tested above; what the page holds is the reading and the placing.
   const page = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
   const at = page.indexOf('// Lists: Enter on an empty item');
   const handler = page.slice(at, page.indexOf('async function saveDoc', at));
+  assert.match(handler, /ListKeys\.ownOffset\(li, s\.anchorNode, s\.anchorOffset\)/,
+    'the Tab branch measures the caret over the item\'s own text');
+  assert.doesNotMatch(handler, /caretOffsetIn\(li\)/, 'the whole-item measurement counts the sublist');
   assert.match(handler, /setItemCaret\(landed, off\)/, 'the Tab branch places it');
   assert.match(handler, /setItemCaret\(landed, 0\)/, 'and so does the lift branch');
   assert.doesNotMatch(handler, /setCaretOffset\(landed/, 'the walk-everything setter is not used here');
   const fnAt = page.indexOf('function setItemCaret');
   assert.ok(fnAt > 0, 'the setter is still findable');
   const fn = page.slice(fnAt, page.indexOf('\n}', fnAt));
-  assert.match(fn, /\['UL', 'OL'\]\.includes\(p\.nodeName\)/, 'text inside a nested list is not the item\'s own');
-  assert.match(fn, /el\.insertBefore\(last, el\.firstChild\)/,
-    'an item with no own text is given one, since a range in front of a sublist lands inside it');
+  assert.match(fn, /ListKeys\.caretTarget\(el, off\)/, 'a thin call over the tested arithmetic');
+
   // The shape the bug needs: an empty item between a parent and a child, where the only text under the
   // item that Enter lifts belongs to the item below it. Markdown cannot write an empty item (a bare
   // `-` under a line is a setext heading), so it is emptied here the way the browser empties one.
@@ -984,6 +1058,9 @@ test('the list handler places the caret in the item itself, never in a list belo
   assert.equal(landed.textContent.trim(), 'child', 'and child is the only text under it');
   const own = [...landed.childNodes].filter((n) => !['UL', 'OL'].includes(n.nodeName));
   assert.equal(own.map((n) => n.textContent).join('').trim(), '', 'none of which is the item\'s own');
+  // And the caret goes to the item, not into child.
+  const target = ListKeys.caretTarget(landed, 0);
+  assert.equal(target.node.parentNode, landed, 'the node the handler ranges to is the item\'s own');
 });
 
 // ---------- P1: turn/session, threaded suggestions, the wait loop ----------

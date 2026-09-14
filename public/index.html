@@ -2081,36 +2081,13 @@ function setCaretOffset(el, off) {
 }
 // The same, for an element a list key landed the caret in. setCaretOffset walks EVERY text node under
 // the element, so an <li> whose only text is the sublist below it (`- parent` over an empty item over
-// `- child`) hands the caret to the child and the next letter typed edits the child. Here only the
-// item's own text counts, and an item with none gets the range at (li, 0), which is the item itself.
+// `- child`) hands the caret to the child and the next letter typed edits the child. An item counts
+// only its own text, and ListKeys.caretTarget does that arithmetic where a jsdom test can run it.
+// Anything else a list key lands the caret in is a paragraph and takes the ordinary setter.
 function setItemCaret(el, off) {
   if (el.nodeName !== 'LI') return setCaretOffset(el, off);
-  const own = (n) => {
-    for (let p = n.parentNode; p && p !== el; p = p.parentNode) if (['UL', 'OL'].includes(p.nodeName)) return false;
-    return true;
-  };
-  const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT,
-    { acceptNode: (n) => (own(n) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT) });
-  const texts = []; let n; while ((n = w.nextNode())) texts.push(n);
-  const r = document.createRange();
-  let acc = 0, placed = false;
-  for (const t of texts) {
-    if (acc + t.length >= off) { r.setStart(t, off - acc); placed = true; break; }
-    acc += t.length;
-  }
-  if (!placed) {
-    let last = texts[texts.length - 1];
-    if (!last) {
-      // An item with no own text has nowhere to hold a caret: a range at (li, 0) sits in front of the
-      // sublist, and every engine normalizes that into the sublist's first item, so the next letter
-      // typed edits the child. Seed the item with the ​ the inline rules already use as a caret host;
-      // isEmptyItem reads through it and toMd strips it before anything is saved.
-      last = document.createTextNode('​');
-      el.insertBefore(last, el.firstChild);
-    }
-    r.setStart(last, last.length);
-  }
-  r.collapse(true);
+  const { node, offset } = ListKeys.caretTarget(el, off);
+  const r = document.createRange(); r.setStart(node, offset); r.collapse(true);
   const s = getSelection(); s.removeAllRanges(); s.addRange(r);
 }
 
@@ -2253,7 +2230,10 @@ $('doc').addEventListener('keydown', (e) => {
   if (!li) return;                                     // outside a list item Tab still moves focus
   let landed = null;
   if (e.key === 'Tab') {
-    const off = caretOffsetIn(li);
+    // Measured over the item's OWN text, which is what setItemCaret places back. caretOffsetIn counts
+    // the text of every nested item too, so an item with a sublist above continuation text came out of
+    // a Tab with the caret moved by however many characters the sublist held.
+    const off = ListKeys.ownOffset(li, s.anchorNode, s.anchorOffset);
     // preventDefault even when the move is impossible (the first item of a list has nothing to nest
     // under): a literal tab character typed into an <li> is never what the key meant.
     e.preventDefault();

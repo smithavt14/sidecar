@@ -9,7 +9,11 @@
 
    Each transform returns the element the caret should land in, or null when nothing happened (the
    first item of a list cannot indent, a top-level item cannot outdent). A null is the caller's signal
-   that the document did not change, so nothing is marked dirty for a keystroke that did nothing. */
+   that the document did not change, so nothing is marked dirty for a keystroke that did nothing.
+
+   The caret arithmetic is here for the same reason: ownOffset reads a selection anchor into an offset
+   over the item's own text and caretTarget reads that offset back into a node the caller ranges to, so
+   the two ends of a Tab measure one thing and a jsdom test can run both. */
 (function (root) {
   const isList = (el) => !!el && (el.nodeName === 'UL' || el.nodeName === 'OL');
   const parentList = (li) => (isList(li.parentElement) ? li.parentElement : null);
@@ -71,6 +75,19 @@
     return out;
   }
 
+  // The item's own text nodes, in document order. Both halves of the caret arithmetic below read this
+  // one list, so an offset measured over an item means the same thing when it is placed back.
+  function ownTexts(li) {
+    const out = [];
+    (function walk(parent) {
+      for (const n of parent.childNodes) {
+        if (isList(n)) continue;
+        if (n.nodeType === 3) out.push(n); else if (n.nodeType === 1) walk(n);
+      }
+    })(li);
+    return out;
+  }
+
   // Is this item empty, ignoring the sublist it carries? An item with children but no text of its own
   // is still an empty item: Enter on it should lift it, and its children ride along. The zero-width
   // space is the caret escape an inline input rule leaves behind (see tryInlineRule), never content.
@@ -80,6 +97,50 @@
     for (const n of li.childNodes) if (!isList(n)) text += n.textContent || '';
     if (text.replace(/[\s​]+/g, '').length) return false;
     return !ownElements(li).some((el) => MEDIA.includes(el.nodeName.toUpperCase()));
+  }
+
+  // Where the caret sits inside an item, counted over the item's OWN text. `node`/`offset` is a
+  // selection anchor as the browser gives it: a text node and a character offset into it, or an
+  // element and the index of the child the caret sits in front of. A range measured against the whole
+  // item counts the text of every nested item too, which is a different number from the one
+  // caretTarget places back, and Tab on an item with a sublist then moves the caret.
+  function ownOffset(li, node, offset) {
+    let acc = 0, done = false;
+    const clamp = (n, hi) => Math.min(Math.max(n | 0, 0), hi);
+    (function visit(n, own) {
+      if (done) return;
+      if (n.nodeType === 3) {
+        if (n === node) { if (own) acc += clamp(offset, n.length); done = true; return; }
+        if (own) acc += n.length;
+        return;
+      }
+      if (n.nodeType !== 1) return;
+      const kids = [...n.childNodes];
+      const stop = n === node ? clamp(offset, kids.length) : kids.length;
+      for (let i = 0; i < stop && !done; i++) visit(kids[i], own && !isList(n));
+      if (n === node) done = true;
+    })(li, true);
+    return acc;
+  }
+
+  // The inverse: the text node and offset an own-text offset names, for the caller to build a range
+  // from. An item with no own text is seeded with the zero-width space the inline rules already use as
+  // a caret host, because a range in front of a sublist is normalized into the sublist's first item by
+  // every engine and the next letter typed would edit the child. isEmptyItem reads through the space
+  // and toMd strips it before anything is saved.
+  function caretTarget(li, off) {
+    const texts = ownTexts(li);
+    let acc = 0;
+    for (const t of texts) {
+      if (acc + t.length >= off) return { node: t, offset: Math.max(0, off - acc) };
+      acc += t.length;
+    }
+    let last = texts[texts.length - 1];
+    if (!last) {
+      last = li.ownerDocument.createTextNode('​');
+      li.insertBefore(last, li.firstChild);
+    }
+    return { node: last, offset: last.length };
   }
 
   // Tab: the item becomes a child of the item above it. The first item of a list has nothing to nest
@@ -192,6 +253,6 @@
     return p;
   }
 
-  const API = { itemAt, isEmptyItem, indent, outdent, lift };
+  const API = { itemAt, isEmptyItem, ownOffset, caretTarget, indent, outdent, lift };
   if (typeof module !== 'undefined' && module.exports) module.exports = API; else root.ListKeys = API;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
