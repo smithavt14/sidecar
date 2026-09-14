@@ -108,6 +108,9 @@ while you read. `sidecar watchers` lists what is armed and whether each one is s
   an existing heading to re-level it.
 - **Block styles:** highlight text, then the toolbar's text-style dropdown converts the block between body
   text and H1 / H2 / H3.
+- **Lists:** Tab and Shift+Tab nest and unnest the item you are in. Enter on an empty item takes it out
+  of the list, and Backspace at the start of an item turns that item into a paragraph, so a second
+  Backspace merges it into the line above.
 - Select text for a floating toolbar: bold, italic (⌘B/⌘I), link, comment.
 
 **Read.** Two controls in the header, and they are independent. **Reading mode** (⌘⇧F, Escape to leave)

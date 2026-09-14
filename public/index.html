@@ -56,6 +56,7 @@
 <script src="/turn.js"></script>   <!-- whose turn is it: the panel's badges and the inbox; server.js requires the same file -->
 <script src="/stability.js"></script>   <!-- freeze / last known position / orphan grace for the docked rail; Node tests require the same file -->
 <script src="/focus.js"></script>   <!-- where the page sits for the caret's line to rest at 45%; pure numbers in/out, Node tests require the same file -->
+<script src="/listkeys.js"></script>   <!-- Enter / Backspace / Tab inside a list item; pure elements in/out, Node tests require the same file -->
 <script src="/assetframe.js"></script>   <!-- an .html asset → the sandboxed frame's srcdoc; Node tests require the same file -->
 <script src="/lib/marked/marked.min.js"></script>
 <script src="/lib/dompurify/dist/purify.min.js"></script>   <!-- marked v12 has no sanitizer; scrub its HTML before it hits innerHTML (XSS) -->
@@ -2078,6 +2079,17 @@ function setCaretOffset(el, off) {
   r.selectNodeContents(el); r.collapse(false);   // no text yet (empty heading) → park caret inside it
   const s = getSelection(); s.removeAllRanges(); s.addRange(r);
 }
+// The same, for an element a list key landed the caret in. setCaretOffset walks EVERY text node under
+// the element, so an <li> whose only text is the sublist below it (`- parent` over an empty item over
+// `- child`) hands the caret to the child and the next letter typed edits the child. An item counts
+// only its own text, and ListKeys.caretTarget does that arithmetic where a jsdom test can run it.
+// Anything else a list key lands the caret in is a paragraph and takes the ordinary setter.
+function setItemCaret(el, off) {
+  if (el.nodeName !== 'LI') return setCaretOffset(el, off);
+  const { node, offset } = ListKeys.caretTarget(el, off);
+  const r = document.createRange(); r.setStart(node, offset); r.collapse(true);
+  const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+}
 
 // Block rule: a completed marker at the START of the line the caret is on. Fires on a paragraph (a new
 // marker) or a heading (re-level); marked renders neither a list nor a quote as a bare <p>, so a
@@ -2167,6 +2179,8 @@ $('doc').addEventListener('keydown', (e) => {
   if (e.key !== 'Backspace' || e.shiftKey || e.metaKey || e.altKey || e.ctrlKey) return;
   const s = getSelection();
   if (!s.isCollapsed || !s.rangeCount) return;
+  if (ListKeys.itemAt(s.anchorNode, $('doc'))) return; // a list item belongs to the list handler below, and
+                                                       // exactly one handler may act on one keystroke
   const b = caretBlock(); if (!b) return;
   const probe = s.getRangeAt(0).cloneRange();          // is the caret at the very start of this block?
   probe.selectNodeContents(b); probe.setEnd(s.anchorNode, s.anchorOffset);
@@ -2200,6 +2214,53 @@ $('doc').addEventListener('keydown', (e) => {
   const r = document.createRange(); r.setStart(tn, 1); r.collapse(true);
   const s = getSelection(); s.removeAllRanges(); s.addRange(r);
   dirty = true; setStatus('editing…'); scheduleSave();
+});
+// Lists: Enter on an empty item, Backspace at the start of one, Tab and Shift+Tab. A contenteditable
+// gives a list only the browser's raw behaviour, which leaves an empty bullet no way out except
+// deleting the marker by hand and gives nesting no keyboard at all. The three rules are
+// public/listkeys.js and are tested there; what is here is reading the caret, placing it in whatever
+// comes back, and marking the document dirty.
+$('doc').addEventListener('keydown', (e) => {
+  if (e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (!['Enter', 'Backspace', 'Tab'].includes(e.key)) return;
+  if (e.shiftKey && e.key !== 'Tab') return;           // Shift+Enter is a soft break and stays one
+  const s = getSelection();
+  if (!s.isCollapsed || !s.rangeCount) return;         // a range selection is never intercepted
+  const li = ListKeys.itemAt(s.anchorNode, $('doc'));
+  if (!li) return;                                     // outside a list item Tab still moves focus
+  let landed = null;
+  if (e.key === 'Tab') {
+    // Measured over the item's OWN text, which is what setItemCaret places back. caretOffsetIn counts
+    // the text of every nested item too, so an item with a sublist above continuation text came out of
+    // a Tab with the caret moved by however many characters the sublist held.
+    const off = ListKeys.ownOffset(li, s.anchorNode, s.anchorOffset);
+    // preventDefault even when the move is impossible (the first item of a list has nothing to nest
+    // under): a literal tab character typed into an <li> is never what the key meant.
+    e.preventDefault();
+    landed = e.shiftKey ? ListKeys.outdent(li) : ListKeys.indent(li);
+    if (landed) setItemCaret(landed, off);
+  } else {
+    if (e.key === 'Enter') {
+      if (!ListKeys.isEmptyItem(li)) return;           // a non-empty item keeps the browser's native split
+    } else {
+      const probe = s.getRangeAt(0).cloneRange();      // is the caret at the very start of THIS item?
+      probe.selectNodeContents(li); probe.setEnd(s.anchorNode, s.anchorOffset);
+      // What counts as the start is ListKeys.atItemStart: nothing in front of the caret, or whitespace
+      // in front of it in a task item, where the checkbox leaves the marker's separator space behind
+      // the first letter. A space the author wrote is content and Backspace deletes it.
+      if (!ListKeys.atItemStart(li, probe)) return;      // the Range, so a picture in front counts too
+    }
+    // Backspace turns the item into a paragraph rather than merging it into the block above. The merge
+    // is still one keystroke away: a second Backspace now starts in a paragraph and falls through.
+    e.preventDefault();
+    landed = ListKeys.lift(li);
+    if (landed) setItemCaret(landed, 0);
+  }
+  if (!landed) return;                                 // nothing moved, so nothing to save
+  // A list move changes the height of everything below it, and the docked cards are positioned against
+  // those heights. The 'input' listener redocks after an ordinary edit, and preventDefault means no
+  // input event fires here, so the rail is redocked from this handler.
+  dirty = true; setStatus('editing…'); scheduleSave(); scheduleDock();
 });
 
 async function saveDoc() {
@@ -3750,7 +3811,7 @@ function paintReading() {
 paintReading();
 
 // ⌘⇧F / Ctrl+Shift+F in, Escape out. Neither is taken: the page's other keydown handlers are Alt and
-// Shift over an asset frame, Backspace and Enter inside the document, and the arrow keys on the two
+// Shift over an asset frame, Backspace, Enter and Tab inside the document, and the arrow keys on the two
 // resize grips. Escape only acts while reading AND while the lightbox is shut, since the lightbox has
 // its own Escape and a picture opened from the document is the nearer thing to dismiss.
 window.addEventListener('keydown', (e) => {
