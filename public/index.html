@@ -639,6 +639,9 @@
      that prose asked for and a picture did not. The gutter narrows with it: the frame draws its own
      edge, so the 44px reading margin is 40px of scale spent on nothing. */
   #doc.asset { max-width:none; padding-left:24px; padding-right:24px; }
+  /* Stable asset space keeps the final fragment and its history position reachable. Match the
+     typewriter rule's specificity so a prose preference cannot shorten an asset's scroll room. */
+  body #doc.asset { padding-bottom:100vh; }
   #doc:focus, #doc *:focus { outline:none; }
   /* ---------- one vertical scale for every block in the document ----------
      Each markdown token renders inside its own .block wrapper, so this reaches the paragraph, heading
@@ -1960,10 +1963,14 @@ window.addEventListener('message', (e) => {
     }
     // A fragment link scrolls this asset instead of loading anything. The frame is laid out at its full
     // height and has no scrollport of its own, so it reports where the target sits and the page scrolls,
-    // on the same math and to the same place a jump to an item lands.
+    // with the target just below the app header. Measure its actual edge so mobile safe-area padding
+    // is included; comment and card jumps keep their separate centered positioning.
     case 'revealed': {
       const r = framePageRect(m.rect);
-      if (r) scrollTo({ top: Math.max(0, scrollY + r.top - innerHeight / 2), behavior: 'smooth' });
+      if (r) {
+        const headerBottom = document.querySelector('header').getBoundingClientRect().bottom;
+        scrollTo({ top: Math.max(0, scrollY + r.top - headerBottom - 12), behavior: 'smooth' });
+      }
       break;
     }
   }

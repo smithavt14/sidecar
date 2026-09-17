@@ -7604,3 +7604,109 @@ test('restored reanchor generations preserve terminal decisions and partial fres
   assert.equal(partial.anchor.quote, 'Next.');
   assert.equal(mergeItem({ ...fresh, status: 'resolved' }, stale).status, 'resolved', 'a stale orphan never reopens a resolved thread');
 });
+
+
+function assetFragmentHarness({ headerBottom, scrollY = 300, frameTop = -100, scale = 1,
+    viewportHeight = 800, assetHeight = 1200, initialTail = '40vh', typewriter = false }) {
+  const tailRule = STYLE.match(/body #doc\.asset\s*\{[^}]+\}/);
+  const typewriterRule = STYLE.match(/body\.typewriter #doc\s*\{[^}]+\}/);
+  assert.ok(tailRule, 'assets declare stable scroll room');
+  const dom = new JSDOM('<!doctype html><style>#doc { padding-bottom:' + initialTail + '; }'
+    + typewriterRule[0] + tailRule[0] + '</style><header></header><div id="doc" class="asset"></div>');
+  dom.window.document.body.classList.toggle('typewriter', typewriter);
+  dom.window.document.querySelector('header').getBoundingClientRect = () => ({ bottom: headerBottom });
+  const frameEl = { contentWindow: {}, getBoundingClientRect: () => ({ top: frameTop, left: 0 }) };
+  const framePageRect = CARD_FN('framePageRect', 'frameEl', 'frameScale')(frameEl, scale);
+  const handler = PAGE.match(/window\.addEventListener\('message', \(e\) => \{[\s\S]*?\n\}\);/);
+  assert.ok(handler, 'the asset message handler is present');
+  let onMessage;
+  const calls = [], actualScroll = [];
+  const maxScroll = () => {
+    // jsdom has no layout engine. Resolve the real padding rule and model the browser's scroll
+    // bound: the bottom of the scaled frame plus document padding, less the viewport height.
+    const tail = dom.window.getComputedStyle(dom.window.document.getElementById('doc')).paddingBottom;
+    const padding = parseFloat(tail) * (tail.endsWith('vh') ? viewportHeight / 100 : 1);
+    return Math.max(0, scrollY + frameTop + assetHeight * scale + padding - viewportHeight);
+  };
+  new Function('window', 'frameEl', 'framePageRect', 'document', 'scrollTo', 'scrollY', handler[0])(
+    { addEventListener: (type, fn) => { assert.equal(type, 'message'); onMessage = fn; } },
+    frameEl, framePageRect, dom.window.document, options => {
+      calls.push(options); actualScroll.push(Math.max(0, Math.min(options.top, maxScroll())));
+    }, scrollY);
+  return { calls, actualScroll, maxScroll, dom, reveal: (rect, source = frameEl.contentWindow) => onMessage({ source, data: { type: 'sidecar:revealed', rect } }) };
+}
+
+test('asset fragment links place the target below the actual desktop or mobile header', () => {
+  for (const [headerBottom, scale] of [[52, 1], [99, 0.5]]) {
+    const h = assetFragmentHarness({ headerBottom, scale });
+    const target = { top: 1200, left: 0, width: 400, height: 40 };
+    h.reveal(target);
+    assert.equal(h.calls.length, 1);
+    assert.equal(h.calls[0].behavior, 'smooth');
+    const targetPageY = 300 - 100 + target.top * scale;
+    assert.equal(targetPageY - h.calls[0].top, headerBottom + 12,
+      'the heading lands twelve pixels below the measured sticky header, including mobile safe area');
+    h.dom.window.close();
+  }
+});
+
+test('asset fragment navigation clamps the document start and ignores missing or foreign targets', () => {
+  const h = assetFragmentHarness({ headerBottom: 99, scrollY: 0, frameTop: 0 });
+  h.reveal({ top: 20, left: 0, width: 100, height: 20 });
+  assert.equal(h.calls[0].top, 0, 'a heading near the start never requests a negative scroll');
+  h.reveal(null);
+  h.reveal({ top: 900, left: 0, width: 100, height: 20 }, {});
+  assert.equal(h.calls.length, 1, 'only a resolved target from the active frame can scroll');
+  h.dom.window.close();
+});
+
+
+test('the last asset fragment reaches the header after the browser clamps to the document scroll limit', () => {
+  for (const [headerBottom, viewportHeight, scale, initialTail] of [[52, 800, 1, '40vh'], [99, 844, 0.5, '42vh']]) {
+    const h = assetFragmentHarness({ headerBottom, viewportHeight, scale, initialTail });
+    const target = { top: 1180, left: 0, width: 400, height: 20 };
+    const targetPageY = 300 - 100 + target.top * scale;
+    const requested = targetPageY - headerBottom - 12;
+    const oldLimit = 300 - 100 + 1200 * scale + parseFloat(initialTail) * viewportHeight / 100 - viewportHeight;
+    assert.ok(oldLimit < requested, 'the previous reading tail would clamp this final heading too low');
+    h.reveal(target);
+    assert.equal(targetPageY - h.actualScroll[0], headerBottom + 12,
+      'the final heading actually reaches the header offset after browser-style clamping');
+    assert.equal(h.actualScroll[0], h.calls[0].top, 'the new room makes the requested position reachable');
+    h.dom.window.close();
+  }
+});
+
+
+test('Back restores a final asset fragment below the header on a fresh document view', () => {
+  for (const [headerBottom, viewportHeight, scale, initialTail] of [[52, 800, 1, '40vh'], [99, 844, 0.5, '42vh']]) for (const typewriter of [false, true]) {
+    const options = { headerBottom, viewportHeight, scale, initialTail, typewriter };
+    const outgoing = assetFragmentHarness(options);
+    const target = { top: 1180, left: 0, width: 400, height: 20 };
+    outgoing.reveal(target);
+    const savedY = outgoing.actualScroll[0];
+    outgoing.dom.window.close();
+    // Navigating away discards the asset DOM. Back creates a fresh one with its ordinary asset class,
+    // so sufficient scroll room must exist before any new fragment click.
+    const incoming = assetFragmentHarness(options);
+    const doc = incoming.dom.window.document;
+    Object.defineProperty(doc.documentElement, 'scrollHeight', { get: () => incoming.maxScroll() + viewportHeight });
+    const calls = [], deferred = [];
+    const funcs = ['applyPendingScroll', 'restoreScroll'].map(name => {
+      const match = PAGE.match(new RegExp('function ' + name + '\\([^)]*\\) \\{[\\s\\S]*?\\n\\}'));
+      assert.ok(match); return match[0];
+    }).join('\n');
+    const restore = new Function('document', 'window', 'requestAnimationFrame', 'setTimeout',
+      'let pendingScrollY = null;\n' + funcs + '\nreturn restoreScroll;')(
+      doc, { innerHeight: viewportHeight, scrollTo: options => calls.push(Math.min(options.top, incoming.maxScroll())) },
+      fn => deferred.push(fn), fn => deferred.push(fn));
+    restore(savedY); deferred.forEach(fn => fn());
+    assert.equal(calls[0], savedY, 'the saved position is reachable without a fragment navigation first');
+    const targetPageY = 300 - 100 + target.top * scale;
+    assert.equal(targetPageY - calls[0], headerBottom + 12, 'Back keeps the final heading below the app header');
+    doc.getElementById('doc').classList.remove('asset');
+    assert.equal(incoming.dom.window.getComputedStyle(doc.getElementById('doc')).paddingBottom, typewriter ? '58vh' : initialTail,
+      'the additional tail belongs to HTML assets only');
+    incoming.dom.window.close();
+  }
+});
