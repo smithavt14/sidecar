@@ -639,9 +639,9 @@
      that prose asked for and a picture did not. The gutter narrows with it: the frame draws its own
      edge, so the 44px reading margin is 40px of scale spent on nothing. */
   #doc.asset { max-width:none; padding-left:24px; padding-right:24px; }
-  /* Following a fragment needs enough tail for the final heading to reach the header. Added only
-     after that navigation, and cleared on a document switch; the normal reading space stays put. */
-  #doc.asset.fragment-room { padding-bottom:100vh; }
+  /* Stable asset space keeps the final fragment and its history position reachable. Match the
+     typewriter rule's specificity so a prose preference cannot shorten an asset's scroll room. */
+  body #doc.asset { padding-bottom:100vh; }
   #doc:focus, #doc *:focus { outline:none; }
   /* ---------- one vertical scale for every block in the document ----------
      Each markdown token renders inside its own .block wrapper, so this reaches the paragraph, heading
@@ -1969,7 +1969,6 @@ window.addEventListener('message', (e) => {
       const r = framePageRect(m.rect);
       if (r) {
         const headerBottom = document.querySelector('header').getBoundingClientRect().bottom;
-        document.getElementById('doc').classList.add('fragment-room');
         scrollTo({ top: Math.max(0, scrollY + r.top - headerBottom - 12), behavior: 'smooth' });
       }
       break;
@@ -4711,7 +4710,6 @@ document.addEventListener('click', (e) => {
 // rail's "arrived while shut" baseline resets too, or the new document's existing items would all
 // count as new mail.
 function resetDocState() {
-  $('doc').classList.remove('fragment-room');
   clearTimeout(saveTimer); saveTimer = null;
   dirty = false; blocks = [];
   pendingSel = null; pendingSelBlock = null; pendingSelOffset = null; selRect = null;
