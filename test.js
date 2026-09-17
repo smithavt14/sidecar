@@ -7252,3 +7252,167 @@ test('the block-format toolbar reformats the selected line, not the first line o
   assert.equal(block.children[1].outerHTML, '<h1>Second</h1>', 'the selected line became an h1');
   assert.equal(hidden, 2, 'the toolbar closed each time'); assert.equal(saves, 2, 'and a save was scheduled');
 });
+
+// Restoring a comment is a new conversation turn, never an undo of a document edit.
+test('restore keeps the conversation and suggestion decisions, survives stale PUTs and re-resolves', async () => {
+  const file = 'restore.md', raw = 'The revised paragraph.\n';
+  const archived = { id: 'restore1', kind: 'comment', by: 'alex', status: 'resolved',
+    decidedAt: '2026-09-01T00:00:00.000Z', anchor: { quote: 'The revised paragraph.' },
+    thread: [{ by: 'alex', text: 'Please revise this.', at: '1' }, { by: 'claude', text: 'Done.', at: '2' }] };
+  const accepted = { id: 'restore-child', kind: 'suggestion', by: 'claude', status: 'accepted', replyTo: archived.id,
+    decidedAt: archived.decidedAt, anchor: { quote: 'The original paragraph.' }, replacement: 'The revised paragraph.',
+    thread: [{ by: 'alex', text: 'That works.', at: '3' }] };
+  const rejected = { ...accepted, id: 'rejected-child', status: 'rejected', replacement: 'Other wording.' };
+  fs.writeFileSync(path.join(dir, file), raw);
+  fs.writeFileSync(path.join(dir, file + '.sidecar.json'), JSON.stringify({ items: [archived, accepted, rejected] }));
+  const res = await post('/api/reopen', { path: file, id: archived.id });
+  assert.equal(res.status, 200);
+  const restored = (await res.json()).review.items[0];
+  assert.equal(restored.status, 'open');
+  assert.ok(restored.reopenedAt);
+  assert.equal(restored.decidedAt, undefined);
+  assert.deepEqual(restored.thread, archived.thread);
+  assert.equal((await post('/api/reopen', { path: file, id: archived.id })).status, 409, 'double click does not create another turn');
+  const stale = { ...archived, thread: [...archived.thread, { by: 'claude', text: 'A concurrent reply.', at: '4' }] };
+  const merged = await put('/api/review', { path: file, review: { items: [stale, accepted, rejected] } }).then(j);
+  assert.equal(merged.review.items[0].status, 'open', 'old resolved snapshot cannot close restored comment');
+  assert.equal(merged.review.items[0].reopenedAt, restored.reopenedAt);
+  assert.equal(merged.review.items[0].thread.length, 3, 'concurrent replies still merge');
+  assert.deepEqual(merged.review.items.slice(1), [accepted, rejected]);
+  assert.equal(fs.readFileSync(path.join(dir, file), 'utf8'), raw);
+  assert.equal((await post('/api/reopen', { path: file, id: accepted.id })).status, 400);
+  assert.equal((await post('/api/reopen', { path: file, id: rejected.id })).status, 400);
+  assert.equal((await post('/api/reopen', { path: file, id: 'missing' })).status, 400);
+  const saved = await fetch(`${BASE}/api/state?path=${file}`).then(j);
+  assert.equal(saved.review.items[0].status, 'open', 'reload preserves restore');
+  await post('/api/reject', { path: file, id: archived.id });
+  const closed = await fetch(`${BASE}/api/state?path=${file}`).then(j);
+  assert.equal(closed.review.items[0].status, 'resolved');
+  const second = await post('/api/reopen', { path: file, id: archived.id }).then(j);
+  assert.ok(second.review.items[0].reopenedAt > restored.reopenedAt, 'every restore starts a new generation');
+  const after = await put('/api/review', { path: file, review: closed.review }).then(j);
+  assert.equal(after.review.items[0].status, 'open', 'previous generation cannot resolve the next either');
+});
+
+test('restore with an obsolete quote wakes wait and reports its id plus the orphan', async () => {
+  const file = 'restore-wait.md', abs = path.join(dir, file);
+  fs.writeFileSync(abs, 'New wording.\n');
+  fs.writeFileSync(abs + '.sidecar.json', JSON.stringify({ items: [{ id: 'orphan-restore', kind: 'comment', by: 'alex',
+    status: 'resolved', decidedAt: '2026-09-01T00:00:00.000Z', matchedAt: '2026-09-01T00:00:00.000Z',
+    anchor: { quote: 'Old wording.' }, thread: [{ by: 'claude', text: 'Edited.', at: '1' }] }] }));
+  cliE(dir, { SIDECAR_AGENT: 'restore-test' }, 'digest', file);
+  const w = spawn('node', [path.join(__dirname, 'server.js'), 'wait', abs, '--timeout', '5'],
+    { env: { ...process.env, SIDECAR_AGENT: 'restore-test', SIDECAR_PORT: '4990' }, stdio: 'pipe' });
+  let out = ''; w.stdout.on('data', d => out += d);
+  const exited = new Promise(res => w.on('exit', res));
+  await new Promise(res => setTimeout(res, 400));
+  const response = await post('/api/reopen', { path: file, id: 'orphan-restore' }).then(j);
+  assert.equal(response.review.items[0].status, 'orphaned');
+  assert.equal(response.review.items[0].orphanReason, 'text-changed');
+  assert.equal(await exited, 0);
+  assert.match(out, /REOPENED orphan-restore/);
+  assert.match(out, /ORPHANED/);
+  assert.match(cliE(dir, { SIDECAR_AGENT: 'restore-test' }, 'digest', file), /nothing new/);
+});
+
+test('restore digest catches a resolve/reopen cycle even if the cursor last saw it open', () => {
+  const { snapshot, computeDigest, renderDigest } = require('./lib/digest.js');
+  const item = { id: 'cycle', kind: 'comment', status: 'open', by: 'alex', anchor: { quote: 'Text.' }, thread: [] };
+  const before = snapshot({ items: [item] }, sha_of('Text.'));
+  const d = computeDigest(before, { items: [{ ...item, reopenedAt: '2026-09-17T12:00:00.000Z' }] }, 'Text.', 'claude', 'Text.');
+  assert.equal(d.empty, false);
+  assert.match(renderDigest(d), /REOPENED cycle/);
+});
+
+test('restored comment generation survives either merge direction and partial agent replies', () => {
+  const { mergeItem } = require('./lib/review.js');
+  const old = { id: 'c', kind: 'comment', status: 'resolved', decidedAt: '2026-09-17T12:00:00.000Z' };
+  const fresh = { id: 'c', kind: 'comment', status: 'open', reopenedAt: '2026-09-17T12:00:01.000Z' };
+  for (const merged of [mergeItem(old, fresh), mergeItem(fresh, old), mergeItem(fresh, { id: 'c', thread: [{ text: 'Reply' }] })]) {
+    assert.equal(merged.status, 'open'); assert.equal(merged.decidedAt, undefined);
+    assert.equal(merged.reopenedAt, fresh.reopenedAt);
+  }
+  assert.equal(mergeItem(fresh, { ...fresh, status: 'resolved', decidedAt: '2026-09-17T12:00:02.000Z' }).status, 'resolved');
+});
+
+function restoreHarness(api) {
+  const m = PAGE.match(/async function reopenItem\([^)]*\) \{[\s\S]*?\n\}/);
+  const state = { review: { items: [{ id: 'c', kind: 'comment', status: 'resolved' }] } };
+  const alerts = [], cardFold = new Map(), frames = [];
+  let renders = 0;
+  const make = new Function('api', 'state', 'alert', 'cardFold', 'renderSide', 'requestAnimationFrame', '$', 'CSS',
+    `let FILE = 'doc.md', sideTab = 'archived'; ${m[0]}; return { reopenItem, tab: () => sideTab, navigate: () => FILE = 'other.md' };`);
+  const fns = make(api, state, msg => alerts.push(msg), cardFold, () => renders++, fn => frames.push(fn),
+    () => ({ querySelector: () => null }), { escape: x => x });
+  return { ...fns, state, alerts, cardFold, frames, renders: () => renders };
+}
+
+test('restore UI waits for success and keeps the archive usable on request failure', async () => {
+  const h = restoreHarness(async () => { throw new Error('offline'); });
+  const before = structuredClone(h.state.review), button = { disabled: false };
+  await h.reopenItem('c', button);
+  assert.deepEqual(h.state.review, before);
+  assert.equal(h.tab(), 'archived'); assert.equal(h.renders(), 0);
+  assert.equal(button.disabled, false); assert.match(h.alerts[0], /restore failed: offline/);
+});
+
+test('restore UI selects Active and expands the same thread only on the original document', async () => {
+  const review = { items: [{ id: 'c', kind: 'comment', status: 'open' }] };
+  const h = restoreHarness(async () => ({ review }));
+  await h.reopenItem('c', { disabled: false });
+  assert.equal(h.state.review, review); assert.equal(h.tab(), 'active'); assert.equal(h.cardFold.get('c'), 'full');
+  assert.equal(h.renders(), 1);
+  let complete;
+  const other = restoreHarness(() => new Promise(res => complete = res));
+  const pending = other.reopenItem('c', { disabled: false });
+  other.navigate(); complete({ review }); await pending;
+  assert.equal(other.state.review.items[0].status, 'resolved'); assert.equal(other.renders(), 0);
+});
+
+test('settled nested suggestions render their history without decision controls', () => {
+  const render = CARD_FN('nestedSugHtml', 'esc', 'whoCls', 'diffHtml', 'proseHtml', 'threadHtml')(
+    x => x, () => 'agent', (q, r) => q + r, x => x, thread => thread.map(m => m.text).join(''));
+  const dom = new JSDOM('<body></body>');
+  for (const status of ['accepted', 'rejected']) {
+    dom.window.document.body.innerHTML = render({ id: 's', by: 'claude', status, anchor: { quote: 'Old' }, replacement: 'New', thread: [{ text: 'Keep this history.' }] });
+    assert.equal(dom.window.document.querySelector('button'), null);
+    assert.ok(dom.window.document.querySelector('.badge.' + status));
+    assert.match(dom.window.document.body.textContent, /Keep this history/);
+  }
+});
+
+
+test('CLI resolve and reply --resolve close the restored generation', async () => {
+  const file = 'restore-cli.md', abs = path.join(dir, file);
+  fs.writeFileSync(abs, 'Some text.\n');
+  fs.writeFileSync(abs + '.sidecar.json', JSON.stringify({ items: [{ id: 'cli-restore', kind: 'comment', by: 'alex',
+    status: 'resolved', anchor: { quote: 'Some text.' }, thread: [] }] }));
+  for (const args of [['resolve', file, 'cli-restore'], ['reply', file, 'cli-restore', 'Handled.', '--resolve']]) {
+    const res = await post('/api/reopen', { path: file, id: 'cli-restore' });
+    assert.equal(res.status, 200);
+    const restored = (await res.json()).review.items[0];
+    cli(dir, ...args);
+    const saved = JSON.parse(fs.readFileSync(abs + '.sidecar.json')).items[0];
+    assert.equal(saved.status, 'resolved');
+    assert.equal(saved.reopenedAt, restored.reopenedAt);
+  }
+});
+
+
+test('restoring a comment resumes a finished review and resists the old done session', async () => {
+  const file = 'restore-done.md', abs = path.join(dir, file);
+  fs.writeFileSync(abs, 'Some text.\n');
+  const original = { items: [{ id: 'done-restore', kind: 'comment', by: 'alex', status: 'resolved',
+    anchor: { quote: 'Some text.' }, thread: [] }], session: { done: true, state: 'idle', at: '2099-01-01T00:00:00.000Z' } };
+  fs.writeFileSync(abs + '.sidecar.json', JSON.stringify(original));
+  cliE(dir, { SIDECAR_AGENT: 'done-restore-test' }, 'digest', file);
+  const result = await post('/api/reopen', { path: file, id: 'done-restore' }).then(j);
+  assert.equal(result.review.session.done, false);
+  assert.ok(result.review.session.at > original.session.at, 'new authority even if the previous clock was ahead');
+  const merged = await put('/api/review', { path: file, review: original }).then(j);
+  assert.equal(merged.review.session.done, false);
+  assert.equal(merged.review.items[0].status, 'open');
+  const output = cliE(dir, { SIDECAR_AGENT: 'done-restore-test' }, 'digest', file);
+  assert.match(output, /REOPENED done-restore/);
+  assert.match(output, /DONE: false/);
+});

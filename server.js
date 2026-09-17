@@ -433,6 +433,26 @@ app.put('/api/review', (req, res) => {
   res.json({ ok: true, review: merged });
 });
 
+// Restore the conversation only. Suggestion decisions and document bytes stay untouched.
+app.post('/api/reopen', (req, res) => {
+  const abs = safePath(req.body.path);
+  const review = loadReview(abs);
+  const it = review.items.find(i => i.id === req.body.id);
+  if (!it || it.kind !== 'comment') return res.status(400).json({ error: 'no such comment' });
+  if (it.status !== 'resolved') return res.status(409).json({ error: 'comment is already active' });
+  const raw = fs.readFileSync(abs, 'utf8');
+  it.status = 'open';
+  // Strictly increasing even if the clock moves back or two restores share a millisecond.
+  it.reopenedAt = new Date(Math.max(Date.now(), (Date.parse(it.reopenedAt) || 0) + 1)).toISOString();
+  delete it.decidedAt; delete it.orphanedAt; delete it.orphanReason;
+  annotateOrphans(raw, review); // A changed quote returns to Active with an honest orphan cue.
+  // Resuming a thread also resumes a finished review, so the next watcher keeps the loop alive.
+  if (review.session && review.session.done) review.session = { ...review.session, done: false,
+    at: new Date(Math.max(Date.now(), (Date.parse(review.session.at) || 0) + 1)).toISOString() };
+  saveReview(abs, review);
+  res.json({ ok: true, review });
+});
+
 app.post('/api/accept', (req, res) => {
   const abs = safePath(req.body.path);
   const raw = fs.readFileSync(abs, 'utf8');

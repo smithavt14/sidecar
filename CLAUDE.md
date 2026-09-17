@@ -146,6 +146,19 @@ merging is a second set of bugs, and the two sides must agree byte-for-byte — 
 normalised differently on each side once made the highlight point at one duplicate while accept
 spliced another.
 
+## Restoring an archived comment
+
+A resolved comment has a **restore** button in Archived. It returns the same thread to Active,
+expanded with its reply box focused. Its accepted and rejected suggestion children stay visible as
+history, with their decisions intact. Restoring never changes the document. If the original quote is
+now gone, the restored comment is active and orphaned, ready for a reply or a new anchor.
+
+`POST /api/reopen` also resumes a finished review session and stamps `reopenedAt` on the comment. That stamp starts
+a new status generation: the shared merge compares generations before status rank, so a stale
+resolved copy cannot archive the restored conversation again. Within a generation, terminal statuses
+still win. CLI resolve operations carry the generation they just read. The digest and wait compare
+the stamp too, so even a resolve/restore cycle between two looks produces `REOPENED` with the thread id.
+
 ## The rail holds still while the agent writes
 
 The docked rail places every card at its anchor, which means an agent rewriting a sentence moves the
