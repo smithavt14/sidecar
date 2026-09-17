@@ -2724,7 +2724,7 @@ test('wait: wakes on a reply to a suggestion the agent made after its last look'
   fs.rmSync(d, { recursive: true, force: true });
 });
 
-test('wait: an accept prints the digest exactly once (double-print regression)', async () => {
+test('wait: an accept prints once per wake and reports its decision exactly once', async () => {
   const d = cliDir();
   cli(d, 'suggest', 'doc.md', '--quote', 'We will ship all six features in week one.', '--replacement', 'Week one ships three.');
   // No cursor → baseline is current state → wait sleeps until a real change.
@@ -2736,7 +2736,12 @@ test('wait: an accept prints the digest exactly once (double-print regression)',
   } });
   assert.equal(code, 0);
   assert.equal((out.match(/## sidecar — your turn/g) || []).length, 1, 'exactly one digest header');
-  assert.equal((out.match(/ACCEPTED/g) || []).length, 1, 'exactly one ACCEPTED line');
+  // The watcher is a separate process: it can read between the document and review writes.
+  // An early document-only wake is valid; the persisted cursor must still deliver the decision
+  // on the next look. Requiring both writes in one wake raced on Linux CI.
+  const catchup = cli(d, 'digest', 'doc.md');
+  assert.equal(((out + catchup).match(/ACCEPTED/g) || []).length, 1, 'exactly one ACCEPTED line across both looks');
+  assert.match(cli(d, 'digest', 'doc.md'), /nothing new/, 'both writes have been consumed');
   fs.rmSync(d, { recursive: true, force: true });
 });
 
