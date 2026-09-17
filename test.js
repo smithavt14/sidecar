@@ -7416,3 +7416,70 @@ test('restoring a comment resumes a finished review and resists the old done ses
   assert.match(output, /REOPENED done-restore/);
   assert.match(output, /DONE: false/);
 });
+
+
+test('restore then reanchor survives a pre-restore browser snapshot while its unrelated reply merges', async () => {
+  const file = 'restore-anchor.md', abs = path.join(dir, file);
+  fs.writeFileSync(abs, 'Current paragraph.\n\nOther paragraph.\n');
+  const old = { items: [
+    { id: 'anchor-restore', kind: 'comment', by: 'alex', status: 'resolved', anchor: { quote: 'Original paragraph.' }, thread: [] },
+    { id: 'other-thread', kind: 'comment', by: 'alex', status: 'open', anchor: { quote: 'Other paragraph.' }, thread: [] },
+  ] };
+  fs.writeFileSync(abs + '.sidecar.json', JSON.stringify(old));
+  const res = await post('/api/reopen', { path: file, id: 'anchor-restore' });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).review.items[0].status, 'orphaned');
+  cli(dir, 'reanchor', file, 'anchor-restore', '--quote', 'Current paragraph.');
+  const reanchored = JSON.parse(fs.readFileSync(abs + '.sidecar.json')).items[0];
+  assert.equal(reanchored.status, 'open', 'explicit partial reanchor still takes effect');
+  old.items[1].thread.push({ by: 'alex', at: '2026-09-17T12:00:00.000Z', text: 'An unrelated reply.' });
+  await put('/api/review', { path: file, review: old });
+  const result = await fetch(`${BASE}/api/state?path=${file}`).then(j);
+  assert.equal(result.review.items[0].status, 'open');
+  assert.deepEqual(result.review.items[0].anchor, reanchored.anchor);
+  assert.equal(result.review.items[0].matchedAt, reanchored.matchedAt);
+  assert.equal(result.review.items[0].orphanReason, undefined);
+  assert.deepEqual(result.review.items[1].thread, old.items[1].thread);
+});
+
+test('older restore generations cannot merge obsolete element paths or liveness metadata', () => {
+  const { mergeItem } = require('./lib/review.js');
+  const current = { id: 'element-restored', kind: 'comment', status: 'open', reopenedAt: '2026-09-17T12:00:00.000Z',
+    anchor: { quote: 'Current', element: { sel: '#current' } }, matchedAt: '2026-09-17T12:00:01.000Z' };
+  const old = { id: current.id, kind: 'comment', status: 'resolved',
+    anchor: { quote: 'Old', element: { sel: '#old', path: 'div:nth-child(1)', sig: 'Old' } },
+    matchedAt: '2026-09-01T12:00:00.000Z', orphanReason: 'element-changed' };
+  const merged = mergeItem(current, old);
+  assert.deepEqual(merged.anchor, current.anchor);
+  assert.equal(merged.matchedAt, current.matchedAt);
+  assert.equal(merged.orphanReason, undefined);
+  const partial = mergeItem(current, { id: current.id, anchor: { element: { path: 'div:nth-child(2)' } } });
+  assert.equal(partial.anchor.element.path, 'div:nth-child(2)', 'fresh picker backfill still merges');
+});
+
+test('done reviewing completes a restored future-dated session through the real merge', async () => {
+  const file = 'restore-finish.md', abs = path.join(dir, file);
+  fs.writeFileSync(abs, 'Some text.\n');
+  fs.writeFileSync(abs + '.sidecar.json', JSON.stringify({ items: [{ id: 'finish-restore', kind: 'comment', by: 'alex',
+    status: 'resolved', anchor: { quote: 'Some text.' }, thread: [] }],
+    session: { done: true, state: 'idle', at: '2099-01-01T00:00:00.000Z' } }));
+  const restored = await post('/api/reopen', { path: file, id: 'finish-restore' }).then(j);
+  assert.equal(restored.review.session.done, false);
+  const oldSnapshot = structuredClone(restored.review);
+  const client = { review: restored.review };
+  const m = PAGE.match(/async function markDone\([^)]*\) \{[\s\S]*?\n\}/);
+  assert.ok(m);
+  let rendered = false, announced = false;
+  const markDone = new Function('state', 'api', 'FILE', 'renderSide', 'showBanner', 'alert', 'return ' + m[0])(
+    client, async (verb, url, body) => {
+      assert.equal(verb, 'PUT');
+      const response = await put(url, body); assert.equal(response.status, 200); return response.json();
+    }, file, () => rendered = true, () => announced = true, message => assert.fail(message));
+  await markDone();
+  assert.equal(client.review.session.done, true);
+  assert.ok(client.review.session.at > oldSnapshot.session.at);
+  assert.ok(rendered && announced);
+  await put('/api/review', { path: file, review: oldSnapshot });
+  const saved = await fetch(`${BASE}/api/state?path=${file}`).then(j);
+  assert.equal(saved.review.session.done, true, 'a stale restored session cannot undo explicit completion');
+});

@@ -3539,7 +3539,9 @@ $('turn').addEventListener('click', (e) => {
 // Terminal "done, commit it" — the one decision chat can't make redundant (and the phone's only way to
 // say it). Sets session.done; the agent's `sidecar wait` returns with DONE, and I make the single commit.
 async function markDone() {
-  state.review.session = { state: 'idle', at: new Date().toISOString(), done: true };
+  // Completion follows the latest known session, even when another writer's clock was ahead.
+  const priorAt = Date.parse(state.review.session?.at) || 0;
+  state.review.session = { state: 'idle', at: new Date(Math.max(Date.now(), priorAt + 1)).toISOString(), done: true };
   try {
     const r = await api('PUT', '/api/review', { path: FILE, review: state.review });
     state.review = r.review; renderSide();
