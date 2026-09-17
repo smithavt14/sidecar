@@ -7604,3 +7604,43 @@ test('restored reanchor generations preserve terminal decisions and partial fres
   assert.equal(partial.anchor.quote, 'Next.');
   assert.equal(mergeItem({ ...fresh, status: 'resolved' }, stale).status, 'resolved', 'a stale orphan never reopens a resolved thread');
 });
+
+
+function assetFragmentHarness({ headerBottom, scrollY = 300, frameTop = -100, scale = 1 }) {
+  const dom = new JSDOM('<!doctype html><header></header>');
+  dom.window.document.querySelector('header').getBoundingClientRect = () => ({ bottom: headerBottom });
+  const frameEl = { contentWindow: {}, getBoundingClientRect: () => ({ top: frameTop, left: 0 }) };
+  const framePageRect = CARD_FN('framePageRect', 'frameEl', 'frameScale')(frameEl, scale);
+  const handler = PAGE.match(/window\.addEventListener\('message', \(e\) => \{[\s\S]*?\n\}\);/);
+  assert.ok(handler, 'the asset message handler is present');
+  let onMessage;
+  const calls = [];
+  new Function('window', 'frameEl', 'framePageRect', 'document', 'scrollTo', 'scrollY', handler[0])(
+    { addEventListener: (type, fn) => { assert.equal(type, 'message'); onMessage = fn; } },
+    frameEl, framePageRect, dom.window.document, options => calls.push(options), scrollY);
+  return { calls, dom, reveal: (rect, source = frameEl.contentWindow) => onMessage({ source, data: { type: 'sidecar:revealed', rect } }) };
+}
+
+test('asset fragment links place the target below the actual desktop or mobile header', () => {
+  for (const [headerBottom, scale] of [[52, 1], [99, 0.5]]) {
+    const h = assetFragmentHarness({ headerBottom, scale });
+    const target = { top: 1200, left: 0, width: 400, height: 40 };
+    h.reveal(target);
+    assert.equal(h.calls.length, 1);
+    assert.equal(h.calls[0].behavior, 'smooth');
+    const targetPageY = 300 - 100 + target.top * scale;
+    assert.equal(targetPageY - h.calls[0].top, headerBottom + 12,
+      'the heading lands twelve pixels below the measured sticky header, including mobile safe area');
+    h.dom.window.close();
+  }
+});
+
+test('asset fragment navigation clamps the document start and ignores missing or foreign targets', () => {
+  const h = assetFragmentHarness({ headerBottom: 99, scrollY: 0, frameTop: 0 });
+  h.reveal({ top: 20, left: 0, width: 100, height: 20 });
+  assert.equal(h.calls[0].top, 0, 'a heading near the start never requests a negative scroll');
+  h.reveal(null);
+  h.reveal({ top: 900, left: 0, width: 100, height: 20 }, {});
+  assert.equal(h.calls.length, 1, 'only a resolved target from the active frame can scroll');
+  h.dom.window.close();
+});
