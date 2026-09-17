@@ -7533,3 +7533,69 @@ test('wait reports a completed restore cycle without marking the archived commen
   assert.deepEqual(current.presence.items, [], 'no replying light on the archived comment');
   assert.match(cliE(dir, { SIDECAR_AGENT: agent }, 'digest', file), /nothing new/);
 });
+
+
+test('digest includes new human replies when a restored comment becomes orphaned', () => {
+  const { snapshot, computeDigest, renderDigest } = require('./lib/digest.js');
+  const raw = 'Current paragraph.';
+  const item = { id: 'orphan-reply', kind: 'comment', by: 'alex', status: 'resolved', anchor: { quote: 'Old paragraph.' },
+    thread: [{ by: 'claude', text: 'Previous answer.', at: '1' }] };
+  const before = snapshot({ items: [item] }, sha_of(raw));
+  const review = { items: [{ ...item, status: 'orphaned', reopenedAt: '2026-09-17T12:00:00.000Z',
+    orphanReason: 'text-changed', thread: [...item.thread,
+      { by: 'alex', text: 'Please revisit the fee.', at: '2' },
+      { by: 'alex', text: 'And keep the weekly office session.', at: '3' }] }] };
+  const d = computeDigest(before, review, raw, 'claude', raw);
+  assert.equal(d.reopened.length, 1); assert.equal(d.orphaned.length, 1);
+  assert.deepEqual(d.replies.map(m => m.text), ['Please revisit the fee.', 'And keep the weekly office session.']);
+  const output = renderDigest(d);
+  assert.match(output, /REOPENED/); assert.match(output, /ORPHANED/);
+  assert.match(output, /Please revisit the fee\./); assert.match(output, /And keep the weekly office session\./);
+  assert.equal(computeDigest(d.snapshot, review, raw, 'claude', raw).empty, true);
+});
+
+test('a stale post-restore snapshot cannot undo repeated CLI reanchors and still carries replies and resolution', async () => {
+  const file = 'restore-same-generation.md', abs = path.join(dir, file);
+  fs.writeFileSync(abs, 'First paragraph.\n\nSecond paragraph.\n');
+  fs.writeFileSync(abs + '.sidecar.json', JSON.stringify({ items: [{ id: 'restored-anchor', kind: 'comment', by: 'alex',
+    status: 'resolved', anchor: { quote: 'Missing paragraph.' }, thread: [] }] }));
+  let stale = (await post('/api/reopen', { path: file, id: 'restored-anchor' }).then(j)).review;
+  const generation = stale.items[0].reopenedAt;
+  let previousAnchorStamp = '';
+  for (const quote of ['First paragraph.', 'Second paragraph.']) {
+    cli(dir, 'reanchor', file, 'restored-anchor', '--quote', quote);
+    const fresh = JSON.parse(fs.readFileSync(abs + '.sidecar.json')).items[0];
+    assert.ok(fresh.reanchoredAt > previousAnchorStamp);
+    assert.equal(fresh.reopenedAt, generation, 'reanchoring does not pretend the thread was restored again');
+    previousAnchorStamp = fresh.reanchoredAt;
+    stale.items[0].thread.push({ by: 'alex', text: 'Reply while viewing ' + stale.items[0].anchor.quote, at: quote });
+    const merged = await put('/api/review', { path: file, review: stale }).then(j);
+    assert.equal(merged.review.items[0].status, 'open', 'live status wins over the obsolete orphan snapshot');
+    assert.equal(merged.review.items[0].anchor.quote, quote);
+    assert.equal(merged.review.items[0].reanchoredAt, fresh.reanchoredAt);
+    assert.equal(merged.review.items[0].orphanReason, undefined);
+    assert.deepEqual(merged.review.items[0].thread, stale.items[0].thread);
+    const reload = await fetch(`${BASE}/api/state?path=${file}`).then(j);
+    assert.equal(reload.review.items[0].status, 'open');
+    stale = structuredClone(merged.review);
+  }
+  // An actual resolve from a browser with older anchor knowledge must still close the thread.
+  stale.items[0].anchor = { quote: 'Missing paragraph.' };
+  delete stale.items[0].reanchoredAt;
+  stale.items[0].status = 'resolved'; stale.items[0].decidedAt = new Date().toISOString();
+  const closed = await put('/api/review', { path: file, review: stale }).then(j);
+  assert.equal(closed.review.items[0].status, 'resolved');
+  assert.equal(closed.review.items[0].anchor.quote, 'Second paragraph.');
+  assert.equal(closed.review.items[0].reanchoredAt, previousAnchorStamp);
+});
+
+test('restored reanchor generations preserve terminal decisions and partial fresh anchor edits', () => {
+  const { mergeItem } = require('./lib/review.js');
+  const fresh = { id: 'c', kind: 'comment', status: 'open', reopenedAt: '2026-09-17T12:00:00.000Z',
+    reanchoredAt: '2026-09-17T12:01:00.000Z', anchor: { quote: 'Current.' } };
+  const stale = { ...fresh, status: 'orphaned', anchor: { quote: 'Old.' } }; delete stale.reanchoredAt;
+  assert.equal(mergeItem(stale, fresh).status, 'open', 'newer anchor knowledge wins in either order');
+  const partial = mergeItem(fresh, { id: 'c', anchor: { quote: 'Next.' }, reanchoredAt: '2026-09-17T12:02:00.000Z' });
+  assert.equal(partial.anchor.quote, 'Next.');
+  assert.equal(mergeItem({ ...fresh, status: 'resolved' }, stale).status, 'resolved', 'a stale orphan never reopens a resolved thread');
+});

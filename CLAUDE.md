@@ -156,8 +156,9 @@ now gone, the restored comment is active and orphaned, ready for a reply or a ne
 `POST /api/reopen` also resumes a finished review session and stamps `reopenedAt` on the comment. That stamp starts
 a new status generation: the shared merge compares generations before status rank, so a stale
 resolved copy cannot archive the restored conversation again. Within a generation, terminal statuses
-still win. CLI resolve operations carry the generation they just read. The digest and wait compare
-the stamp too, so even a resolve/restore cycle between two looks produces `REOPENED` with the thread id.
+still win. CLI resolve operations carry the generation they just read. Explicit CLI reanchors on
+restored comments also stamp `reanchoredAt`, preserving their new location against an older snapshot
+from the same restore. The digest and wait compare the restore stamp too, so even a resolve/restore cycle between two looks produces `REOPENED` with the thread id.
 
 ## The rail holds still while the agent writes
 
