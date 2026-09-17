@@ -120,8 +120,8 @@ column in the window; the document is still editable, so a typo you spot is stil
 caret climb to the top. Scroll with the wheel or a finger and it stands aside until you type again.
 
 **Comment.** Select text, then comment. The comment box is draggable, so you can move it off the text you're
-commenting on. Threads reply and resolve. Every open comment or suggestion softly highlights its span in the
-document; tap the highlight to open its card, tap a card's quote to jump to the text. The review rail has two tabs: **active** threads (open, editable) and **archived** threads (settled, read-only), and an icon at the right end of that bar cycles how much of it is drawn: every card full, compact (a thread waiting on you stays full and the rest rest as pills you can click open), or hidden, which clears the rail and the highlights so you can read the draft straight through. Inside a
+commenting on. Threads reply and resolve. To resume a resolved comment, expand it in **archived** and choose **restore**. It returns to **active** with its conversation and past suggestion decisions intact. Every open comment or suggestion softly highlights its span in the
+document; tap the highlight to open its card, tap a card's quote to jump to the text. The review rail has two tabs: **active** threads (open, editable) and **archived** threads (settled), and an icon at the right end of that bar cycles how much of it is drawn: every card full, compact (a thread waiting on you stays full and the rest rest as pills you can click open), or hidden, which clears the rail and the highlights so you can read the draft straight through. Inside a
 card, a thread of more than four messages draws its opening comment, a row saying how many replies are
 folded away, and the last two, and a single message longer than about twelve lines clips with a **more**
 under it; the row and the toggle open either one in place.

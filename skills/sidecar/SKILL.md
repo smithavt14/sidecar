@@ -585,7 +585,10 @@ on disk, the `.sidecar.json` is the live one and the `.review.json` is ignored r
 `sidecar doctor` lists whatever is still on the old names.
 
 Statuses: suggestions run `pending → accepted | rejected`; comments run `open → resolved`; either can
-become `orphaned`. Items are stamped with `by` (your agent name — set `SIDECAR_AGENT` if `claude` is
+become `orphaned`. The human can expand a resolved comment in Archived and choose **restore** to reopen
+the same thread. Its suggestion decisions stay intact and the document stays unchanged. The digest
+reports `REOPENED` with the comment id, and `wait` wakes even when nobody has added a reply yet. A quote
+that has since changed returns as an active orphan for reanchoring. Items are stamped with `by` (your agent name — set `SIDECAR_AGENT` if `claude` is
 wrong) and real timestamps, both filled in for you.
 
 ---

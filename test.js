@@ -2724,7 +2724,7 @@ test('wait: wakes on a reply to a suggestion the agent made after its last look'
   fs.rmSync(d, { recursive: true, force: true });
 });
 
-test('wait: an accept prints the digest exactly once (double-print regression)', async () => {
+test('wait: an accept prints once per wake and reports its decision exactly once', async () => {
   const d = cliDir();
   cli(d, 'suggest', 'doc.md', '--quote', 'We will ship all six features in week one.', '--replacement', 'Week one ships three.');
   // No cursor → baseline is current state → wait sleeps until a real change.
@@ -2736,7 +2736,12 @@ test('wait: an accept prints the digest exactly once (double-print regression)',
   } });
   assert.equal(code, 0);
   assert.equal((out.match(/## sidecar — your turn/g) || []).length, 1, 'exactly one digest header');
-  assert.equal((out.match(/ACCEPTED/g) || []).length, 1, 'exactly one ACCEPTED line');
+  // The watcher is a separate process: it can read between the document and review writes.
+  // An early document-only wake is valid; the persisted cursor must still deliver the decision
+  // on the next look. Requiring both writes in one wake raced on Linux CI.
+  const catchup = cli(d, 'digest', 'doc.md');
+  assert.equal(((out + catchup).match(/ACCEPTED/g) || []).length, 1, 'exactly one ACCEPTED line across both looks');
+  assert.match(cli(d, 'digest', 'doc.md'), /nothing new/, 'both writes have been consumed');
   fs.rmSync(d, { recursive: true, force: true });
 });
 
@@ -7251,4 +7256,351 @@ test('the block-format toolbar reformats the selected line, not the first line o
   assert.equal(block.children[0].outerHTML, '<p>First</p>', 'still untouched');
   assert.equal(block.children[1].outerHTML, '<h1>Second</h1>', 'the selected line became an h1');
   assert.equal(hidden, 2, 'the toolbar closed each time'); assert.equal(saves, 2, 'and a save was scheduled');
+});
+
+// Restoring a comment is a new conversation turn, never an undo of a document edit.
+test('restore keeps the conversation and suggestion decisions, survives stale PUTs and re-resolves', async () => {
+  const file = 'restore.md', raw = 'The revised paragraph.\n';
+  const archived = { id: 'restore1', kind: 'comment', by: 'alex', status: 'resolved',
+    decidedAt: '2026-09-01T00:00:00.000Z', anchor: { quote: 'The revised paragraph.' },
+    thread: [{ by: 'alex', text: 'Please revise this.', at: '1' }, { by: 'claude', text: 'Done.', at: '2' }] };
+  const accepted = { id: 'restore-child', kind: 'suggestion', by: 'claude', status: 'accepted', replyTo: archived.id,
+    decidedAt: archived.decidedAt, anchor: { quote: 'The original paragraph.' }, replacement: 'The revised paragraph.',
+    thread: [{ by: 'alex', text: 'That works.', at: '3' }] };
+  const rejected = { ...accepted, id: 'rejected-child', status: 'rejected', replacement: 'Other wording.' };
+  fs.writeFileSync(path.join(dir, file), raw);
+  fs.writeFileSync(path.join(dir, file + '.sidecar.json'), JSON.stringify({ items: [archived, accepted, rejected] }));
+  const res = await post('/api/reopen', { path: file, id: archived.id });
+  assert.equal(res.status, 200);
+  const restored = (await res.json()).review.items[0];
+  assert.equal(restored.status, 'open');
+  assert.ok(restored.reopenedAt);
+  assert.equal(restored.decidedAt, undefined);
+  assert.deepEqual(restored.thread, archived.thread);
+  assert.equal((await post('/api/reopen', { path: file, id: archived.id })).status, 409, 'double click does not create another turn');
+  const stale = { ...archived, thread: [...archived.thread, { by: 'claude', text: 'A concurrent reply.', at: '4' }] };
+  const merged = await put('/api/review', { path: file, review: { items: [stale, accepted, rejected] } }).then(j);
+  assert.equal(merged.review.items[0].status, 'open', 'old resolved snapshot cannot close restored comment');
+  assert.equal(merged.review.items[0].reopenedAt, restored.reopenedAt);
+  assert.equal(merged.review.items[0].thread.length, 3, 'concurrent replies still merge');
+  assert.deepEqual(merged.review.items.slice(1), [accepted, rejected]);
+  assert.equal(fs.readFileSync(path.join(dir, file), 'utf8'), raw);
+  assert.equal((await post('/api/reopen', { path: file, id: accepted.id })).status, 400);
+  assert.equal((await post('/api/reopen', { path: file, id: rejected.id })).status, 400);
+  assert.equal((await post('/api/reopen', { path: file, id: 'missing' })).status, 400);
+  const saved = await fetch(`${BASE}/api/state?path=${file}`).then(j);
+  assert.equal(saved.review.items[0].status, 'open', 'reload preserves restore');
+  await post('/api/reject', { path: file, id: archived.id });
+  const closed = await fetch(`${BASE}/api/state?path=${file}`).then(j);
+  assert.equal(closed.review.items[0].status, 'resolved');
+  const second = await post('/api/reopen', { path: file, id: archived.id }).then(j);
+  assert.ok(second.review.items[0].reopenedAt > restored.reopenedAt, 'every restore starts a new generation');
+  const after = await put('/api/review', { path: file, review: closed.review }).then(j);
+  assert.equal(after.review.items[0].status, 'open', 'previous generation cannot resolve the next either');
+});
+
+test('restore with an obsolete quote wakes wait and reports its id plus the orphan', async () => {
+  const file = 'restore-wait.md', abs = path.join(dir, file);
+  fs.writeFileSync(abs, 'New wording.\n');
+  fs.writeFileSync(abs + '.sidecar.json', JSON.stringify({ items: [{ id: 'orphan-restore', kind: 'comment', by: 'alex',
+    status: 'resolved', decidedAt: '2026-09-01T00:00:00.000Z', matchedAt: '2026-09-01T00:00:00.000Z',
+    anchor: { quote: 'Old wording.' }, thread: [{ by: 'claude', text: 'Edited.', at: '1' }] }] }));
+  cliE(dir, { SIDECAR_AGENT: 'restore-test' }, 'digest', file);
+  const w = spawn('node', [path.join(__dirname, 'server.js'), 'wait', abs, '--timeout', '5'],
+    { env: { ...process.env, SIDECAR_AGENT: 'restore-test', SIDECAR_PORT: '4990' }, stdio: 'pipe' });
+  let out = ''; w.stdout.on('data', d => out += d);
+  const exited = new Promise(res => w.on('exit', res));
+  await new Promise(res => setTimeout(res, 400));
+  const response = await post('/api/reopen', { path: file, id: 'orphan-restore' }).then(j);
+  assert.equal(response.review.items[0].status, 'orphaned');
+  assert.equal(response.review.items[0].orphanReason, 'text-changed');
+  assert.equal(await exited, 0);
+  assert.match(out, /REOPENED orphan-restore/);
+  assert.match(out, /ORPHANED/);
+  assert.match(cliE(dir, { SIDECAR_AGENT: 'restore-test' }, 'digest', file), /nothing new/);
+});
+
+test('restore digest catches a resolve/reopen cycle even if the cursor last saw it open', () => {
+  const { snapshot, computeDigest, renderDigest } = require('./lib/digest.js');
+  const item = { id: 'cycle', kind: 'comment', status: 'open', by: 'alex', anchor: { quote: 'Text.' }, thread: [] };
+  const before = snapshot({ items: [item] }, sha_of('Text.'));
+  const d = computeDigest(before, { items: [{ ...item, reopenedAt: '2026-09-17T12:00:00.000Z' }] }, 'Text.', 'claude', 'Text.');
+  assert.equal(d.empty, false);
+  assert.match(renderDigest(d), /REOPENED cycle/);
+});
+
+test('restored comment generation survives either merge direction and partial agent replies', () => {
+  const { mergeItem } = require('./lib/review.js');
+  const old = { id: 'c', kind: 'comment', status: 'resolved', decidedAt: '2026-09-17T12:00:00.000Z' };
+  const fresh = { id: 'c', kind: 'comment', status: 'open', reopenedAt: '2026-09-17T12:00:01.000Z' };
+  for (const merged of [mergeItem(old, fresh), mergeItem(fresh, old), mergeItem(fresh, { id: 'c', thread: [{ text: 'Reply' }] })]) {
+    assert.equal(merged.status, 'open'); assert.equal(merged.decidedAt, undefined);
+    assert.equal(merged.reopenedAt, fresh.reopenedAt);
+  }
+  assert.equal(mergeItem(fresh, { ...fresh, status: 'resolved', decidedAt: '2026-09-17T12:00:02.000Z' }).status, 'resolved');
+});
+
+function restoreHarness(api) {
+  const m = PAGE.match(/async function reopenItem\([^)]*\) \{[\s\S]*?\n\}/);
+  const state = { review: { items: [{ id: 'c', kind: 'comment', status: 'resolved' }] } };
+  const alerts = [], cardFold = new Map(), frames = [];
+  let renders = 0;
+  const make = new Function('api', 'state', 'alert', 'cardFold', 'renderSide', 'requestAnimationFrame', '$', 'CSS',
+    `let FILE = 'doc.md', sideTab = 'archived'; ${m[0]}; return { reopenItem, tab: () => sideTab, navigate: () => FILE = 'other.md' };`);
+  const fns = make(api, state, msg => alerts.push(msg), cardFold, () => renders++, fn => frames.push(fn),
+    () => ({ querySelector: () => null }), { escape: x => x });
+  return { ...fns, state, alerts, cardFold, frames, renders: () => renders };
+}
+
+test('restore UI waits for success and keeps the archive usable on request failure', async () => {
+  const h = restoreHarness(async () => { throw new Error('offline'); });
+  const before = structuredClone(h.state.review), button = { disabled: false };
+  await h.reopenItem('c', button);
+  assert.deepEqual(h.state.review, before);
+  assert.equal(h.tab(), 'archived'); assert.equal(h.renders(), 0);
+  assert.equal(button.disabled, false); assert.match(h.alerts[0], /restore failed: offline/);
+});
+
+test('restore UI selects Active and expands the same thread only on the original document', async () => {
+  const review = { items: [{ id: 'c', kind: 'comment', status: 'open' }] };
+  const h = restoreHarness(async () => ({ review }));
+  await h.reopenItem('c', { disabled: false });
+  assert.equal(h.state.review, review); assert.equal(h.tab(), 'active'); assert.equal(h.cardFold.get('c'), 'full');
+  assert.equal(h.renders(), 1);
+  let complete;
+  const other = restoreHarness(() => new Promise(res => complete = res));
+  const pending = other.reopenItem('c', { disabled: false });
+  other.navigate(); complete({ review }); await pending;
+  assert.equal(other.state.review.items[0].status, 'resolved'); assert.equal(other.renders(), 0);
+});
+
+test('settled nested suggestions render their history without decision controls', () => {
+  const render = CARD_FN('nestedSugHtml', 'esc', 'whoCls', 'diffHtml', 'proseHtml', 'threadHtml')(
+    x => x, () => 'agent', (q, r) => q + r, x => x, thread => thread.map(m => m.text).join(''));
+  const dom = new JSDOM('<body></body>');
+  for (const status of ['accepted', 'rejected']) {
+    dom.window.document.body.innerHTML = render({ id: 's', by: 'claude', status, anchor: { quote: 'Old' }, replacement: 'New', thread: [{ text: 'Keep this history.' }] });
+    assert.equal(dom.window.document.querySelector('button'), null);
+    assert.ok(dom.window.document.querySelector('.badge.' + status));
+    assert.match(dom.window.document.body.textContent, /Keep this history/);
+  }
+});
+
+
+test('CLI resolve and reply --resolve close the restored generation', async () => {
+  const file = 'restore-cli.md', abs = path.join(dir, file);
+  fs.writeFileSync(abs, 'Some text.\n');
+  fs.writeFileSync(abs + '.sidecar.json', JSON.stringify({ items: [{ id: 'cli-restore', kind: 'comment', by: 'alex',
+    status: 'resolved', anchor: { quote: 'Some text.' }, thread: [] }] }));
+  for (const args of [['resolve', file, 'cli-restore'], ['reply', file, 'cli-restore', 'Handled.', '--resolve']]) {
+    const res = await post('/api/reopen', { path: file, id: 'cli-restore' });
+    assert.equal(res.status, 200);
+    const restored = (await res.json()).review.items[0];
+    cli(dir, ...args);
+    const saved = JSON.parse(fs.readFileSync(abs + '.sidecar.json')).items[0];
+    assert.equal(saved.status, 'resolved');
+    assert.equal(saved.reopenedAt, restored.reopenedAt);
+  }
+});
+
+
+test('restoring a comment resumes a finished review and resists the old done session', async () => {
+  const file = 'restore-done.md', abs = path.join(dir, file);
+  fs.writeFileSync(abs, 'Some text.\n');
+  const original = { items: [{ id: 'done-restore', kind: 'comment', by: 'alex', status: 'resolved',
+    anchor: { quote: 'Some text.' }, thread: [] }], session: { done: true, state: 'idle', at: '2099-01-01T00:00:00.000Z' } };
+  fs.writeFileSync(abs + '.sidecar.json', JSON.stringify(original));
+  cliE(dir, { SIDECAR_AGENT: 'done-restore-test' }, 'digest', file);
+  const result = await post('/api/reopen', { path: file, id: 'done-restore' }).then(j);
+  assert.equal(result.review.session.done, false);
+  assert.ok(result.review.session.at > original.session.at, 'new authority even if the previous clock was ahead');
+  const merged = await put('/api/review', { path: file, review: original }).then(j);
+  assert.equal(merged.review.session.done, false);
+  assert.equal(merged.review.items[0].status, 'open');
+  const output = cliE(dir, { SIDECAR_AGENT: 'done-restore-test' }, 'digest', file);
+  assert.match(output, /REOPENED done-restore/);
+  assert.match(output, /DONE: false/);
+});
+
+
+test('restore then reanchor survives a pre-restore browser snapshot while its unrelated reply merges', async () => {
+  const file = 'restore-anchor.md', abs = path.join(dir, file);
+  fs.writeFileSync(abs, 'Current paragraph.\n\nOther paragraph.\n');
+  const old = { items: [
+    { id: 'anchor-restore', kind: 'comment', by: 'alex', status: 'resolved', anchor: { quote: 'Original paragraph.' }, thread: [] },
+    { id: 'other-thread', kind: 'comment', by: 'alex', status: 'open', anchor: { quote: 'Other paragraph.' }, thread: [] },
+  ] };
+  fs.writeFileSync(abs + '.sidecar.json', JSON.stringify(old));
+  const res = await post('/api/reopen', { path: file, id: 'anchor-restore' });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).review.items[0].status, 'orphaned');
+  cli(dir, 'reanchor', file, 'anchor-restore', '--quote', 'Current paragraph.');
+  const reanchored = JSON.parse(fs.readFileSync(abs + '.sidecar.json')).items[0];
+  assert.equal(reanchored.status, 'open', 'explicit partial reanchor still takes effect');
+  old.items[1].thread.push({ by: 'alex', at: '2026-09-17T12:00:00.000Z', text: 'An unrelated reply.' });
+  await put('/api/review', { path: file, review: old });
+  const result = await fetch(`${BASE}/api/state?path=${file}`).then(j);
+  assert.equal(result.review.items[0].status, 'open');
+  assert.deepEqual(result.review.items[0].anchor, reanchored.anchor);
+  assert.equal(result.review.items[0].matchedAt, reanchored.matchedAt);
+  assert.equal(result.review.items[0].orphanReason, undefined);
+  assert.deepEqual(result.review.items[1].thread, old.items[1].thread);
+});
+
+test('older restore generations cannot merge obsolete element paths or liveness metadata', () => {
+  const { mergeItem } = require('./lib/review.js');
+  const current = { id: 'element-restored', kind: 'comment', status: 'open', reopenedAt: '2026-09-17T12:00:00.000Z',
+    anchor: { quote: 'Current', element: { sel: '#current' } }, matchedAt: '2026-09-17T12:00:01.000Z' };
+  const old = { id: current.id, kind: 'comment', status: 'resolved',
+    anchor: { quote: 'Old', element: { sel: '#old', path: 'div:nth-child(1)', sig: 'Old' } },
+    matchedAt: '2026-09-01T12:00:00.000Z', orphanReason: 'element-changed' };
+  const merged = mergeItem(current, old);
+  assert.deepEqual(merged.anchor, current.anchor);
+  assert.equal(merged.matchedAt, current.matchedAt);
+  assert.equal(merged.orphanReason, undefined);
+  const partial = mergeItem(current, { id: current.id, anchor: { element: { path: 'div:nth-child(2)' } } });
+  assert.equal(partial.anchor.element.path, 'div:nth-child(2)', 'fresh picker backfill still merges');
+});
+
+test('done reviewing completes a restored future-dated session through the real merge', async () => {
+  const file = 'restore-finish.md', abs = path.join(dir, file);
+  fs.writeFileSync(abs, 'Some text.\n');
+  fs.writeFileSync(abs + '.sidecar.json', JSON.stringify({ items: [{ id: 'finish-restore', kind: 'comment', by: 'alex',
+    status: 'resolved', anchor: { quote: 'Some text.' }, thread: [] }],
+    session: { done: true, state: 'idle', at: '2099-01-01T00:00:00.000Z' } }));
+  const restored = await post('/api/reopen', { path: file, id: 'finish-restore' }).then(j);
+  assert.equal(restored.review.session.done, false);
+  const oldSnapshot = structuredClone(restored.review);
+  const client = { review: restored.review };
+  const m = PAGE.match(/async function markDone\([^)]*\) \{[\s\S]*?\n\}/);
+  assert.ok(m);
+  let rendered = false, announced = false;
+  const markDone = new Function('state', 'api', 'FILE', 'renderSide', 'showBanner', 'alert', 'return ' + m[0])(
+    client, async (verb, url, body) => {
+      assert.equal(verb, 'PUT');
+      const response = await put(url, body); assert.equal(response.status, 200); return response.json();
+    }, file, () => rendered = true, () => announced = true, message => assert.fail(message));
+  await markDone();
+  assert.equal(client.review.session.done, true);
+  assert.ok(client.review.session.at > oldSnapshot.session.at);
+  assert.ok(rendered && announced);
+  await put('/api/review', { path: file, review: oldSnapshot });
+  const saved = await fetch(`${BASE}/api/state?path=${file}`).then(j);
+  assert.equal(saved.review.session.done, true, 'a stale restored session cannot undo explicit completion');
+});
+
+
+test('digest reports the final resolution when a restore and resolution happen between snapshots', () => {
+  const { snapshot, computeDigest, renderDigest } = require('./lib/digest.js');
+  const raw = 'A paragraph.';
+  for (const status of ['resolved', 'open']) {
+    const item = { id: 'restore-cycle', kind: 'comment', status, by: 'alex', anchor: { quote: raw },
+      reopenedAt: '2026-09-17T12:00:00.000Z', thread: [{ by: 'claude', text: 'Earlier reply.', at: '1' }] };
+    const before = snapshot({ items: [item] }, sha_of(raw));
+    const after = { items: [{ ...item, status: 'resolved', reopenedAt: '2026-09-17T12:01:00.000Z',
+      decidedAt: '2026-09-17T12:02:00.000Z', thread: [...item.thread,
+        { by: 'alex', text: 'I checked again. This is settled.', at: '2' },
+        { by: 'claude', text: 'Acknowledged.', at: '3' }] }] };
+    const d = computeDigest(before, after, raw, 'claude', raw);
+    assert.deepEqual(d.reopened, [], 'the archived thread must not request an agent reply');
+    assert.deepEqual(d.replies, []);
+    assert.equal(d.decided.length, 1);
+    assert.equal(d.decided[0].status, 'resolved');
+    assert.deepEqual(d.decided[0].reasons, ['I checked again. This is settled.']);
+    const output = renderDigest(d);
+    assert.match(output, /RESOLVED/);
+    assert.doesNotMatch(output, /REOPENED/);
+    assert.match(output, /I checked again\. This is settled\./);
+    assert.equal(computeDigest(d.snapshot, after, raw, 'claude', raw).empty, true, 'the completed cycle is consumed once');
+  }
+});
+
+test('wait reports a completed restore cycle without marking the archived comment as replying', async () => {
+  const file = 'restore-cycle-wait.md', abs = path.join(dir, file), agent = 'cycle-waiter';
+  fs.writeFileSync(abs, 'A paragraph.\n');
+  fs.writeFileSync(abs + '.sidecar.json', JSON.stringify({ items: [{ id: 'closed-cycle', kind: 'comment', by: 'alex',
+    status: 'resolved', anchor: { quote: 'A paragraph.' }, thread: [] }] }));
+  cliE(dir, { SIDECAR_AGENT: agent }, 'digest', file);
+  const reopened = await post('/api/reopen', { path: file, id: 'closed-cycle' }).then(j);
+  reopened.review.items[0].thread.push({ by: 'alex', text: 'Resolved after checking.', at: '2026-09-17T12:00:00.000Z' });
+  await put('/api/review', { path: file, review: reopened.review });
+  await post('/api/reject', { path: file, id: 'closed-cycle' });
+  // The entire human cycle is already in the backlog when the watcher next looks.
+  const w = spawn('node', [path.join(__dirname, 'server.js'), 'wait', abs, '--timeout', '5'],
+    { env: { ...process.env, SIDECAR_AGENT: agent, SIDECAR_PORT: String(PORT) }, stdio: 'pipe' });
+  let out = ''; w.stdout.on('data', d => out += d);
+  const code = await new Promise(res => w.on('exit', res));
+  assert.equal(code, 0);
+  assert.match(out, /RESOLVED/); assert.match(out, /Resolved after checking\./);
+  assert.doesNotMatch(out, /REOPENED/);
+  const current = await fetch(`${BASE}/api/state?path=${file}`).then(j);
+  assert.equal(current.presence.state, 'working');
+  assert.deepEqual(current.presence.items, [], 'no replying light on the archived comment');
+  assert.match(cliE(dir, { SIDECAR_AGENT: agent }, 'digest', file), /nothing new/);
+});
+
+
+test('digest includes new human replies when a restored comment becomes orphaned', () => {
+  const { snapshot, computeDigest, renderDigest } = require('./lib/digest.js');
+  const raw = 'Current paragraph.';
+  const item = { id: 'orphan-reply', kind: 'comment', by: 'alex', status: 'resolved', anchor: { quote: 'Old paragraph.' },
+    thread: [{ by: 'claude', text: 'Previous answer.', at: '1' }] };
+  const before = snapshot({ items: [item] }, sha_of(raw));
+  const review = { items: [{ ...item, status: 'orphaned', reopenedAt: '2026-09-17T12:00:00.000Z',
+    orphanReason: 'text-changed', thread: [...item.thread,
+      { by: 'alex', text: 'Please revisit the fee.', at: '2' },
+      { by: 'alex', text: 'And keep the weekly office session.', at: '3' }] }] };
+  const d = computeDigest(before, review, raw, 'claude', raw);
+  assert.equal(d.reopened.length, 1); assert.equal(d.orphaned.length, 1);
+  assert.deepEqual(d.replies.map(m => m.text), ['Please revisit the fee.', 'And keep the weekly office session.']);
+  const output = renderDigest(d);
+  assert.match(output, /REOPENED/); assert.match(output, /ORPHANED/);
+  assert.match(output, /Please revisit the fee\./); assert.match(output, /And keep the weekly office session\./);
+  assert.equal(computeDigest(d.snapshot, review, raw, 'claude', raw).empty, true);
+});
+
+test('a stale post-restore snapshot cannot undo repeated CLI reanchors and still carries replies and resolution', async () => {
+  const file = 'restore-same-generation.md', abs = path.join(dir, file);
+  fs.writeFileSync(abs, 'First paragraph.\n\nSecond paragraph.\n');
+  fs.writeFileSync(abs + '.sidecar.json', JSON.stringify({ items: [{ id: 'restored-anchor', kind: 'comment', by: 'alex',
+    status: 'resolved', anchor: { quote: 'Missing paragraph.' }, thread: [] }] }));
+  let stale = (await post('/api/reopen', { path: file, id: 'restored-anchor' }).then(j)).review;
+  const generation = stale.items[0].reopenedAt;
+  let previousAnchorStamp = '';
+  for (const quote of ['First paragraph.', 'Second paragraph.']) {
+    cli(dir, 'reanchor', file, 'restored-anchor', '--quote', quote);
+    const fresh = JSON.parse(fs.readFileSync(abs + '.sidecar.json')).items[0];
+    assert.ok(fresh.reanchoredAt > previousAnchorStamp);
+    assert.equal(fresh.reopenedAt, generation, 'reanchoring does not pretend the thread was restored again');
+    previousAnchorStamp = fresh.reanchoredAt;
+    stale.items[0].thread.push({ by: 'alex', text: 'Reply while viewing ' + stale.items[0].anchor.quote, at: quote });
+    const merged = await put('/api/review', { path: file, review: stale }).then(j);
+    assert.equal(merged.review.items[0].status, 'open', 'live status wins over the obsolete orphan snapshot');
+    assert.equal(merged.review.items[0].anchor.quote, quote);
+    assert.equal(merged.review.items[0].reanchoredAt, fresh.reanchoredAt);
+    assert.equal(merged.review.items[0].orphanReason, undefined);
+    assert.deepEqual(merged.review.items[0].thread, stale.items[0].thread);
+    const reload = await fetch(`${BASE}/api/state?path=${file}`).then(j);
+    assert.equal(reload.review.items[0].status, 'open');
+    stale = structuredClone(merged.review);
+  }
+  // An actual resolve from a browser with older anchor knowledge must still close the thread.
+  stale.items[0].anchor = { quote: 'Missing paragraph.' };
+  delete stale.items[0].reanchoredAt;
+  stale.items[0].status = 'resolved'; stale.items[0].decidedAt = new Date().toISOString();
+  const closed = await put('/api/review', { path: file, review: stale }).then(j);
+  assert.equal(closed.review.items[0].status, 'resolved');
+  assert.equal(closed.review.items[0].anchor.quote, 'Second paragraph.');
+  assert.equal(closed.review.items[0].reanchoredAt, previousAnchorStamp);
+});
+
+test('restored reanchor generations preserve terminal decisions and partial fresh anchor edits', () => {
+  const { mergeItem } = require('./lib/review.js');
+  const fresh = { id: 'c', kind: 'comment', status: 'open', reopenedAt: '2026-09-17T12:00:00.000Z',
+    reanchoredAt: '2026-09-17T12:01:00.000Z', anchor: { quote: 'Current.' } };
+  const stale = { ...fresh, status: 'orphaned', anchor: { quote: 'Old.' } }; delete stale.reanchoredAt;
+  assert.equal(mergeItem(stale, fresh).status, 'open', 'newer anchor knowledge wins in either order');
+  const partial = mergeItem(fresh, { id: 'c', anchor: { quote: 'Next.' }, reanchoredAt: '2026-09-17T12:02:00.000Z' });
+  assert.equal(partial.anchor.quote, 'Next.');
+  assert.equal(mergeItem({ ...fresh, status: 'resolved' }, stale).status, 'resolved', 'a stale orphan never reopens a resolved thread');
 });

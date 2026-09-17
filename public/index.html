@@ -2895,6 +2895,11 @@ function nestedSugHtml(sug) {
   // Through the same gate as a top-level card, so the two can't disagree. A nested suggestion is never
   // docked and never ranked, so it has no observation behind it and the gate passes it straight
   // through: an orphan here shows the moment the file says so, exactly as it always did.
+  if (['accepted', 'rejected'].includes(sug.status))
+    return `<div class="subcard" data-id="${esc(sug.id)}"><span class="who ${whoCls(sug.by)}">${esc(sug.by)}</span> <span class="badge ${sug.status}">${sug.status}</span>`
+      + diffHtml(sug.anchor.quote, sug.replacement)
+      + (sug.note ? `<div class="msg"><span class="t">${proseHtml(sug.note)}</span></div>` : '')
+      + threadHtml(sug.thread, sug.id) + `</div>`;
   const orphan = orphanCue(sug).shown ? ` <span class="badge orphaned">${orphanLabel(sug)}</span>` : '';
   return `<div class="subcard" data-id="${esc(sug.id)}"><span class="who agent">claude</span> <span class="badge suggestion">suggestion</span>${orphan}`
     + diffHtml(sug.anchor.quote, sug.replacement)
@@ -3356,7 +3361,7 @@ function renderActive(list, top, childSug) {
                  <button data-action="send">send</button></div>`;
     } else {
       body += threadHtml(it.thread, it.id);
-      for (const sug of (childSug[it.id] || [])) if (['pending', 'orphaned'].includes(sug.status)) body += nestedSugHtml(sug);
+      for (const sug of (childSug[it.id] || [])) body += nestedSugHtml(sug);
       actions = `<div class="row"><textarea class="reply" rows="1" placeholder="reply…" oninput="autogrow(this)" data-action="reply"></textarea></div>
                  <div class="row"><button class="ghost" data-action="resolve">resolve</button>
                  ${imgBtn('data-action="image"')}<span class="spacer"></span>
@@ -3386,8 +3391,7 @@ function renderActive(list, top, childSug) {
     list.appendChild(f);
   }
 }
-// ARCHIVED tab — settled threads, READ-ONLY. What was decided and how: accepted/rejected suggestions with
-// their diff, resolved comment threads. No actions; this is a record, not a workspace.
+// ARCHIVED tab keeps suggestion decisions intact; a resolved comment can return to Active.
 function renderArchived(list, archived, childSug) {
   if (!archived.length) {
     list.innerHTML = `<div class="empty">no archived threads yet.<br>resolved comments and decided suggestions land here.</div>`;
@@ -3416,9 +3420,9 @@ function renderArchived(list, archived, childSug) {
     } else {
       body += threadHtml(it.thread, it.id);
       for (const sug of (childSug[it.id] || [])) if (['accepted', 'rejected'].includes(sug.status))
-        body += `<div class="subcard"><span class="who agent">claude</span> <span class="badge ${sug.status}">${sug.status}</span>`
-              + diffHtml(sug.anchor.quote, sug.replacement)
-              + (sug.note ? `<div class="msg"><span class="t">${proseHtml(sug.note)}</span></div>` : '') + `</div>`;
+        body += nestedSugHtml(sug);
+      if (it.kind === 'comment' && it.status === 'resolved')
+        body += `<div class="row"><button data-action="reopen">restore</button></div>`;
     }
     // A rejected card is archived and still live conversation: when the rejection carried a reason, the
     // agent's `wait` marks it and is composing a retry, so the row belongs here too. Same replyingHtml
@@ -3535,7 +3539,9 @@ $('turn').addEventListener('click', (e) => {
 // Terminal "done, commit it" — the one decision chat can't make redundant (and the phone's only way to
 // say it). Sets session.done; the agent's `sidecar wait` returns with DONE, and I make the single commit.
 async function markDone() {
-  state.review.session = { state: 'idle', at: new Date().toISOString(), done: true };
+  // Completion follows the latest known session, even when another writer's clock was ahead.
+  const priorAt = Date.parse(state.review.session?.at) || 0;
+  state.review.session = { state: 'idle', at: new Date(Math.max(Date.now(), priorAt + 1)).toISOString(), done: true };
   try {
     const r = await api('PUT', '/api/review', { path: FILE, review: state.review });
     state.review = r.review; renderSide();
@@ -3557,6 +3563,25 @@ async function reply(id, input) {
   const r = await api('PUT', '/api/review', { path: FILE, review: state.review });
   state.review = r.review;
   renderSide();
+}
+async function reopenItem(id, button) {
+  const file = FILE;
+  button.disabled = true;
+  try {
+    const r = await api('POST', '/api/reopen', { path: file, id });
+    if (FILE !== file) return; // The reader may have switched documents during the request.
+    state.review = r.review;
+    sideTab = 'active'; cardFold.set(id, 'full');
+    renderSide();
+    // renderSide restores the old scroll on its next frame; focus after that restoration.
+    requestAnimationFrame(() => {
+      if (FILE !== file) return;
+      const card = $('side').querySelector(`.card[data-id="${CSS.escape(id)}"]`);
+      if (card) { card.scrollIntoView({ block: 'center' }); card.querySelector('textarea.reply')?.focus({ preventScroll: true }); }
+    });
+  } catch (e) {
+    if (FILE === file) alert('restore failed: ' + e.message);
+  } finally { button.disabled = false; }
 }
 async function resolveItem(id) {
   const it = state.review.items.find(i => i.id === id);
@@ -3633,6 +3658,7 @@ $('side').addEventListener('click', (e) => {
     case 'accept': decide(id, 'accept'); break;
     case 'reject': decide(id, 'reject'); break;
     case 'resolve': resolveItem(id); break;
+    case 'reopen': reopenItem(id, el); break;
     case 'send': reply(id, holder.querySelector('.reply')); break;
     case 'image': pickImage(holder.querySelector('.reply')); break;
   }
