@@ -7606,19 +7606,32 @@ test('restored reanchor generations preserve terminal decisions and partial fres
 });
 
 
-function assetFragmentHarness({ headerBottom, scrollY = 300, frameTop = -100, scale = 1 }) {
-  const dom = new JSDOM('<!doctype html><header></header>');
+function assetFragmentHarness({ headerBottom, scrollY = 300, frameTop = -100, scale = 1,
+    viewportHeight = 800, assetHeight = 1200, initialTail = '40vh' }) {
+  const tailRule = STYLE.match(/#doc\.asset\.fragment-room\s*\{[^}]+\}/);
+  assert.ok(tailRule, 'fragment navigation declares its scroll room');
+  const dom = new JSDOM('<!doctype html><style>#doc { padding-bottom:' + initialTail + '; }'
+    + tailRule[0] + '</style><header></header><div id="doc" class="asset"></div>');
   dom.window.document.querySelector('header').getBoundingClientRect = () => ({ bottom: headerBottom });
   const frameEl = { contentWindow: {}, getBoundingClientRect: () => ({ top: frameTop, left: 0 }) };
   const framePageRect = CARD_FN('framePageRect', 'frameEl', 'frameScale')(frameEl, scale);
   const handler = PAGE.match(/window\.addEventListener\('message', \(e\) => \{[\s\S]*?\n\}\);/);
   assert.ok(handler, 'the asset message handler is present');
   let onMessage;
-  const calls = [];
+  const calls = [], actualScroll = [];
+  const maxScroll = () => {
+    // jsdom has no layout engine. Resolve the real padding rule and model the browser's scroll
+    // bound: the bottom of the scaled frame plus document padding, less the viewport height.
+    const tail = dom.window.getComputedStyle(dom.window.document.getElementById('doc')).paddingBottom;
+    const padding = parseFloat(tail) * (tail.endsWith('vh') ? viewportHeight / 100 : 1);
+    return Math.max(0, scrollY + frameTop + assetHeight * scale + padding - viewportHeight);
+  };
   new Function('window', 'frameEl', 'framePageRect', 'document', 'scrollTo', 'scrollY', handler[0])(
     { addEventListener: (type, fn) => { assert.equal(type, 'message'); onMessage = fn; } },
-    frameEl, framePageRect, dom.window.document, options => calls.push(options), scrollY);
-  return { calls, dom, reveal: (rect, source = frameEl.contentWindow) => onMessage({ source, data: { type: 'sidecar:revealed', rect } }) };
+    frameEl, framePageRect, dom.window.document, options => {
+      calls.push(options); actualScroll.push(Math.max(0, Math.min(options.top, maxScroll())));
+    }, scrollY);
+  return { calls, actualScroll, maxScroll, dom, reveal: (rect, source = frameEl.contentWindow) => onMessage({ source, data: { type: 'sidecar:revealed', rect } }) };
 }
 
 test('asset fragment links place the target below the actual desktop or mobile header', () => {
@@ -7643,4 +7656,22 @@ test('asset fragment navigation clamps the document start and ignores missing or
   h.reveal({ top: 900, left: 0, width: 100, height: 20 }, {});
   assert.equal(h.calls.length, 1, 'only a resolved target from the active frame can scroll');
   h.dom.window.close();
+});
+
+
+test('the last asset fragment reaches the header after the browser clamps to the document scroll limit', () => {
+  for (const [headerBottom, viewportHeight, scale, initialTail] of [[52, 800, 1, '40vh'], [99, 844, 0.5, '42vh']]) {
+    const h = assetFragmentHarness({ headerBottom, viewportHeight, scale, initialTail });
+    const target = { top: 1180, left: 0, width: 400, height: 20 };
+    const targetPageY = 300 - 100 + target.top * scale;
+    const requested = targetPageY - headerBottom - 12;
+    assert.ok(h.maxScroll() < requested, 'the normal reading tail would clamp this final heading too low');
+    h.reveal(target);
+    assert.equal(targetPageY - h.actualScroll[0], headerBottom + 12,
+      'the final heading actually reaches the header offset after browser-style clamping');
+    assert.equal(h.actualScroll[0], h.calls[0].top, 'the new room makes the requested position reachable');
+    assert.match(CARD_FN('resetDocState').toString(), /classList\.remove\('fragment-room'\)/,
+      'document navigation clears the extra room');
+    h.dom.window.close();
+  }
 });
