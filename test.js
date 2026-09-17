@@ -7483,3 +7483,53 @@ test('done reviewing completes a restored future-dated session through the real 
   const saved = await fetch(`${BASE}/api/state?path=${file}`).then(j);
   assert.equal(saved.review.session.done, true, 'a stale restored session cannot undo explicit completion');
 });
+
+
+test('digest reports the final resolution when a restore and resolution happen between snapshots', () => {
+  const { snapshot, computeDigest, renderDigest } = require('./lib/digest.js');
+  const raw = 'A paragraph.';
+  for (const status of ['resolved', 'open']) {
+    const item = { id: 'restore-cycle', kind: 'comment', status, by: 'alex', anchor: { quote: raw },
+      reopenedAt: '2026-09-17T12:00:00.000Z', thread: [{ by: 'claude', text: 'Earlier reply.', at: '1' }] };
+    const before = snapshot({ items: [item] }, sha_of(raw));
+    const after = { items: [{ ...item, status: 'resolved', reopenedAt: '2026-09-17T12:01:00.000Z',
+      decidedAt: '2026-09-17T12:02:00.000Z', thread: [...item.thread,
+        { by: 'alex', text: 'I checked again. This is settled.', at: '2' },
+        { by: 'claude', text: 'Acknowledged.', at: '3' }] }] };
+    const d = computeDigest(before, after, raw, 'claude', raw);
+    assert.deepEqual(d.reopened, [], 'the archived thread must not request an agent reply');
+    assert.deepEqual(d.replies, []);
+    assert.equal(d.decided.length, 1);
+    assert.equal(d.decided[0].status, 'resolved');
+    assert.deepEqual(d.decided[0].reasons, ['I checked again. This is settled.']);
+    const output = renderDigest(d);
+    assert.match(output, /RESOLVED/);
+    assert.doesNotMatch(output, /REOPENED/);
+    assert.match(output, /I checked again\. This is settled\./);
+    assert.equal(computeDigest(d.snapshot, after, raw, 'claude', raw).empty, true, 'the completed cycle is consumed once');
+  }
+});
+
+test('wait reports a completed restore cycle without marking the archived comment as replying', async () => {
+  const file = 'restore-cycle-wait.md', abs = path.join(dir, file), agent = 'cycle-waiter';
+  fs.writeFileSync(abs, 'A paragraph.\n');
+  fs.writeFileSync(abs + '.sidecar.json', JSON.stringify({ items: [{ id: 'closed-cycle', kind: 'comment', by: 'alex',
+    status: 'resolved', anchor: { quote: 'A paragraph.' }, thread: [] }] }));
+  cliE(dir, { SIDECAR_AGENT: agent }, 'digest', file);
+  const reopened = await post('/api/reopen', { path: file, id: 'closed-cycle' }).then(j);
+  reopened.review.items[0].thread.push({ by: 'alex', text: 'Resolved after checking.', at: '2026-09-17T12:00:00.000Z' });
+  await put('/api/review', { path: file, review: reopened.review });
+  await post('/api/reject', { path: file, id: 'closed-cycle' });
+  // The entire human cycle is already in the backlog when the watcher next looks.
+  const w = spawn('node', [path.join(__dirname, 'server.js'), 'wait', abs, '--timeout', '5'],
+    { env: { ...process.env, SIDECAR_AGENT: agent, SIDECAR_PORT: String(PORT) }, stdio: 'pipe' });
+  let out = ''; w.stdout.on('data', d => out += d);
+  const code = await new Promise(res => w.on('exit', res));
+  assert.equal(code, 0);
+  assert.match(out, /RESOLVED/); assert.match(out, /Resolved after checking\./);
+  assert.doesNotMatch(out, /REOPENED/);
+  const current = await fetch(`${BASE}/api/state?path=${file}`).then(j);
+  assert.equal(current.presence.state, 'working');
+  assert.deepEqual(current.presence.items, [], 'no replying light on the archived comment');
+  assert.match(cliE(dir, { SIDECAR_AGENT: agent }, 'digest', file), /nothing new/);
+});
