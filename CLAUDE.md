@@ -23,7 +23,7 @@ No build step. Twenty-three files carry the whole tool:
 | `public/themes.js` | The palette, as data: the eight built-in themes, the value grammar a theme file is checked against, and the pre-paint boot. Loaded in <head> before the stylesheet; `server.js` requires the same file. |
 | `public/navsort.js` | The directory panel's ordering. Pure list in/out; no DOM, no dependency. |
 | `public/doclink.js` | Does a link in a document open IN sidecar, and which document. Pure string in/out. |
-| `public/turn.js` | Whose turn is it: the panel's badges, the inbox, the rail's resting shape and its density. Pure review in, counts + items out; `server.js` requires it too. |
+| `public/turn.js` | Whose turn is it: the panel's badges, the rail's resting shape and its density. Pure review in, counts + items out; `server.js` requires it too. |
 | `public/anchor.js` | The ONE content-anchor matcher, loaded by both the browser and Node. |
 | `public/stability.js` | What the rail shows while the document is rewritten under it: freeze, last known position, orphan grace. Pure; the clock is passed in. |
 | `public/focus.js` | Where the page has to sit for the caret's line to rest at 45% of the window. Pure numbers in/out; the clamp and the deadband. |
@@ -100,8 +100,9 @@ sandbox withholds this page's origin. `docs/adr/0001-asset-frame-isolation.md` h
 for, and a 1600px artboard read inside it is read at half size, so `renderDoc` puts an `asset` class on
 `#doc` and the cap comes off the element that carries it. Nothing breaks out of anything: a breakout
 wrapper would have to reconstruct the column width it was escaping, against a track two draggable
-panels move, and `#doc` already is that column. The header's control then chooses between `fit` (scale
-the canvas into the column, the default, remembered as `sc:assetZoom`) and `100%` (natural size, the
+panels move, and `#doc` already is that column. The header's zoom, one icon in the slot the measure
+holds on prose, then chooses between `fit` (scale
+the canvas into the column, the default, remembered as `sc:assetZoom`) and `100%` (pressed: natural size, the
 wrapper scrolling sideways so the page never does). Three things `sizeFrame` keeps true across both:
 the wrapper carries the SCALED height, because a transform does not change layout size; the scroller
 class is toggled before the column is measured, or a fit computed against a width a leftover scrollbar
@@ -188,19 +189,22 @@ Auto-migrating an anchor across a diff was considered and refused; `annotateOrph
 silent re-anchoring picks the wrong target. Nothing here re-anchors anything. It buys the honest
 answer a few seconds so it can be delivered in place instead of somewhere else.
 
-## Three densities, and a mark that stopped shouting
+## Two densities, and a mark that stopped shouting
 
 The rail drew one kind of card, so a document under review wore every thread at full height whether or
-not any of them wanted reading. Google Docs' 2024 redesign gives a comment three densities and this is
-that idea, in sidecar's terms. **`public/turn.js` owns both halves** (`Turn.density`, `Turn.nextDensity`,
+not any of them wanted reading. Google Docs' 2024 redesign gives a comment densities and this is that
+idea, in sidecar's terms. **`public/turn.js` owns both halves** (`Turn.density`, `Turn.nextDensity`,
 `Turn.startCollapsed`), beside the `waiting` rule they are built from.
 
 - **full**: every card a full card, which is what the rail has always drawn.
 - **compact**: the default. A thread whose next move is the HUMAN's stays full; everything else rests
   as a pill level with its anchor: the provenance dot, one mono word for the kind, the reply count, and
   the last line said on it as a hover preview. Nothing else.
-- **hidden**: no cards, and no anchor marks in the prose. The track rests at the same 12px hairline the
-  bare state uses, so the draft reads straight through.
+
+**There was a third, hidden, and it is gone.** It drew no cards and no marks, and its control sat a few
+pixels from the header's *hide review panel*, so the bar carried two buttons that shut the rail and on
+a document with nothing active they were indistinguishable. Shutting the panel is the header toggle's;
+reading the draft with no marks in it is reading mode's. A stored `hidden` reads as compact.
 
 **Collapsed is the same rule the panel's badge already runs**, which is the point of putting it in
 `turn.js`: a card is full exactly when the badge would have counted it, and the two cannot drift because
@@ -214,11 +218,6 @@ preference for the tool rather than one per document, the same reasoning the ass
 manual expand or fold is held per item id **for the page's lifetime only** and `resetDocState` clears it:
 which threads a reader opened while working through one document says nothing about the next, and an item
 id is unique only within one review.
-
-**Hidden has one way back per viewport, on purpose.** On desktop the tab bar is inside the hairline, so
-the header's *show review panel* is it, and `toggleRail` sets the density back to compact rather than
-un-hiding an empty rail. Below 781px that header button is already gone and the rail is a sheet whose tab
-bar is still on screen, so the control cycles it back itself.
 
 A collapsed card measures about 23px, so **more cards sit level with their own anchors** instead of being
 pushed down by a tall neighbour: `dockCards` is unchanged, it just has less height to step over. The
@@ -271,8 +270,8 @@ nothing open gets nothing. Three states rather than one count, because a folder 
 number stops meaning anything.
 
 `public/turn.js` is that rule and it is required by both sides, which is the point. The server is the
-only side that can see a document nobody has open, so `/api/dir` counts every document in the folder
-and sends the live items along for the Inbox; the page is the only side that knows about a resolve half
+only side that can see a document nobody has open, so `/api/dir` counts every document in the folder;
+the page is the only side that knows about a resolve half
 a second before the file watcher does, so `navSelfUpdate` re-runs the same function over the open
 document's review after every render. Two answers to one question agree by being one function.
 
@@ -633,8 +632,7 @@ thing Alex said was distracting. Minimizing the folder is a request for the fold
 
 What is left is 34px carrying two things. The expand handle, at the top where an IDE's activity bar
 puts it, inked when the pointer is anywhere on the edge. And the count of what is waiting on you
-across the folder, the number the inbox tab carried before `.nav-nav` went, which opens the panel on
-the inbox. `renderNav` hides that control outright at zero rather than leaving an empty pill, which
+across the folder, the sum of the rows' own badges, which opens the panel. `renderNav` hides that control outright at zero rather than leaving an empty pill, which
 would be a control that does nothing.
 
 Desktop only, like the review rail's own bare state: below 781px the panel is a drawer with no track

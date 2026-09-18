@@ -1,6 +1,6 @@
 /* sidecar — whose turn is it, per item, per document, per folder.
 
-   The panel's badges and the inbox both need one answer to "what is still waiting on the human here",
+   The panel's badges and the rail's resting cards both need one answer to "what is still waiting on the human here",
    and the rail already had it in three different places. This is that answer, extracted: a review
    object in, counts and a flat list out. Pure — no fs, no DOM, no fetch — so the server can run it
    over a folder (server.js's /api/dir), the page can run it over the open document (index.html's
@@ -40,17 +40,14 @@
   // Not settled: still on somebody's plate. Same triple /api/files has always counted.
   const LIVE = ['open', 'pending', 'orphaned'];
 
-  // A quote is a whole sentence or more, and an inbox row shows one line of it. Cut server-side so a
-  // folder of long anchors is not a payload the panel throws away — the same reasoning that keeps
-  // /api/dir to one directory.
+  // A quote is a whole sentence or more, and a pill's preview shows one line of it.
   const QUOTE_MAX = 160;
 
   const isLive = (it) => LIVE.indexOf(it && it.status) >= 0;
   const lastMsg = (it) => { const t = (it && it.thread) || []; return t.length ? t[t.length - 1] : null; };
   // Who spoke last on this item: the tail of its thread, or its author when it has none.
   function lastBy(it) { const m = lastMsg(it); return m ? m.by : (it && it.by); }
-  // When it last moved. Used for "newest first" in the inbox only, so a missing timestamp sorts last
-  // rather than being invented — insertion order is the tiebreak and it is already chronological.
+  // When it last moved. A missing timestamp reads as empty rather than being invented.
   function lastAt(it) { const m = lastMsg(it); return (m && m.at) || (it && it.decidedAt) || ''; }
 
   function waiting(it, agent) {
@@ -85,29 +82,6 @@
     return { turn: turn, open: items.length, items: items };
   }
 
-  // Newest first, and `i` is what makes that total: two items written in the same second, or two with
-  // no timestamp at all, fall back to their position in the file, which is insertion order and so is
-  // already chronological. Without it the order depends on the sort's stability and shuffles between
-  // renders for no reason the reader can see.
-  const byNewest = (a, b) => String(b.at).localeCompare(String(a.at)) || (b.i - a.i);
-
-  // The inbox: every live item in the folder, grouped by the document it is on. Documents with nothing
-  // open are dropped entirely — an inbox is what is left to do, not a second copy of the file list.
-  //
-  // Groups lead with the ones waiting on the human (most first), then by whichever moved most recently,
-  // then by the panel's own spine order, which arrives as the caller's ordering and is preserved by a
-  // stable sort. Inside a group, newest first.
-  function inbox(docs) {
-    const groups = [];
-    for (const d of (docs || [])) {
-      const items = (d.items || []).slice().sort(byNewest);
-      if (!items.length) continue;
-      groups.push({ rel: d.rel, name: d.name, turn: d.turn || 0, open: items.length,
-        at: items[0].at, items: items });
-    }
-    return groups.sort((a, b) => (b.turn - a.turn) || String(b.at).localeCompare(String(a.at)));
-  }
-
   // What shape the review rail rests in, from the two counts the rail has already sorted out for
   // itself: its top-level active cards and its top-level archived ones.
   //
@@ -125,20 +99,19 @@
   }
 
   // ---------- how dense the rail is, and which cards rest collapsed ----------
-  // Google Docs gives a comment three densities and sidecar had one, so a document under review wore
-  // every thread at full height whether or not any of them wanted reading. Three states, cycled from
-  // the rail's tab bar and persisted under `sc:railDensity`:
+  // A document under review used to wear every thread at full height whether or not any of them
+  // wanted reading. Two states, toggled from the rail's tab bar and persisted under `sc:railDensity`:
   //
   //   'full'     every card is a full card, which is what sidecar has always drawn
   //   'compact'  the default: a thread whose next move is the HUMAN's stays full, everything else
   //              rests as a pill level with its anchor
-  //   'hidden'   no cards and no anchor marks. The rail rests at the same hairline the bare state
-  //              uses and the draft is read straight through
   //
-  // Ordered densest first, because that is the order the cycle walks and the icon steps through.
-  const DENSITIES = ['full', 'compact', 'hidden'];
+  // A third, 'hidden', drew no cards and no marks. It was a second control for shutting the panel,
+  // beside the header's own, so it went; a stored 'hidden' reads as the default like any other value
+  // no control can name.
+  const DENSITIES = ['full', 'compact'];
   const DENSITY_REST = 'compact';
-  // Anything that is not one of the three is the default, the same way navsort reads a stored key:
+  // Anything that is not one of the two is the default, the same way navsort reads a stored key:
   // a preference written by an older build (or by a human editing localStorage) must not be able to
   // leave the rail in a state no control can name.
   function density(raw) { return DENSITIES.indexOf(raw) >= 0 ? raw : DENSITY_REST; }
@@ -156,8 +129,7 @@
   //   · a thread whose last word is the human's, waiting on the agent → collapsed
   //   · anything settled → collapsed, which is every card on the archived tab
   //
-  // Only 'compact' collapses anything: 'full' is the promise that nothing is folded, and 'hidden'
-  // draws no cards at all, so neither has a collapsed state to return.
+  // Only 'compact' collapses anything: 'full' is the promise that nothing is folded.
   function startCollapsed(it, agent, dens) {
     if (density(dens) !== 'compact') return false;
     if (!isLive(it)) return true;
@@ -214,6 +186,6 @@
   }
 
   const api = { LIVE, QUOTE_MAX, DENSITIES, DENSITY_REST, THREAD_HEAD, THREAD_TAIL, isLive, lastBy,
-    lastAt, waiting, of, inbox, byNewest, rail, density, nextDensity, startCollapsed, foldThread, peek };
+    lastAt, waiting, of, rail, density, nextDensity, startCollapsed, foldThread, peek };
   if (typeof module === 'object' && module.exports) module.exports = api; else root.Turn = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

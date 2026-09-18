@@ -3028,7 +3028,7 @@ test('every sort mode the panel offers is one the sorter answers to', () => {
   assert.deepEqual(Nav.MODES, ['spine', 'updated', 'turn']);
 });
 
-// ---------- whose turn is it: the panel's badges and the inbox (public/turn.js) ----------
+// ---------- whose turn is it: the panel's badges (public/turn.js) ----------
 // The SAME file index.html loads via <script> AND server.js requires — the badge the panel draws and
 // the count /api/dir computes are this function, once. Every case below is therefore a case both
 // sides answer identically, which is the whole reason it is one module.
@@ -3104,12 +3104,12 @@ test('a missing, empty or malformed review is zero badges rather than a throw', 
     assert.equal(t.turn, 0, JSON.stringify(bad));
   }
   // An item with no anchor and no kind is still LIVE and still counts as open — it is a real card in
-  // the rail. It just has no quote to show, and the inbox says so rather than rendering "undefined".
+  // the rail. It just has no quote to show, and the item says so rather than carrying "undefined".
   assert.equal(Turn.of({ items: [{ id: 'x', status: 'open' }] }, AGENT).open, 1);
   assert.equal(Turn.of({ items: [{ id: 'x', status: 'open' }] }, AGENT).items[0].quote, '');
 });
 
-test('an inbox item carries enough to be recognised, with the quote cut to one line', () => {
+test('a live item carries enough to be recognised, with the quote cut to one line', () => {
   const long = 'word '.repeat(80).trim();
   const it = Turn.of({ items: [{ id: 'c1', kind: 'comment', by: HUMAN, status: 'open',
     anchor: { quote: 'a\n  quote   across\nlines' }, thread: [msg(AGENT, 'hi')] }] }, AGENT).items[0];
@@ -3124,53 +3124,19 @@ test('an inbox item carries enough to be recognised, with the quote cut to one l
   assert.ok(big.items[0].quote.endsWith('…'), 'and says it was cut');
 });
 
-test('a flag reads as its own kind, so the inbox does not call it a comment', () => {
+test('a flag reads as its own kind, not as a comment', () => {
   const t = Turn.of({ items: [{ id: 'f1', kind: 'comment', flag: true, by: AGENT, status: 'open',
     anchor: { quote: 'x' }, thread: [msg(AGENT, 'blocking')] }] }, AGENT);
   assert.equal(t.items[0].kind, 'flag');
   assert.equal(t.turn, 1, 'and it is still the human\'s turn');
 });
 
-test('inbox: grouped by document, your turn first, newest first inside a group', () => {
-  const docs = [
-    { rel: 'p/summary.md', name: 'summary.md', turn: 0,
-      items: Turn.of({ items: [comment('c1', 'open', msg(HUMAN, 'mine'))] }, AGENT).items },
-    { rel: 'p/brief.md', name: 'brief.md', turn: 2, items: Turn.of({ items: [
-      comment('b1', 'open', msg(AGENT, 'older')),
-      comment('b2', 'open', msg(AGENT, 'newer')),
-    ] }, AGENT).items },
-    { rel: 'p/quiet.md', name: 'quiet.md', turn: 0, items: [] },
-  ];
-  const groups = Turn.inbox(docs);
-  assert.deepEqual(groups.map(g => g.name), ['brief.md', 'summary.md'],
-    'the document waiting on you leads, and one with nothing open is not in the inbox at all');
-  assert.deepEqual(groups[0].items.map(i => i.id), ['b2', 'b1'], 'newest first inside a group');
-  assert.equal(groups[0].turn, 2);
-  assert.equal(groups[0].open, 2);
-});
-
-test('inbox: with no turns anywhere, the most recently moved document leads', () => {
-  const older = { rel: 'p/a.md', name: 'a.md', turn: 0, items: [{ id: 'a1', at: '2026-08-01T00:00:00Z' }] };
-  const newer = { rel: 'p/z.md', name: 'z.md', turn: 0, items: [{ id: 'z1', at: '2026-08-14T00:00:00Z' }] };
-  assert.deepEqual(Turn.inbox([older, newer]).map(g => g.name), ['z.md', 'a.md']);
-  assert.deepEqual(Turn.inbox([]), [], 'and an empty folder is an empty inbox');
-});
-
-test('inbox: items with no timestamp fall back to the order they were written in', () => {
-  // A suggestion is born as a diff with no thread and so has no `at` at all. Two of them must not
-  // shuffle between renders — insertion order in the file IS chronological, so it is the tiebreak.
-  const items = Turn.of({ items: [sug('s1', 'pending'), sug('s2', 'pending'), sug('s3', 'pending')] }, AGENT).items;
-  const once = Turn.inbox([{ rel: 'p/a.md', name: 'a.md', turn: 3, items }]);
-  const again = Turn.inbox([{ rel: 'p/a.md', name: 'a.md', turn: 3, items: items.slice().reverse() }]);
-  assert.deepEqual(once[0].items.map(i => i.id), ['s3', 's2', 's1'], 'last written, first shown');
-  assert.deepEqual(again[0].items.map(i => i.id), once[0].items.map(i => i.id), 'whatever order it arrives in');
-});
-
-test('inbox does not mutate the documents it is given', () => {
-  const items = Turn.of({ items: [comment('c1', 'open', msg(AGENT, 'a')), comment('c2', 'open', msg(AGENT, 'b'))] }, AGENT).items;
-  const docs = [{ rel: 'p/a.md', name: 'a.md', turn: 2, items }];
-  Turn.inbox(docs);
-  assert.deepEqual(items.map(i => i.id), ['c1', 'c2'], 'the caller keeps its own order');
+test('the folder has no inbox: the rows\' badges are the one account of what is waiting', () => {
+  // A second tab listed every open item across the folder. The badge on each row already says which
+  // documents want the human, and opening one shows its threads in the rail, so it was a second road
+  // to the same place.
+  assert.equal(Turn.inbox, undefined, 'the model no longer builds one');
+  assert.doesNotMatch(PAGE, /navInbox|nav-tabs|data-view=/, 'and the panel no longer draws one');
 });
 
 // ---------- the rail's resting shape (Turn.rail) ----------
@@ -3208,33 +3174,35 @@ test('the rail rests bare on the counts a real empty review produces', () => {
 });
 
 // ---------- the rail's density, and which cards rest collapsed (Turn.density / startCollapsed) ----------
-// Google Docs gives a comment three densities and sidecar had one. The rule for which cards fold is the
+// The rail has two densities. The rule for which cards fold is the
 // SAME `waiting` rule the panel's badge runs, so a card is full exactly when the badge would have
 // counted it, and the two cannot drift because there is one function under both.
 
-test('a stored density that is not one of the three reads as compact', () => {
+test('a stored density that is not one of the two reads as compact', () => {
   // The stored value comes back through localStorage, which a human can edit and an older build may
   // have written. Anything unrecognised must not leave the rail in a state no control can name.
-  for (const raw of ['', null, undefined, 'dense', 'HIDDEN', '__proto__', 'constructor']) {
+  // 'hidden' was a third density until the header's panel toggle was left as the one way to shut the
+  // rail, so an install that stored it must come back at the default rather than at nothing.
+  for (const raw of ['', null, undefined, 'dense', 'hidden', 'HIDDEN', '__proto__', 'constructor']) {
     assert.equal(Turn.density(raw), 'compact', JSON.stringify(raw));
   }
   for (const d of Turn.DENSITIES) assert.equal(Turn.density(d), d, d);
   assert.equal(Turn.DENSITY_REST, 'compact', 'and compact is where an untouched install rests');
 });
 
-test('the density cycle walks all three and comes home', () => {
-  assert.deepEqual(Turn.DENSITIES, ['full', 'compact', 'hidden'], 'densest first, the order the icon steps');
+test('the density is a toggle between two states, and neither of them shuts the panel', () => {
+  assert.deepEqual(Turn.DENSITIES, ['full', 'compact'], 'densest first, and no state that hides the rail');
   const walk = [];
   let d = Turn.DENSITY_REST;
-  for (let i = 0; i < 3; i++) { d = Turn.nextDensity(d); walk.push(d); }
-  assert.deepEqual(walk, ['hidden', 'full', 'compact'], 'three clicks from compact land back on compact');
-  assert.equal(Turn.nextDensity('nonsense'), 'hidden', 'a junk value cycles as if it were the default');
+  for (let i = 0; i < 2; i++) { d = Turn.nextDensity(d); walk.push(d); }
+  assert.deepEqual(walk, ['full', 'compact'], 'two clicks from compact land back on compact');
+  assert.equal(Turn.nextDensity('nonsense'), 'full', 'a junk value toggles as if it were the default');
 });
 
-test('at full nothing folds, at hidden there are no cards to fold', () => {
+test('at full nothing folds', () => {
   const items = [comment('c1', 'open', msg(HUMAN, 'over to you')), comment('c2', 'resolved', msg(AGENT, 'done')),
                  sug('s1', 'pending')];
-  for (const d of ['full', 'hidden']) {
+  for (const d of ['full']) {
     for (const it of items) assert.equal(Turn.startCollapsed(it, AGENT, d), false, `${it.id} at ${d}`);
   }
 });
@@ -3298,7 +3266,7 @@ test('the collapsed pill previews the last line said, and never an empty one', (
   // A suggestion nobody has replied to has no message at all: its note, then the span it is about.
   assert.equal(Turn.peek({ ...sug('s1', 'pending'), note: 'tighter' }), 'tighter');
   assert.equal(Turn.peek(sug('s2', 'pending')), 'the s2 span');
-  // And it is cut to the same length the inbox cuts a quote to, so one pill cannot be a paragraph.
+  // And it is cut to the same length a quote is, so one pill cannot be a paragraph.
   const long = Turn.peek(comment('c3', 'open', msg(AGENT, 'x'.repeat(400))));
   assert.equal(long.length, Turn.QUOTE_MAX);
   assert.ok(long.endsWith('…'));
@@ -3988,10 +3956,10 @@ test('the directory listing at the served root has no parent to walk up to', asy
   assert.ok(!d.docs.some(x => x.name === 'folder'), 'a directory is not a document');
 });
 
-test('the directory listing carries each document\'s turn count and its open items', async () => {
+test('the directory listing carries each document\'s turn count and its open count', async () => {
   // The badge's data path end to end: a review on disk → /api/dir → what the panel draws. The counting
   // is public/turn.js, asserted directly above; this is that the server runs it, per document, per
-  // folder, and hands back the items the Inbox lists.
+  // folder, and hands back the two counts the rows badge.
   const folder = path.join(dir, 'badges');
   fs.mkdirSync(folder, { recursive: true });
   fs.writeFileSync(path.join(folder, 'brief.md'), '# brief\n\nA sentence to anchor to.\n');
@@ -4009,11 +3977,9 @@ test('the directory listing carries each document\'s turn count and its open ite
   const brief = d.docs.find(x => x.name === 'brief.md'), quiet = d.docs.find(x => x.name === 'quiet.md');
   assert.equal(brief.turn, 2, 'the agent-last comment and the pending suggestion');
   assert.equal(brief.open, 3, 'the human-last one is open too');
-  assert.deepEqual(brief.items.map(i => i.id), ['c1', 'c2', 's1'], 'and the settled one is gone');
-  assert.equal(brief.items.find(i => i.id === 'c1').quote, 'A sentence', 'each item carries its span');
+  assert.equal(brief.items, undefined, 'counts only: the items themselves stay in the sidecar');
   assert.equal(quiet.turn, 0, 'a document with no sidecar at all');
   assert.equal(quiet.open, 0);
-  assert.deepEqual(quiet.items, []);
 });
 
 test('a legacy or unreadable sidecar is zero badges, and the rest of the folder still lists', async () => {
@@ -6123,7 +6089,7 @@ test('one tracking for every uppercase micro-label', () => {
   // Six labels doing one job wore .03em, .05em, .06em, .13em and two more. They share a token now,
   // so the next one written cannot invent a seventh value.
   assert.match(LIGHT['--track-caps'], /^\.\d+em$/, 'the token is there and is a tracking');
-  assert.ok(STYLE.split('letter-spacing:var(--track-caps)').length - 1 >= 5,
+  assert.ok(STYLE.split('letter-spacing:var(--track-caps)').length - 1 >= 3,
     'and the labels that were tracked by hand read it instead');
   // A label that sets a tracking sets the token, or the explicit 0 that resets it on a count inside
   // one.
@@ -6192,9 +6158,9 @@ const storeOver = (backing) => UI_STORE({
 test('the density is stored under the sc: prefix, beside every other preference', () => {
   const backing = {};
   const store = storeOver(backing);
-  store.set('railDensity', 'hidden');
-  assert.deepEqual(backing, { 'sc:railDensity': 'hidden' }, 'one key, prefixed like railWidth and theme');
-  assert.equal(store.get('railDensity', ''), 'hidden', 'and it reads straight back');
+  store.set('railDensity', 'full');
+  assert.deepEqual(backing, { 'sc:railDensity': 'full' }, 'one key, prefixed like railWidth and theme');
+  assert.equal(store.get('railDensity', ''), 'full', 'and it reads straight back');
 });
 
 test('a density round-trips through the store and the guard, junk and all', () => {
@@ -6212,7 +6178,7 @@ test('a store that throws on every access still answers, and the rail still rest
   // Safari in private mode throws on setItem while getItem keeps answering null. Nothing about a
   // layout preference is worth an exception on the path that renders the review.
   const store = UI_STORE({ getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); } });
-  assert.doesNotThrow(() => store.set('railDensity', 'hidden'));
+  assert.doesNotThrow(() => store.set('railDensity', 'full'));
   assert.equal(store.get('railDensity', ''), '', 'the fallback comes back');
   assert.equal(Turn.density(store.get('railDensity', '')), 'compact', 'so the rail rests at compact');
 });
@@ -6221,11 +6187,51 @@ test('the page reads and writes the density through that store and that guard', 
   assert.match(PAGE, /let railDensity = Turn\.density\(uiStore\.get\('railDensity', ''\)\);/,
     'one read at boot, guarded');
   assert.match(PAGE, /uiStore\.set\('railDensity', railDensity\);/, 'and the write is a mirror of it');
-  // Hidden takes the cues out of the prose as well as the cards out of the rail.
-  assert.match(PAGE, /const off = Turn\.density\(railDensity\) === 'hidden';/,
-    'markAnchors asks the same question');
+  // Shutting the panel is the header toggle's alone: no density leaves the rail without its cards.
+  assert.doesNotMatch(PAGE, /Turn\.density\(railDensity\) === 'hidden'/, 'no branch still asks for the third state');
   assert.doesNotMatch(PAGE, /localStorage\.(get|set)Item\('sc:railDensity'/,
     'nothing reaches storage around the store');
+});
+
+test('the header title group holds the path and nothing else', () => {
+  // A kind tag and a segmented zoom used to sit beside the path, and between them they covered the
+  // filename the group exists to keep readable.
+  const group = PAGE.match(/<div class="htitle">([\s\S]*?)<\/div>\s*<!-- Empty until an agent/);
+  assert.ok(group, 'the title group is still there');
+  assert.equal(group[1].trim(), '<div id="pwd"></div>', 'and the path is all it holds');
+  assert.match(PAGE, /<button id="zoomToggle"[^>]*onclick="toggleAssetZoom\(\)"[^>]*hidden/, 'the zoom is one icon among the view controls, asset only');
+  const paint = PAGE.match(/function paintZoom\(\) \{([\s\S]*?)\n\}/);
+  assert.doesNotMatch(paint[1], /aria-label|\.title =/, 'its name is fixed in the markup; aria-pressed alone carries the state');
+});
+
+test('the header names the document and the panel holds the whole path', () => {
+  // The title printed the full path, and the panel printed it again as a one-line breadcrumb clipped
+  // to its last two segments. The name is the title now, the path is its hover, and the folder is a
+  // menu that lists every level.
+  assert.match(PAGE, /\$\('pwd'\)\.innerHTML = `<span class="file">/, 'the title is the filename');
+  assert.match(PAGE, /\$\('pwd'\)\.title = p;/, 'and the whole path is its hover');
+  // Exercised, not pattern-matched: the split has to find the name in a Windows path too, or the title
+  // is the whole path again on the one platform that writes it with backslashes.
+  const split = PAGE.match(/const i = (Math\.max\(p\.lastIndexOf[^;]+);/);
+  assert.ok(split, 'the split is still one expression');
+  const nameOf = new Function('p', 'const i = ' + split[1] + '; return i >= 0 ? p.slice(i + 1) : p;');
+  assert.equal(nameOf('~/hq/vault/brief.md'), 'brief.md');
+  assert.equal(nameOf('C:\\Users\\alex\\project\\brief.md'), 'brief.md');
+  assert.equal(nameOf('brief.md'), 'brief.md');
+  assert.doesNotMatch(PAGE, /id="navCrumb"/, 'the clipped breadcrumb is gone');
+  assert.match(PAGE, /<div class="menu" id="navPathMenu" role="menu" hidden><\/div>/, 'the folder is a menu');
+  assert.match(PAGE, /\$\('navPathMenu'\)\.addEventListener\('click'[\s\S]{0,200}loadDir\(b\.dataset\.dir\)/, 'and every level in it is live');
+});
+
+test('an asset hover never writes into the header', () => {
+  // The label is as long as a sentence, and in the status slot it pushed every control in the bar to
+  // the left and into the title. It is written to #hoverHint, which is fixed and moves nothing.
+  const hover = PAGE.match(/case 'hover': \{([\s\S]*?)break;/);
+  assert.ok(hover, 'the hover case is still there');
+  assert.match(hover[1], /setHoverHint\(/, 'the label goes to the hint');
+  assert.doesNotMatch(hover[1], /setStatus\(/, 'and never to the status slot');
+  assert.match(PAGE, /#hoverHint \{ position:fixed;[^}]*pointer-events:none;/, 'fixed, and never the thing a pick lands on');
+  assert.match(PAGE, /function resetDocState\(\) \{[\s\S]{0,400}?setHoverHint\(''\);/, 'and leaving the document clears it, since the old frame no longer can');
 });
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -6803,8 +6809,8 @@ test('entering reading mode closes the comment composer as well as the toolbar',
 test('the collapsed folder draws the handle, the count, and nothing else', () => {
   assert.match(STYLE, /body\.nav-collapsed \{ --nav-track:34px; \}/,
     'an edge, not a second document list');
-  assert.match(STYLE, /body\.nav-collapsed \.nav-list, body\.nav-collapsed #navInbox,\n\s*body\.nav-collapsed \.nav-empty \{ display:none; \}/,
-    'the list, the inbox and the empty state all go');
+  assert.match(STYLE, /body\.nav-collapsed \.nav-list, body\.nav-collapsed \.nav-empty \{ display:none; \}/,
+    'the list and the empty state both go');
   assert.match(STYLE, /body\.nav-collapsed #navExpand \{ display:flex; margin-left:0; \}/,
     'the way back out stays');
   assert.match(STYLE, /body\.nav-collapsed #nav:hover #navExpand \{ color:var\(--ink\); \}/,
@@ -6821,17 +6827,15 @@ test('the collapsed folder draws the handle, the count, and nothing else', () =>
 test('the count is the whole control, and a zero takes it with it', () => {
   // A pill with no number in it is a control that does nothing, so the button goes rather than the
   // number. renderNav owns that, because it is the only place the folder's total is known.
-  assert.match(PAGE, /\$\('navStripInbox'\)\.hidden = !waiting;/,
+  assert.match(PAGE, /strip\.hidden = !waiting;/,
     'renderNav hides the control itself at zero');
-  assert.match(STYLE, /body\.nav-collapsed #navStripInbox\[hidden\] \{ display:none; \}/,
+  assert.match(STYLE, /body\.nav-collapsed #navStripWaiting\[hidden\] \{ display:none; \}/,
     'and the collapsed block honours the attribute rather than out-specifying it');
-  assert.match(STYLE, /body\.nav-collapsed #navStripInbox svg \{ display:none; \}/,
-    'the inbox glyph goes: the number is the thing');
-  const pill = STYLE.match(/body\.nav-collapsed #navStripInbox \.n \{([\s\S]*?)\}/);
+  const pill = STYLE.match(/body\.nav-collapsed #navStripWaiting \.n \{([\s\S]*?)\}/);
   assert.ok(pill, 'the pill rule is still findable');
   assert.match(pill[1], /background:var\(--yellow\)/, 'yellow, because it is the agent holding something out');
-  assert.match(PAGE, /id="navStripInbox"[\s\S]{0,200}onclick="openInbox\(\)"/,
-    'and clicking it still opens the panel on the inbox');
+  assert.match(PAGE, /id="navStripWaiting"[^>]*onclick="toggleNav\(true\)"/,
+    'and clicking it opens the panel, where the rows say which documents');
 });
 
 /* ────────────────────────────────────────────────────────────────────────────

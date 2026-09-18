@@ -23,7 +23,7 @@ Sidecar brings the review to the file instead: suggestion cards, word-level diff
 - **Real files, real diffs.** Edits write the actual markdown, and untouched blocks keep their exact original bytes, so `git diff` shows just what changed, and git is your undo.
 - **Any agent with a shell.** Claude Code, Cursor, Codex, and the rest. One small CLI, no plugin, no API key.
 - **A live loop, not a mailbox.** Your agent can watch the review and answer inside your comment threads the moment you act, and the thread shows _claude is replying_ while the answer is being written.
-- **A folder, not one file.** Serve a project directory and the review is the whole project: a panel lists its documents, badges say which ones are waiting on you, and an inbox collects every open thread across them. Your agent watches the folder with one `wait --dir`.
+- **A folder, not one file.** Serve a project directory and the review is the whole project: a panel lists its documents, and badges say which ones are waiting on you. Your agent watches the folder with one `wait --dir`.
 - **Anchored to content, not line numbers.** If text moves, anchors follow; if it's gone, the item goes orphaned, loudly, instead of editing the wrong place.
 - **Cheap turns.** After the first read, your agent sees only what changed since its last look, so a long review doesn't mean re-reading the document every turn.
 - **Mobile friendly.** One `tailscale serve` line puts the review on your phone over your own tailnet, where a comment can carry the screenshot you just took.
@@ -87,8 +87,8 @@ it publicly.
 
 **Move around a folder.** The panel down the left lists every document in the folder you are reading,
 and clicking one opens it in place. Sort by *spine* (`summary.md` first, `brief.md` second, then
-alphabetical), by *last updated*, or by *waiting on you*; the choice sticks per folder. A breadcrumb
-steps up a level, the panel collapses to an icon strip, and below 780px it becomes a drawer. Relative
+alphabetical), by *last updated*, or by *waiting on you*; the choice sticks per folder. The folder's
+name opens its whole path as a menu, every level a click, the panel collapses to an icon strip, and below 780px it becomes a drawer. Relative
 links between documents work too: `[the research](./market-research.md)` opens in sidecar rather than
 in a download, so following a citation keeps you in the review, and browser back returns you to the
 paragraph you left.
@@ -96,8 +96,7 @@ paragraph you left.
 **See what is still waiting on you.** Each row carries a count of the items on that document whose
 next move is yours: an open comment whose latest message is your agent's, plus every pending
 suggestion card. A document waiting on the agent shows a neutral dot, and a settled one shows
-nothing. The **inbox** tab lists those open items across the whole folder, grouped by document, and
-clicking one opens that document at the anchored text. Your agent sees the same folder from its side:
+nothing. Your agent sees the same folder from its side:
 `sidecar wait --dir <folder>` is one process over every document in it, so nothing sits unwatched
 while you read. `sidecar watchers` lists what is armed and whether each one is still running, with
 `--clean` to clear the records of watchers that died with the session that started them.
@@ -121,7 +120,7 @@ caret climb to the top. Scroll with the wheel or a finger and it stands aside un
 
 **Comment.** Select text, then comment. The comment box is draggable, so you can move it off the text you're
 commenting on. Threads reply and resolve. To resume a resolved comment, expand it in **archived** and choose **restore**. It returns to **active** with its conversation and past suggestion decisions intact. Every open comment or suggestion softly highlights its span in the
-document; tap the highlight to open its card, tap a card's quote to jump to the text. The review rail has two tabs: **active** threads (open, editable) and **archived** threads (settled), and an icon at the right end of that bar cycles how much of it is drawn: every card full, compact (a thread waiting on you stays full and the rest rest as pills you can click open), or hidden, which clears the rail and the highlights so you can read the draft straight through. Inside a
+document; tap the highlight to open its card, tap a card's quote to jump to the text. The review rail has two tabs: **active** threads (open, editable) and **archived** threads (settled), and an icon at the right end of that bar switches how much of it is drawn: every card full, or compact (a thread waiting on you stays full and the rest rest as pills you can click open). Inside a
 card, a thread of more than four messages draws its opening comment, a row saying how many replies are
 folded away, and the last two, and a single message longer than about twelve lines clips with a **more**
 under it; the row and the toggle open either one in place.
@@ -144,10 +143,10 @@ leading `LR` turns it sideways. The source stays plain text in your file, so it 
 **Review a poster or a wireframe.** Open an `.html` file and it renders as designed inside a sandboxed
 frame, none of its own scripts running. Hover outlines the element under the cursor, a click opens a
 comment pinned to that element, and Option steps down through the layers under the pointer when the
-thing you want is behind a scrim. A wide design fills the column, with a zoom in the header: *fit*
-scales it to the column and *100%* shows it at natural size, scrolling sideways inside its own frame.
-A plain click is always a comment; hold Shift to follow a link instead, and the header names the
-destination while you hold it. Your agent reaches the same elements from the terminal with
+thing you want is behind a scrim. A wide design is scaled to fit the column, and the zoom icon in the
+header shows it at natural size instead, scrolling sideways inside its own frame.
+A plain click is always a comment; hold Shift to follow a link instead, and a label at the foot of the
+page names the destination while you hover. Your agent reaches the same elements from the terminal with
 `comment --element`.
 
 **Save.** Edits autosave to the real file (debounced), preserving the exact bytes of every block you didn't
