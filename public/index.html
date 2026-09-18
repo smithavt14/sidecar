@@ -194,6 +194,20 @@
      title has the whole run up to the controls, which in a header squeezed between two panels is the
      difference between a filename and four letters of one. */
   .hwrap:has(.presence:not(:empty)) .htitle { max-width:calc(50% - 92px); }
+  /* The header is the space BETWEEN two draggable panels, so its width is not the window's: at 1000px
+     with both panels open it is under 400, and a readout centred in that printed straight over the
+     controls. Measured on the header itself, then. Below 620px of bar the readout joins the flow
+     beside the title as the dot alone, which is what it already does on a phone; the dot's colour and
+     pulse carry the state and its title carries the name. */
+  header { container-type:inline-size; }
+  @container (max-width: 620px) {
+    /* `.hwrap .presence`, not `.presence`: the readout's own rule sits later in this sheet, and at
+       equal weight the later one keeps it absolutely centred with its label folded away. */
+    .hwrap .presence { position:static; transform:none; gap:0; padding:5px; margin-left:-2px; flex:none;
+      pointer-events:auto; background:var(--fill); border-radius:var(--r-pill); }
+    .hwrap .presence .lbl { display:none; }
+    .hwrap:has(.presence:not(:empty)) .htitle { max-width:none; }
+  }
   .hbrand { display:none; align-items:center; gap:8px; text-decoration:none; color:inherit; }
   body.no-nav .hbrand { display:flex; }
   /* The mark is an <img>, so its `currentColor` cannot see the page's tokens: an SVG used as an
@@ -2733,11 +2747,12 @@ function proseHtml(s) {
   const one = html.match(/^<p>([\s\S]*)<\/p>$/);
   return one && !/<p[ >]/.test(one[1]) ? one[1] : html;
 }
-// Identity class for a card/thread author — the agent (its own name, default 'claude') gets the
-// yellow chip; everyone else (the human, whatever SIDECAR_USER is) gets the ink dot. Keyed off the
-// agent name from /api/state, never a literal, so legacy 'alex', the default 'you', and any custom
-// name all color as the human.
-function whoCls(by) { return (state && by === state.agent) ? 'agent' : 'human'; }
+// Identity class for a card/thread author. An agent gets the yellow chip; everyone else (the human,
+// whatever SIDECAR_USER is, legacy 'alex' and the default 'you' alike) gets the ink dot. "An agent" is
+// any name on the server's list, never one literal: a review can have claude and codex both writing
+// into it. `who` is that list in the shape public/turn.js takes it.
+const who = () => ({ agents: (state && state.agents) || [state && state.agent] });
+function whoCls(by) { return (state && Turn.isAgent(by, who())) ? 'agent' : 'human'; }
 // ---------- per-thread presence: which card is the agent answering right now? ----------
 // The agent's `wait` exit pings the server with the ids it woke on; they arrive here as
 // state.presence.items [{id, agent, until}]. A mark is live until its `until` (the server's staleness
@@ -2852,7 +2867,7 @@ function nestedSugHtml(sug) {
       + (sug.note ? `<div class="msg"><span class="t">${proseHtml(sug.note)}</span></div>` : '')
       + threadHtml(sug.thread, sug.id) + `</div>`;
   const orphan = orphanCue(sug).shown ? ` <span class="badge orphaned">${orphanLabel(sug)}</span>` : '';
-  return `<div class="subcard" data-id="${esc(sug.id)}"><span class="who agent">claude</span> <span class="badge suggestion">suggestion</span>${orphan}`
+  return `<div class="subcard" data-id="${esc(sug.id)}"><span class="who agent">${esc(sug.by || state.agent)}</span> <span class="badge suggestion">suggestion</span>${orphan}`
     + diffHtml(sug.anchor.quote, sug.replacement)
     + (sug.note ? `<div class="msg"><span class="t">${proseHtml(sug.note)}</span></div>` : '')
     // Its thread renders, but it gets no reply box of its own: this card already sits inside the parent
@@ -3466,13 +3481,17 @@ function renderPresence() {
   const st = live && state.presence.state;
   schedulePresenceExpiry();
   let cls = '', txt = '';
-  if (st === 'working') { cls = 'here working'; txt = 'claude is working…'; }   // Alex acted; I'm composing
-  else if (st === 'watching') { cls = 'here'; txt = 'claude is here'; }          // watching; ball in Alex's court
+  // The name is the one the pinging agent gave (SIDECAR_AGENT on ITS side), so a server claude
+  // started reads "codex is here" when codex is the one watching.
+  const name = esc((live && state.presence.agent) || state.agent);
+  if (st === 'working') { cls = 'here working'; txt = name + ' is working…'; }   // the human acted; the agent is composing
+  else if (st === 'watching') { cls = 'here'; txt = name + ' is here'; }          // watching; the ball is the human's
   if (!txt) { el.className = 'presence'; el.innerHTML = ''; presenceShown = false; return; }
   // `arriving` only on the render that fills an empty slot: the heartbeat re-renders this every 15s,
   // and re-running the fade on each one would make the readout blink for as long as the agent is here.
   el.className = 'presence ' + cls + (presenceShown ? '' : ' arriving');
   el.innerHTML = '<span class="dot"></span><span class="lbl">' + txt + '</span>';
+  el.title = (live && state.presence.agent) || state.agent;   // the name, where the label is folded to a dot
   presenceShown = true;
 }
 // Header orphan cue → open the sidebar and flash the orphaned cards (the doc-side fix for §6a: orphaned
@@ -3492,7 +3511,7 @@ async function markDone() {
   try {
     const r = await api('PUT', '/api/review', { path: FILE, review: state.review });
     state.review = r.review; renderSide();
-    showBanner('Sent to Claude — I’ll wrap up and commit.', [{ label: 'ok', fn: () => {} }]);
+    showBanner('Sent to ' + state.agent + '.', [{ label: 'ok', fn: () => {} }]);
   } catch (e) { alert('could not send: ' + e.message); }
 }
 // grow a textarea to fit its content so the whole comment stays visible while typing
@@ -4258,7 +4277,7 @@ const cardFold = new Map();
 function cardCollapsed(it) {
   if (Turn.density(railDensity) !== 'compact') return false;
   const manual = cardFold.get(it.id);
-  return manual ? manual === 'collapsed' : Turn.startCollapsed(it, state.agent, railDensity);
+  return manual ? manual === 'collapsed' : Turn.startCollapsed(it, who(), railDensity);
 }
 function setDensity(d) {
   railDensity = Turn.density(d);
@@ -4468,7 +4487,7 @@ function navIcon(name) {
 function navMarker(d) {
   const turn = d.turn || 0, open = d.open || 0;
   if (turn > 0) return `<span class="nb turn" title="${turn} waiting on you">${turn > 9 ? '9+' : turn}</span>`;
-  if (open > 0) return `<span class="nb dot" title="${open} open, waiting on claude"></span>`;
+  if (open > 0) return `<span class="nb dot" title="${open} open, waiting on the agent"></span>`;
   return '';
 }
 function renderNav() {
@@ -4513,7 +4532,7 @@ function navSelfUpdate() {
   if (!navData || !state || !state.review) return;
   const d = navData.docs.find(x => x.rel === FILE);
   if (!d) return;
-  const t = Turn.of(state.review, state.agent);
+  const t = Turn.of(state.review, who());
   if (d.turn === t.turn && d.open === t.open) return;
   d.turn = t.turn; d.open = t.open;
   renderNav();

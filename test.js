@@ -14,6 +14,10 @@ const { JSDOM } = require('jsdom');
 // equals the sha of the exact bytes on disk.
 const sha_of = (s) => crypto.createHash('sha1').update(s).digest('hex').slice(0, 12);
 
+// The agent's default name is read off the harness (lib/agent.js), and this suite is run from inside
+// one. Scrubbed here so every spawned command that names no agent is 'claude' whoever runs the tests.
+for (const k of ['CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'SIDECAR_AGENT']) delete process.env[k];
+
 const PORT = 4991;
 const BASE = `http://127.0.0.1:${PORT}`;
 let dir, proc, xdgHome;
@@ -1454,6 +1458,66 @@ test('wait exit ping leaves a bare rejection dark', async () => {
   const s = await j(await fetchRetry(BASE + '/api/state?path=' + encodeURIComponent('waitbare.md')));
   assert.equal(s.presence?.state, 'working');
   assert.deepEqual(s.presence.items, [], 'a rejection with no reason marks nothing');
+});
+
+test('the agent is named by SIDECAR_AGENT, then by its harness, and is claude last', () => {
+  const { agentName } = require('./lib/agent.js');
+  assert.equal(agentName({}), 'claude', 'a harness nobody has verified is what it always was');
+  assert.equal(agentName({ CLAUDECODE: '1' }), 'claude');
+  assert.equal(agentName({ CODEX_THREAD_ID: 'x' }), 'codex', 'Codex sets this in every shell it runs');
+  assert.equal(agentName({ CODEX_SESSION_ID: 'x' }), 'codex');
+  assert.equal(agentName({ CODEX_THREAD_ID: 'x', CLAUDECODE: '1' }), 'codex',
+    'a Codex launched from inside Claude Code inherits CLAUDECODE and is still Codex');
+  assert.equal(agentName({ SIDECAR_AGENT: 'cursor', CODEX_THREAD_ID: 'x' }), 'cursor', 'the explicit name always wins');
+  assert.equal(agentName({ SIDECAR_AGENT: '  ' }), 'claude', 'a blank name is no name');
+  // One resolver, four readers.
+  for (const f of ['server.js', 'lib/cli.js', 'lib/wait.js', 'lib/presence.js']) {
+    const src = fs.readFileSync(path.join(__dirname, f), 'utf8');
+    assert.match(src, /agent\.js'\)\.agentName\(\)/, f + ' asks lib/agent.js');
+    assert.doesNotMatch(src, /SIDECAR_AGENT \|\| 'claude'/, f + ' carries no default of its own');
+  }
+});
+
+test('presence names the agent that pinged, not the one the server was started by', async () => {
+  await post('/api/presence', { path: 'doc.md', state: 'watching', agent: 'codex' });
+  const s = await fetchRetry(`${BASE}/api/state?path=doc.md`).then(j);
+  assert.equal(s.presence.agent, 'codex', 'the header prints this name');
+  await post('/api/presence', { path: 'doc.md', state: 'idle', agent: 'codex' });
+  assert.match(PAGE, /const name = esc\(\(live && state\.presence\.agent\) \|\| state\.agent\);/, 'and the page reads it');
+  assert.doesNotMatch(PAGE, /'claude is (here|working)/, 'with no name written into the readout');
+  // The header is the space between two panels, so the readout folds on the HEADER's width, not the window's.
+  assert.match(PAGE, /header \{ container-type:inline-size; \}\s*@container \(max-width: 620px\) \{[\s\S]*?\.hwrap \.presence \{ position:static;/,
+    'a narrow bar takes the readout into the flow as a dot, where it cannot print over the controls');
+});
+
+test('an agent is any name on the list, and a second human is not one', () => {
+  const { agentNames } = require('./lib/agent.js');
+  assert.deepEqual(agentNames({}), ['claude', 'codex'], 'the detectable ones, always');
+  assert.deepEqual(agentNames({ SIDECAR_AGENT: 'robo', SIDECAR_AGENTS: 'cursor, aider' }), ['robo', 'claude', 'codex', 'cursor', 'aider']);
+  const who = { agents: agentNames({}) };
+  assert.equal(Turn.isAgent('claude', who), true);
+  assert.equal(Turn.isAgent('codex', who), true, 'a second agent in the same review');
+  assert.equal(Turn.isAgent('alex', who), false);
+  assert.equal(Turn.isAgent('pat', who), false, 'a document travels between people; a second human stays a human');
+  assert.equal(Turn.isAgent('', who), false);
+  assert.equal(Turn.isAgent('claude', 'claude'), true, 'a bare name still means that one agent');
+  assert.equal(Turn.isAgent('codex', 'claude'), false);
+  // The badge counts a thread codex spoke last on as waiting on the human, on a server claude started.
+  const review = { items: [{ id: 'c1', kind: 'comment', by: 'codex', status: 'open', anchor: { quote: 'x' },
+    thread: [{ by: 'codex', at: '2026-09-18T10:00:00Z', text: 'a question' }] }] };
+  assert.equal(Turn.of(review, who).turn, 1);
+  assert.equal(Turn.of(review, 'claude').turn, 0, 'which the single-name rule missed');
+  assert.match(PAGE, /function whoCls\(by\) \{ return \(state && Turn\.isAgent\(by, who\(\)\)\)/, 'the card colours ask the same question');
+});
+
+test('a write with no watcher armed says what to run next, on stderr', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'sc-nudge-'));
+  fs.writeFileSync(path.join(d, 'doc.md'), '# doc\n\nA sentence to anchor to.\n');
+  const r = spawnSync(process.execPath, [path.join(__dirname, 'server.js'), 'comment', 'doc.md', '--quote', 'A sentence', '--text', 'hello'],
+    { cwd: d, env: { ...process.env, SIDECAR_AGENT: 'nudged', SIDECAR_PORT: '4993' }, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /next: sidecar wait .*doc\.md/, 'the step agents skip, said when it is skipped');
+  assert.doesNotMatch(r.stdout, /next: sidecar wait/, 'and stdout is the report it always was');
 });
 
 test('SIDECAR_USER / SIDECAR_AGENT are surfaced in /api/state (default and override)', async () => {

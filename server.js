@@ -44,7 +44,8 @@ const BASE_DIR = rootIsFile ? path.dirname(ROOT) : ROOT;
 // Identity names — same env family as the CLI's SIDECAR_AGENT (lib/cli.js). AGENT is the name
 // stamped on the agent's own cards; USER is the human's, stamped by the browser on comments/replies.
 // The UI colors identity by these (agent = yellow, the human = ink), so both ride /api/state.
-const AGENT = process.env.SIDECAR_AGENT || 'claude';
+const AGENT = require('./lib/agent.js').agentName();
+const AGENTS = require('./lib/agent.js').agentNames();
 const USER = process.env.SIDECAR_USER || 'you';
 
 const app = express();
@@ -338,7 +339,7 @@ app.get('/api/dir', (req, res) => {
     // two different questions, so they read two different numbers rather than one shared fudge.
     let mtime = 0; try { mtime = fs.statSync(p).mtimeMs; } catch (_) {}
     let t = { turn: 0, open: 0 };
-    try { t = Turn.of(JSON.parse(fs.readFileSync(sidecarPath(p), 'utf8')), AGENT); } catch (_) {}
+    try { t = Turn.of(JSON.parse(fs.readFileSync(sidecarPath(p), 'utf8')), { agents: AGENTS }); } catch (_) {}
     docs.push({ rel: path.relative(BASE_DIR, p), name: e.name, mtime, turn: t.turn, open: t.open });
   }
   // The panel walks up through `parent`; at the served root there is nowhere further up, and null
@@ -367,7 +368,7 @@ app.get('/api/state', (req, res) => {
   try { diff = execFileSync('git', ['diff', '--', path.basename(abs)], { cwd: path.dirname(abs), stdio: ['ignore', 'pipe', 'ignore'] }).toString(); } catch {}
   res.json({ path: req.query.path, kind, pwd: pwdFor(abs), markdown, review, diff, hash: sha(markdown),
     presence: presenceFor(abs), code: CODE_STAMP, codeDir: CODE_DIR, version: VERSION,
-    user: USER, agent: AGENT });
+    user: USER, agent: AGENT, agents: AGENTS });
 });
 
 // Assets never reach here. They are read-only in the viewer: no contenteditable, no serialize
@@ -560,10 +561,12 @@ function presenceFor(abs) {
     if (p.state === 'idle') continue;
     const until = p.at + (p.state === 'working' ? WORKING_TTL : PRESENCE_TTL);
     if (until <= now) continue;
-    if (!best || rank(p) > rank(best) || (rank(p) === rank(best) && p.at > best.at)) best = { ...p, until };
+    if (!best || rank(p) > rank(best) || (rank(p) === rank(best) && p.at > best.at)) best = { ...p, agent, until };
     for (const id of p.items || []) items.push({ id, agent, until });
   }
-  return best ? { state: best.state, at: best.at, until: best.until, items } : null;
+  // `agent` is WHO: the name the pinging process gave, which is what the header prints. A server
+  // started by one agent is regularly watched by another.
+  return best ? { state: best.state, agent: best.agent, at: best.at, until: best.until, items } : null;
 }
 app.post('/api/presence', (req, res) => {
   let abs; try { abs = safePath(req.body.path); } catch { return res.json({ ok: true }); }   // unknown file → ignore (fail-safe)

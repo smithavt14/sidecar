@@ -36,6 +36,27 @@ for three paragraphs.
 
 ---
 
+## The whole job
+
+```bash
+export SIDECAR_AGENT=cursor           # YOUR name. It is what the human sees on your cards and in
+                                      # "cursor is here". Codex and Claude Code are detected; anything
+                                      # else is "claude" until you set this.
+sidecar doctor /abs/path/doc.md       # is a server up, and the two URLs to hand the human
+sidecar comment … / sidecar suggest … # raise things (see The commands)
+sidecar wait /abs/path/doc.md         # BLOCKS until the human acts, then prints what they did
+# respond (reply, answer, or edit the file), then run `sidecar wait` again. Stop at DONE: true.
+```
+
+**`wait` is the step agents skip, and it is the whole loop.** Nothing pushes into your session: a
+comment the human writes will not appear in your context on its own. Hand over the URL and stop, and
+from their side you have gone silent. Run `wait` in the background if your harness can wake you when a
+command exits (Claude Code: Bash with `run_in_background`); otherwise poll it with `--timeout 60` and
+run it again on exit `1`. Every write verb reminds you on stderr while you are not watching.
+[Waiting for them](#waiting-for-them--the-step-agents-skip) has the details.
+
+---
+
 ## Start here
 
 **Setup is yours, not theirs. Never hand the human a shell command to run.** Installing this skill
@@ -506,8 +527,9 @@ moment it is freed.
 You stop only when the digest says `DONE: true` or the human says they're finished. A review where
 you answered once and stopped watching is a review they think you abandoned.
 
-**The human can see this loop.** While your `wait` is armed the browser header reads *claude is
-here*, and when it wakes, the threads it woke on show *claude is replying* until your reply lands.
+**The human can see this loop.** While your `wait` is armed the browser header reads *codex is
+here* (your `SIDECAR_AGENT`), and when it wakes, the threads it woke on show *codex is replying* until
+your reply lands.
 A rejection that carries a reason lights its card the same way, because the reason is an invitation
 to retry and you are presumed to be composing one. The `wait` exit does that on its own, and every
 write verb you run refreshes the signal as a side effect; there is no presence command for you to
@@ -586,8 +608,8 @@ Statuses: suggestions run `pending → accepted | rejected`; comments run `open 
 become `orphaned`. The human can expand a resolved comment in Archived and choose **restore** to reopen
 the same thread. Its suggestion decisions stay intact and the document stays unchanged. The digest
 reports `REOPENED` with the comment id, and `wait` wakes even when nobody has added a reply yet. A quote
-that has since changed returns as an active orphan for reanchoring. Items are stamped with `by` (your agent name — set `SIDECAR_AGENT` if `claude` is
-wrong) and real timestamps, both filled in for you.
+that has since changed returns as an active orphan for reanchoring. Items are stamped with `by` (your agent name: Codex and Claude Code are detected, and `SIDECAR_AGENT`
+overrides) and real timestamps, both filled in for you.
 
 ---
 
