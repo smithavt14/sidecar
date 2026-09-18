@@ -4118,11 +4118,9 @@ function paintZoom() {
   const ps = $('proseToggle'); if (ps) ps.hidden = isAsset();
   // An asset is read-only and has no caret, so there is no line to hold. It goes with the measure.
   const tw = $('typewriterToggle'); if (tw) tw.hidden = isAsset();
-  const full = assetZoom === 'full';
-  const label = full ? 'Fit to the column' : 'Actual size';
-  el.title = label;
-  el.setAttribute('aria-label', label);
-  el.setAttribute('aria-pressed', String(full));
+  // One name, and aria-pressed carries the state. A name that flipped with the state had a screen
+  // reader announcing "Fit to the column, pressed" on an asset drawn at its natural size.
+  el.setAttribute('aria-pressed', String(assetZoom === 'full'));
 }
 // ---------- the review rail: resizable, collapsible, remembered ----------
 const RAIL_MIN = 280;        // below this a card's diff and its buttons stop fitting side by side
@@ -4703,6 +4701,9 @@ document.addEventListener('click', (e) => {
 // count as new mail.
 function resetDocState() {
   clearTimeout(saveTimer); saveTimer = null;
+  // The outgoing frame's handle is about to be dropped, so its own "pointer left" can never arrive to
+  // clear this. A document that then fails to load would keep the last asset's label under its URL.
+  setHoverHint('');
   dirty = false; blocks = [];
   pendingSel = null; pendingSelBlock = null; pendingSelOffset = null; selRect = null;
   pendingNode = null; pendingElement = null; savedRange = null;

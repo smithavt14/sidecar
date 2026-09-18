@@ -6236,6 +6236,8 @@ test('the header title group holds the path and nothing else', () => {
   assert.ok(group, 'the title group is still there');
   assert.equal(group[1].trim(), '<div id="pwd"></div>', 'and the path is all it holds');
   assert.match(PAGE, /<button id="zoomToggle"[^>]*onclick="toggleAssetZoom\(\)"[^>]*hidden/, 'the zoom is one icon among the view controls, asset only');
+  const paint = PAGE.match(/function paintZoom\(\) \{([\s\S]*?)\n\}/);
+  assert.doesNotMatch(paint[1], /aria-label|\.title =/, 'its name is fixed in the markup; aria-pressed alone carries the state');
 });
 
 test('an asset hover never writes into the header', () => {
@@ -6246,6 +6248,7 @@ test('an asset hover never writes into the header', () => {
   assert.match(hover[1], /setHoverHint\(/, 'the label goes to the hint');
   assert.doesNotMatch(hover[1], /setStatus\(/, 'and never to the status slot');
   assert.match(PAGE, /#hoverHint \{ position:fixed;[^}]*pointer-events:none;/, 'fixed, and never the thing a pick lands on');
+  assert.match(PAGE, /function resetDocState\(\) \{[\s\S]{0,400}?setHoverHint\(''\);/, 'and leaving the document clears it, since the old frame no longer can');
 });
 
 /* ────────────────────────────────────────────────────────────────────────────
