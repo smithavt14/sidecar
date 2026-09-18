@@ -3,6 +3,49 @@
 All notable changes to sidecar. Versions follow [semver](https://semver.org); dates are the day the
 version was tagged.
 
+## 1.13.0 (2026-09-18)
+
+**Any agent, by its own name.** The header read *claude is here* whoever was watching, and every
+agent's CLI named itself `claude` unless `SIDECAR_AGENT` was set, so a review driven by Codex wore
+claude's name on its cards. `lib/agent.js` resolves the name once for the CLI, `wait`, the presence ping
+and the server: `SIDECAR_AGENT`, then the harness, then `claude`. Codex is detected by the
+`CODEX_THREAD_ID` it sets in every shell. The presence record carries the pinging agent's name and the
+header prints it: *codex is here*, *codex is working…*. Who counts as an agent is a list (the server's
+own, `claude`, `codex`, plus anything in the new `SIDECAR_AGENTS`), so a thread Codex spoke last on
+badges as waiting on you, and a second human's name stays a human's. A Codex that upgrades keeps the
+digest cursor and the cards it had as `claude`: the first `wait` under the new name reads the old
+cursor once, which can only over-report.
+
+**The wait loop, said first.** An agent new to sidecar handed over a URL and went silent, because the
+section on waiting sat 448 lines into the skill. `skills/sidecar/SKILL.md` and `sidecar help` now open
+with the whole job in six lines: name yourself, `doctor`, raise things, `wait`, respond, `wait` again.
+Every write verb also prints `next: sidecar wait <path>` on stderr while that agent has no live watcher
+on the document, so an agent that read nothing is told at the moment it would stop listening. stdout
+is unchanged.
+
+**A quieter frame.** The header is a title and its controls, and nothing moves them.
+- The title is the filename, with the full path on hover. The `asset · read-only` tag is gone.
+- An asset's zoom is one icon in the slot the page width holds on prose; pressed is natural size.
+- The asset hover label left the header's status slot, where a long one pushed every control into the
+  title. It sits at the foot of the document column and moves nothing.
+- The presence readout folds to a dot beside the title when the header itself is narrow. The header
+  is the space between two panels, so this is measured on the header, with a container query.
+- The folder panel's one-line breadcrumb, clipped to its last two segments, is a menu: the row names
+  the folder and the button lists the whole path, every level a click.
+
+**Removed.** The folder panel's **inbox** tab: the badge on each row already says which documents are
+waiting on you, and opening one shows its threads. `/api/dir` sends each document's `turn` and `open`
+counts and no longer its live `items`. The rail's **hidden** density: it shut the panel from a second
+button beside the header's own toggle. Density is full or compact, a stored `hidden` reads as compact,
+and reading mode is still the way to read with no marks.
+
+**Restore an archived comment.** Expand a resolved comment on the archived tab and choose **restore**:
+the same thread returns to active with its reply box focused, its history and any settled suggestion
+decisions intact. The digest reports `REOPENED` with the comment id and `wait` wakes on it.
+
+**Contents links in an HTML asset land where you can read them.** A fragment link places its heading
+12px below the app header, and the space after an asset keeps a final heading reachable.
+
 ## 1.12.0 (2026-09-14)
 
 **A list has a keyboard.** The editor is a contenteditable, so a list had only the browser's raw
