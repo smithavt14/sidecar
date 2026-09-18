@@ -5,7 +5,7 @@ For *driving* sidecar as an agent (reviewing a document with a human), see
 
 ## Shape
 
-No build step. Twenty-three files carry the whole tool:
+No build step. Twenty-four files carry the whole tool:
 
 | File | What it is |
 |---|---|
@@ -18,6 +18,7 @@ No build step. Twenty-three files carry the whole tool:
 | `lib/digest.js` | The persistent per-agent cursor, the doc baseline beside it, and the one digest renderer both `wait` and `digest` print. |
 | `lib/dir.js` | The folder under `--dir`: which documents it holds, several digests read as one, the one-watcher lock. |
 | `lib/watchers.js` | The watcher registry in tmp: who is armed on what, whether the pid is still running, and what `watchers --clean` may reap. |
+| `lib/agent.js` | Who is the agent: `SIDECAR_AGENT`, else the harness (Codex is detected by `CODEX_THREAD_ID`), else `claude`. Also the list of every name that counts as an agent, which the server hands the page and `turn.js`. The CLI, the wait, the ping and the server all ask it. |
 | `lib/presence.js` | The presence ping. Decorative and server-optional: a failed POST never affects the command that made it. |
 | `public/index.html` | The entire frontend: rendering, contenteditable editor, directory panel, review rail. |
 | `public/themes.js` | The palette, as data: the eight built-in themes, the value grammar a theme file is checked against, and the pre-paint boot. Loaded in <head> before the stylesheet; `server.js` requires the same file. |

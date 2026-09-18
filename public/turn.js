@@ -50,10 +50,21 @@
   // When it last moved. A missing timestamp reads as empty rather than being invented.
   function lastAt(it) { const m = lastMsg(it); return (m && m.at) || (it && it.decidedAt) || ''; }
 
-  function waiting(it, agent) {
+  // Is this author an agent? `who` is either one agent's name, which is what this took when a review
+  // had exactly one agent in it, or `{ agents: [...] }`, every name that is an agent's. The second is
+  // what the server and the page pass (lib/agent.js builds the list): a review can have claude and
+  // codex both writing into it, and a thread whose last word is codex's is waiting on the human just
+  // as much. A list of agents rather than "everyone but the human", because a document travels
+  // between people and a second human's name is not an agent's.
+  function isAgent(by, who) {
+    if (who && typeof who === 'object') return (who.agents || []).indexOf(by) >= 0;
+    return by === who;
+  }
+
+  function waiting(it, who) {
     if (!isLive(it)) return false;
     if (it.kind === 'suggestion') return it.status === 'pending';
-    return lastBy(it) === agent;
+    return isAgent(lastBy(it), who);
   }
 
   function snippet(s) {
@@ -186,6 +197,6 @@
   }
 
   const api = { LIVE, QUOTE_MAX, DENSITIES, DENSITY_REST, THREAD_HEAD, THREAD_TAIL, isLive, lastBy,
-    lastAt, waiting, of, rail, density, nextDensity, startCollapsed, foldThread, peek };
+    lastAt, isAgent, waiting, of, rail, density, nextDensity, startCollapsed, foldThread, peek };
   if (typeof module === 'object' && module.exports) module.exports = api; else root.Turn = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
