@@ -125,20 +125,19 @@
   }
 
   // ---------- how dense the rail is, and which cards rest collapsed ----------
-  // Google Docs gives a comment three densities and sidecar had one, so a document under review wore
-  // every thread at full height whether or not any of them wanted reading. Three states, cycled from
-  // the rail's tab bar and persisted under `sc:railDensity`:
+  // A document under review used to wear every thread at full height whether or not any of them
+  // wanted reading. Two states, toggled from the rail's tab bar and persisted under `sc:railDensity`:
   //
   //   'full'     every card is a full card, which is what sidecar has always drawn
   //   'compact'  the default: a thread whose next move is the HUMAN's stays full, everything else
   //              rests as a pill level with its anchor
-  //   'hidden'   no cards and no anchor marks. The rail rests at the same hairline the bare state
-  //              uses and the draft is read straight through
   //
-  // Ordered densest first, because that is the order the cycle walks and the icon steps through.
-  const DENSITIES = ['full', 'compact', 'hidden'];
+  // A third, 'hidden', drew no cards and no marks. It was a second control for shutting the panel,
+  // beside the header's own, so it went; a stored 'hidden' reads as the default like any other value
+  // no control can name.
+  const DENSITIES = ['full', 'compact'];
   const DENSITY_REST = 'compact';
-  // Anything that is not one of the three is the default, the same way navsort reads a stored key:
+  // Anything that is not one of the two is the default, the same way navsort reads a stored key:
   // a preference written by an older build (or by a human editing localStorage) must not be able to
   // leave the rail in a state no control can name.
   function density(raw) { return DENSITIES.indexOf(raw) >= 0 ? raw : DENSITY_REST; }
@@ -156,8 +155,7 @@
   //   · a thread whose last word is the human's, waiting on the agent → collapsed
   //   · anything settled → collapsed, which is every card on the archived tab
   //
-  // Only 'compact' collapses anything: 'full' is the promise that nothing is folded, and 'hidden'
-  // draws no cards at all, so neither has a collapsed state to return.
+  // Only 'compact' collapses anything: 'full' is the promise that nothing is folded.
   function startCollapsed(it, agent, dens) {
     if (density(dens) !== 'compact') return false;
     if (!isLive(it)) return true;

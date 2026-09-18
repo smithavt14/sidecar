@@ -187,9 +187,13 @@
   .hwrap { position:relative; display:flex; align-items:center; gap:12px; height:51px; padding:0 20px; }
   /* The title group, bounded so it can never run under the presence readout. That readout is
      absolutely centred, so it exerts no pressure on the flow and a long path simply slid beneath it:
-     an asset's `read-only` tag and the word `claude` printed on top of each other at 1440. Half the
+     an asset's long path and the word `claude` printed on top of each other at 1440. Half the
      bar, less the widest half a readout gets, is where the title has to stop. */
-  .htitle { display:flex; align-items:center; gap:10px; min-width:0; max-width:calc(50% - 92px); }
+  .htitle { display:flex; align-items:center; gap:10px; min-width:0; flex:0 1 auto; }
+  /* The bound is the readout's, so it holds only while there is a readout. With nobody watching, the
+     title has the whole run up to the controls, which in a header squeezed between two panels is the
+     difference between a filename and four letters of one. */
+  .hwrap:has(.presence:not(:empty)) .htitle { max-width:calc(50% - 92px); }
   .hbrand { display:none; align-items:center; gap:8px; text-decoration:none; color:inherit; }
   body.no-nav .hbrand { display:flex; }
   /* The mark is an <img>, so its `currentColor` cannot see the page's tokens: an SVG used as an
@@ -595,8 +599,12 @@
      never — a path ellipsised from the right hides the one word that names what is open. */
   #pwd { display:flex; align-items:baseline; min-width:0; flex:0 1 auto;
     font-family:'Geist Mono', ui-monospace,SFMono-Regular,Menlo,monospace; font-size:var(--t-2); letter-spacing:0; }
-  #pwd .dir { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--faint); }
-  #pwd .file { flex:none; color:var(--ink); font-weight:600; }
+  #pwd .dir { flex:0 9999 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--faint); }
+  /* The filename gives way last and only once the folders are gone: the shrink factors are four orders
+     apart, so the path is spent before the name loses a letter. When it does have to give, it
+     ellipsises inside its own box rather than printing under the controls beside it. */
+  #pwd .file { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+    color:var(--ink); font-weight:600; }
   #pwd:empty { display:none; }
   /* The document's own measure, and the only place a measure is now capped. The cap is the TEXT's
      width plus the two 44px reading margins, and the text's width is a variable: three page widths
@@ -734,23 +742,22 @@
   /* margin:0 because the prose scale reaches every child of a #doc block and an asset is not prose. */
   #doc iframe.asset-frame { display:block; border:0; transform-origin:top left; margin:0; background:var(--asset-canvas);
     border-radius:var(--r-3); box-shadow:var(--shadow); }
-  /* the document column's read-only tell, beside the filename in the header */
-  .kindtag { font-size:var(--t-1); font-weight:600; letter-spacing:var(--track-caps); text-transform:uppercase;
-    color:var(--muted); background:var(--fill); border-radius:var(--r-1); padding:3px 8px; white-space:nowrap; }
-  .kindtag:empty { display:none; }
-  /* The asset's zoom. A segmented pair, same shape as the panel's view tabs, because it is the same
-     kind of choice: two states and only one can be true. It sits inside .htitle so the title group's
-     cap bounds it too — outside, a fixed-width control after a capped group runs under the centred
-     presence readout, which is the collision that cap exists to prevent. flex:none, so the path
-     ellipsises around it the way it already does around the kind tag. */
-  .zoomctl { display:flex; flex:none; gap:2px; padding:2px; border-radius:var(--r-2); background:var(--fill); }
-  .zoomctl[hidden] { display:none; }
-  .zoomctl button { border:none; background:none; box-shadow:none; border-radius:var(--r-1);
-    padding:3px 8px; color:var(--muted); font:600 var(--t-1) 'Geist', ui-sans-serif, sans-serif;
-    letter-spacing:var(--track-caps); }
-  .zoomctl button:hover { color:var(--ink); background:none; }
-  .zoomctl button[aria-pressed="true"] { background:var(--card); color:var(--ink);
-    box-shadow:var(--shadow-raise); }
+  /* The asset's zoom is one icon among the view controls, and its ink is its whole state, the way the
+     typewriter toggle's is: pressed is natural size, the chrome's grey is fit. */
+  #zoomToggle[hidden] { display:none; }
+  #zoomToggle[aria-pressed="true"] { color:var(--ink); }
+  /* What a click in an asset would land on. It used to be written into the header's status slot,
+     where a label as long as a sentence pushed every control in the bar to the left and ran the
+     cluster into the title. Down here it moves nothing: fixed to the foot of the document column, the
+     corner a browser names a link's destination in. pointer-events:none, because it sits over the
+     asset and must never be the thing a pick lands on. */
+  #hoverHint { position:fixed; left:0; bottom:12px; z-index:15; max-width:min(420px, calc(100vw - 24px));
+    padding:4px 9px; border-radius:var(--r-1); background:var(--card); border:1px solid var(--line-2);
+    box-shadow:var(--shadow-raise); color:var(--muted); pointer-events:none;
+    font:500 var(--t-1) 'Geist Mono', ui-monospace,SFMono-Regular,Menlo,monospace;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #hoverHint:empty { display:none; }
+  body.reading #hoverHint { display:none; }
   /* A table is the one block that cannot always be squeezed into a reading measure, and a body that
      scrolls sideways takes the header, the rail and every docked card with it. So the table scrolls in
      its own box: it is as wide as its content wants, up to the column, and past that it carries the
@@ -1264,14 +1271,9 @@
     .hwrap { padding:0 12px; height:calc(51px + env(safe-area-inset-top));
       padding-top:env(safe-area-inset-top); gap:8px; }
     #status { min-width:0; }
-    /* The zoom control and the kind tag are both asset-only, and at 390px the two of them together
-       squeeze #pwd below its filename — which the title group exists to prevent. The tag is the wider
-       and the more redundant of the two down here (a phone offers no caret to explain the absence of),
-       so it drops its qualifier and the path keeps its name. */
-    .kindtag .ro { display:none; }
     /* The readout is in the flow down here (see .presence below), so it pushes the title rather than
        sitting on top of it, and the desktop bound would only starve a path that is already tight. */
-    .htitle { max-width:none; }
+    .htitle, .hwrap:has(.presence:not(:empty)) .htitle { max-width:none; }
     /* the absolute-center readout collides with the cramped mobile header, so drop it into the flow
        as a compact dot-only chip beside the title — the dot's color/pulse still carries the state
        (yellow=here, outline=away, filled=sent, pulsing=working); the label is hidden to save width. */
@@ -1341,13 +1343,6 @@
          sit beside now lives at the top of the panel, where the frame's identity belongs. -->
     <div class="htitle">
       <div id="pwd"></div>
-      <div id="kind" class="kindtag"></div>
-      <!-- Asset only, and painted by paintZoom. Prose has a measure rather than a zoom, so on a
-           markdown document this is not there at all. -->
-      <div id="zoom" class="zoomctl" role="group" aria-label="Zoom" hidden>
-        <button type="button" data-zoom="fit" aria-pressed="true" title="Scale the asset into the column">fit</button>
-        <button type="button" data-zoom="full" aria-pressed="false" title="Show the asset at its natural size">100%</button>
-      </div>
     </div>
     <!-- Empty until an agent is watching, working or replying. See renderPresence. -->
     <div id="presence" class="presence"></div>
@@ -1364,6 +1359,13 @@
     <!-- The page width. Three measures, cycled, and the icon's two rules move with them: the only
          thing there is to say about this control is what it does to the column, and the column says
          it the moment it moves. Prose only: paintZoom hides it on an asset, which has a zoom. -->
+    <!-- The asset's zoom, in the slot the measure holds on prose: the two are opposites and never both
+         apply, so one position in the bar answers "how wide is this drawn" for either kind. Pressed is
+         natural size; at rest the asset is scaled into the column. Painted by paintZoom. -->
+    <button id="zoomToggle" class="ghost iconbtn" onclick="toggleAssetZoom()" aria-pressed="false" hidden
+      title="Actual size" aria-label="Actual size"><svg viewBox="0 0 20 20" fill="none"
+      stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M3.5 7.5v-4h4"/><path d="M16.5 7.5v-4h-4"/><path d="M3.5 12.5v4h4"/><path d="M16.5 12.5v4h-4"/></svg></button>
     <button id="measureToggle" class="ghost iconbtn" onclick="cycleMeasure()"
       title="Page width" aria-label="Page width"><svg viewBox="0 0 20 20" fill="none"
       stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
@@ -1462,6 +1464,8 @@
   <div id="navGrip" role="separator" aria-orientation="vertical" aria-label="Resize the folder panel" tabindex="0"></div>
   <div>
     <div id="doc"></div>
+    <!-- Asset only: what the pointer is over inside the frame. See the frame's `hover` message. -->
+    <div id="hoverHint" aria-hidden="true"></div>
   </div>
   <!-- The drag handle, between the two columns in reading order and placed over their boundary by CSS.
        role=separator + tabindex so it is operable without a pointer (see the keydown handler). -->
@@ -1642,19 +1646,15 @@ async function reloadFile() {
 function applyState(s) {
   hideBanner();
   state = s; dirty = false;
-  // An asset never saves, so "saved" would be a claim about nothing. The slot carries the picker's
-  // hover label instead (see the frame's `hover` message).
+  // An asset never saves, so "saved" would be a claim about nothing.
   setStatus(s.kind === 'asset' ? '' : 'saved');
+  setHoverHint('');
   if (s.code) { const b = document.querySelector('.brand'); if (b) b.title = 'server code ' + s.code; }   // §6b: staleness visible on hover
   renderPwd(); renderDoc(); renderSide();
 }
-// pwd line above the doc — the document's path, terminal-style (dir muted, filename inked). The kind
-// tag beside the filename says "asset" on an HTML document, because the read-only surface is otherwise
-// an unexplained absence: no caret, no toolbar, nothing to blame.
+// pwd line above the doc — the document's path, terminal-style (dir muted, filename inked). It is the
+// whole of the title group: the extension already says which kind of document is open.
 function renderPwd() {
-  // Two spans rather than one string: on a phone the qualifier is dropped in CSS so the zoom control
-  // and the filename both fit. Static markup, no interpolation.
-  $('kind').innerHTML = isAsset() ? 'asset<span class="ro"> · read-only</span>' : '';
   paintZoom();
   const p = state.pwd || FILE || '';
   const i = p.lastIndexOf('/');
@@ -1665,6 +1665,14 @@ function renderPwd() {
 // Settled is silence: 'saved' is the steady state and a label that never changes is furniture. The
 // transient states (editing…, saving…) and the two that need acting on (conflict, save failed) show.
 function setStatus(s) { $('status').textContent = s === 'saved' ? '' : s; }
+// The asset's hover label. Pinned to the document column's left edge when it is written, because the
+// column moves with two draggable panels and the hint is fixed to the window.
+function setHoverHint(s) {
+  const el = $('hoverHint');
+  if (!el) return;
+  if (s) el.style.left = Math.round($('doc').getBoundingClientRect().left + 12) + 'px';
+  el.textContent = s || '';
+}
 // The text is cleared on transitionend, not immediately: emptying it mid-flight would collapse the
 // toast to a dot and animate that instead. A guard covers the case where the class is re-added before
 // the exit finishes (a second banner raised straight after a dismissal).
@@ -1931,23 +1939,19 @@ window.addEventListener('message', (e) => {
     case 'pointer': pointerInFrame = !!m.inside; break;
     case 'anchors': frameAnchors = m.anchors || {}; break;
     case 'backfill': backfillElement(m.id, m.element); break;
-    // The cursor affordance: the header's status slot says what a click would land on. An asset never
-    // saves, so the slot is free and it is already where the eye goes for document state. The depth is
-    // the only sign that anything sits under the layer being pointed at, so it shows whenever the stack
-    // is deeper than one. Where the element sits in a link the slot also names the modifier and the
-    // destination, which is the half of the confusion the outline could not fix: the comment click and
-    // the navigating click looked identical, so hovering says which is which before either is spent.
-    //
-    // One modifier at a time, though. A named link takes the slot and ⌥ is learnt on the other nine
-    // tenths of a document, because the slot shares a header row with the presence line and a third
-    // clause runs into it.
+    // The cursor affordance: #hoverHint, at the foot of the document column, names what a click would
+    // land on. The depth is the only sign that anything sits under the layer being pointed at, so it
+    // shows whenever the stack is deeper than one. Where the element sits in a link the hint also names
+    // the modifier and the destination, which is the half of the confusion the outline could not fix:
+    // the comment click and the navigating click looked identical, so hovering says which is which
+    // before either is spent. ⌥ is in the manual and not here: the hint names things, it does not teach.
     case 'hover': {
       const link = frameLink(m.href);
       const deep = m.count > 1 ? '  ·  ' + m.depth + '/' + m.count : '';
-      setStatus(!m.label ? ''
+      setHoverHint(!m.label ? ''
         : m.link && link ? link.label
-        : link ? 'comment on ' + m.label + '  ·  ⇧ ' + link.label + deep
-        : 'comment on ' + m.label + deep + (deep ? '  ·  ⌥ steps deeper' : ''));
+        : link ? m.label + deep + '  ·  ⇧ ' + link.label
+        : m.label + deep);
       break;
     }
     case 'open': openReview(m.id); break;
@@ -3255,11 +3259,7 @@ function renderSide() {
     + densityBtn();
   side.appendChild(tabs);
   const list = document.createElement('div'); list.className = 'side-list'; side.appendChild(list);
-  // `hidden` draws no cards at all. The tab bar and its counts stay, because below 781px they are the
-  // only way back and because the counts are still true; what goes is the column of cards and, in
-  // markAnchors, every cue they put in the prose.
-  if (Turn.density(railDensity) === 'hidden') { /* no cards */ }
-  else if (sideTab === 'active') renderActive(list, activeTop, childSug);
+  if (sideTab === 'active') renderActive(list, activeTop, childSug);
   else renderArchived(list, archivedTop, childSug);
   // Restore in-progress replies (see top of renderSide). A draft whose card is not drawn right now, or
   // is drawn as a pill, keeps its place in the map and comes back with the textarea: nothing is dropped
@@ -4107,8 +4107,9 @@ function setAssetZoom(z) {
   // The frame's scale just changed, so every card docked against a rect inside it has moved.
   if (isAsset()) { sizeFrame(); scheduleDock(); }
 }
+function toggleAssetZoom() { setAssetZoom(assetZoom === 'full' ? 'fit' : 'full'); }
 function paintZoom() {
-  const el = $('zoom');
+  const el = $('zoomToggle');
   if (!el) return;
   el.hidden = !isAsset();
   // The two are opposites and never both apply: prose has a measure, an asset has a zoom.
@@ -4117,12 +4118,12 @@ function paintZoom() {
   const ps = $('proseToggle'); if (ps) ps.hidden = isAsset();
   // An asset is read-only and has no caret, so there is no line to hold. It goes with the measure.
   const tw = $('typewriterToggle'); if (tw) tw.hidden = isAsset();
-  for (const b of el.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.zoom === assetZoom));
+  const full = assetZoom === 'full';
+  const label = full ? 'Fit to the column' : 'Actual size';
+  el.title = label;
+  el.setAttribute('aria-label', label);
+  el.setAttribute('aria-pressed', String(full));
 }
-$('zoom').addEventListener('click', (e) => {
-  const b = e.target.closest && e.target.closest('button[data-zoom]');
-  if (b) setAssetZoom(b.dataset.zoom);
-});
 // ---------- the review rail: resizable, collapsible, remembered ----------
 const RAIL_MIN = 280;        // below this a card's diff and its buttons stop fitting side by side
 const RAIL_MAX_FRAC = 0.6;   // and past this the document is the sidebar
@@ -4289,10 +4290,12 @@ const railBare = () => document.body.classList.contains('rail-bare');
 // show it, and "hide" would be offering to hide a hairline.
 const railShut = () => railCollapsed() || railBare();
 // ---------- the rail's density ----------
-// Three states, one icon button at the right end of the rail's own tab bar: full (every card a full
-// card), compact (the default, where a thread whose next move is the human's stays full and everything
-// rests as a pill), hidden (no cards, no anchor marks, and the track rests at the same hairline the
-// bare state uses, so the draft can be read straight through).
+// Two states, one icon button at the right end of the rail's own tab bar: full (every card a full
+// card) and compact (the default, where a thread whose next move is the human's stays full and
+// everything else rests as a pill). There was a third, hidden, and it is gone: it put a second way to
+// shut the panel a few pixels from the header's own toggle, and on a document with nothing active the
+// two were indistinguishable. Hiding the panel is the header toggle's; reading the draft with no marks
+// in it is reading mode's.
 //
 // The rule for which cards rest collapsed is public/turn.js (Turn.startCollapsed), beside the badge
 // rule it is built from. A decision about what is waiting on the human belongs in one place, and a
@@ -4304,7 +4307,6 @@ const railShut = () => railCollapsed() || railBare();
 const DENSITY_ICON = {
   full: '<rect x="3" y="3.25" width="14" height="5.5" rx="2"/><rect x="3" y="11.25" width="14" height="5.5" rx="2"/>',
   compact: '<rect x="3" y="3.25" width="14" height="5.5" rx="2"/><path d="M3.9 12.4h12.2"/><path d="M3.9 15.8h12.2"/>',
-  hidden: '<path d="M3.9 6.2h12.2"/><path d="M3.9 10h12.2"/><path d="M3.9 13.8h12.2"/><path d="M4.6 15.4 15.4 4.6"/>',
 };
 let railDensity = Turn.density(uiStore.get('railDensity', ''));
 // A manual fold, per thread id, for this page only. Deliberately not stored: which threads a reader
@@ -4349,10 +4351,7 @@ function noteRailRest(activeN, archivedN) {
 }
 let railRestSeeded = false;
 function applyRailRest() {
-  // Two ways to rest at the hairline, and hidden is not overrulable by railForced: it is a standing
-  // choice about every document rather than an observation about this one.
-  const bare = !railCollapsed() && (Turn.density(railDensity) === 'hidden'
-    || (!railForced && Turn.rail(railCounts.active, railCounts.archived) === 'bare'));
+  const bare = !railCollapsed() && !railForced && Turn.rail(railCounts.active, railCounts.archived) === 'bare';
   // The first render is the page arriving at its resting shape, not moving to it: animating that is a
   // 372px band of white sliding shut on every load of a clean document. Read before the early return,
   // or a document that opens with cards and is then emptied still counts as arriving.
@@ -4370,12 +4369,6 @@ function applyRailRest() {
 }
 function toggleRail(force) {
   const collapse = force === undefined ? !railShut() : !!force;
-  // The density control lives in the rail's own tab bar, and on desktop a hidden rail has no tab bar
-  // on screen to cycle back out of. So this button is the way back: asking for the review panel is
-  // asking for cards in it. (Below 781px the header button is gone and the tab bar is still there,
-  // so each viewport keeps exactly one way back.)
-  const unhide = !collapse && Turn.density(railDensity) === 'hidden';
-  if (unhide) { railDensity = 'compact'; uiStore.set('railDensity', railDensity); }
   document.body.classList.toggle('rail-collapsed', collapse);
   uiStore.set('railCollapsed', collapse ? '1' : '');
   if (!collapse) { railSeen = railMsgTotal(); railNew = 0; }   // opening it IS reading it
@@ -4383,7 +4376,6 @@ function toggleRail(force) {
   applyRailRest();
   paintRailToggle();
   relayoutDoc();
-  if (unhide) renderSide();   // the cards and the anchor marks both come back with it
 }
 // A message is a top-level item or a reply on one. Comparing the total against what was on screen the
 // last time the panel was open is enough for the badge: the point is "something arrived while this was
@@ -5078,17 +5070,12 @@ function markAnchors() {
   const doc = $('doc');
   // An asset's cues are drawn by the picker, inside the frame, on the elements themselves. Hand it the
   // current anchor set instead of running the text matcher over a document that holds one iframe.
-  // `hidden` is the density that takes the cues out of the prose too. The rail losing its cards and
-  // the paragraph keeping a wash under one sentence would be half a state, and the point of hidden is
-  // reading the draft as the reader of the draft will see it.
-  const off = Turn.density(railDensity) === 'hidden';
-  if (isAsset()) { sendFrame('init', { items: off ? [] : frameItems() }); return; }
+  if (isAsset()) { sendFrame('init', { items: frameItems() }); return; }
   if (document.activeElement === doc || doc.contains(document.activeElement)) return;
   doc.querySelectorAll('mark.anchor').forEach(m => { const p = m.parentNode; while (m.firstChild) p.insertBefore(m.firstChild, m); p.removeChild(m); });
   doc.querySelectorAll('.fl-node.anchored').forEach(g => { g.classList.remove('anchored'); delete g.dataset.itemId; });
   doc.normalize();
   litId = null;   // every mark that carried it has just been unwrapped
-  if (off) return;
   for (const it of state.review.items) {
     if (!['open', 'pending'].includes(it.status)) continue;
     if (it.kind === 'suggestion' && it.replyTo) continue;   // shares its parent comment's span — don't double-wrap

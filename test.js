@@ -3208,33 +3208,35 @@ test('the rail rests bare on the counts a real empty review produces', () => {
 });
 
 // ---------- the rail's density, and which cards rest collapsed (Turn.density / startCollapsed) ----------
-// Google Docs gives a comment three densities and sidecar had one. The rule for which cards fold is the
+// The rail has two densities. The rule for which cards fold is the
 // SAME `waiting` rule the panel's badge runs, so a card is full exactly when the badge would have
 // counted it, and the two cannot drift because there is one function under both.
 
-test('a stored density that is not one of the three reads as compact', () => {
+test('a stored density that is not one of the two reads as compact', () => {
   // The stored value comes back through localStorage, which a human can edit and an older build may
   // have written. Anything unrecognised must not leave the rail in a state no control can name.
-  for (const raw of ['', null, undefined, 'dense', 'HIDDEN', '__proto__', 'constructor']) {
+  // 'hidden' was a third density until the header's panel toggle was left as the one way to shut the
+  // rail, so an install that stored it must come back at the default rather than at nothing.
+  for (const raw of ['', null, undefined, 'dense', 'hidden', 'HIDDEN', '__proto__', 'constructor']) {
     assert.equal(Turn.density(raw), 'compact', JSON.stringify(raw));
   }
   for (const d of Turn.DENSITIES) assert.equal(Turn.density(d), d, d);
   assert.equal(Turn.DENSITY_REST, 'compact', 'and compact is where an untouched install rests');
 });
 
-test('the density cycle walks all three and comes home', () => {
-  assert.deepEqual(Turn.DENSITIES, ['full', 'compact', 'hidden'], 'densest first, the order the icon steps');
+test('the density is a toggle between two states, and neither of them shuts the panel', () => {
+  assert.deepEqual(Turn.DENSITIES, ['full', 'compact'], 'densest first, and no state that hides the rail');
   const walk = [];
   let d = Turn.DENSITY_REST;
-  for (let i = 0; i < 3; i++) { d = Turn.nextDensity(d); walk.push(d); }
-  assert.deepEqual(walk, ['hidden', 'full', 'compact'], 'three clicks from compact land back on compact');
-  assert.equal(Turn.nextDensity('nonsense'), 'hidden', 'a junk value cycles as if it were the default');
+  for (let i = 0; i < 2; i++) { d = Turn.nextDensity(d); walk.push(d); }
+  assert.deepEqual(walk, ['full', 'compact'], 'two clicks from compact land back on compact');
+  assert.equal(Turn.nextDensity('nonsense'), 'full', 'a junk value toggles as if it were the default');
 });
 
-test('at full nothing folds, at hidden there are no cards to fold', () => {
+test('at full nothing folds', () => {
   const items = [comment('c1', 'open', msg(HUMAN, 'over to you')), comment('c2', 'resolved', msg(AGENT, 'done')),
                  sug('s1', 'pending')];
-  for (const d of ['full', 'hidden']) {
+  for (const d of ['full']) {
     for (const it of items) assert.equal(Turn.startCollapsed(it, AGENT, d), false, `${it.id} at ${d}`);
   }
 });
@@ -6192,9 +6194,9 @@ const storeOver = (backing) => UI_STORE({
 test('the density is stored under the sc: prefix, beside every other preference', () => {
   const backing = {};
   const store = storeOver(backing);
-  store.set('railDensity', 'hidden');
-  assert.deepEqual(backing, { 'sc:railDensity': 'hidden' }, 'one key, prefixed like railWidth and theme');
-  assert.equal(store.get('railDensity', ''), 'hidden', 'and it reads straight back');
+  store.set('railDensity', 'full');
+  assert.deepEqual(backing, { 'sc:railDensity': 'full' }, 'one key, prefixed like railWidth and theme');
+  assert.equal(store.get('railDensity', ''), 'full', 'and it reads straight back');
 });
 
 test('a density round-trips through the store and the guard, junk and all', () => {
@@ -6212,7 +6214,7 @@ test('a store that throws on every access still answers, and the rail still rest
   // Safari in private mode throws on setItem while getItem keeps answering null. Nothing about a
   // layout preference is worth an exception on the path that renders the review.
   const store = UI_STORE({ getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); } });
-  assert.doesNotThrow(() => store.set('railDensity', 'hidden'));
+  assert.doesNotThrow(() => store.set('railDensity', 'full'));
   assert.equal(store.get('railDensity', ''), '', 'the fallback comes back');
   assert.equal(Turn.density(store.get('railDensity', '')), 'compact', 'so the rail rests at compact');
 });
@@ -6221,11 +6223,29 @@ test('the page reads and writes the density through that store and that guard', 
   assert.match(PAGE, /let railDensity = Turn\.density\(uiStore\.get\('railDensity', ''\)\);/,
     'one read at boot, guarded');
   assert.match(PAGE, /uiStore\.set\('railDensity', railDensity\);/, 'and the write is a mirror of it');
-  // Hidden takes the cues out of the prose as well as the cards out of the rail.
-  assert.match(PAGE, /const off = Turn\.density\(railDensity\) === 'hidden';/,
-    'markAnchors asks the same question');
+  // Shutting the panel is the header toggle's alone: no density leaves the rail without its cards.
+  assert.doesNotMatch(PAGE, /Turn\.density\(railDensity\) === 'hidden'/, 'no branch still asks for the third state');
   assert.doesNotMatch(PAGE, /localStorage\.(get|set)Item\('sc:railDensity'/,
     'nothing reaches storage around the store');
+});
+
+test('the header title group holds the path and nothing else', () => {
+  // A kind tag and a segmented zoom used to sit beside the path, and between them they covered the
+  // filename the group exists to keep readable.
+  const group = PAGE.match(/<div class="htitle">([\s\S]*?)<\/div>\s*<!-- Empty until an agent/);
+  assert.ok(group, 'the title group is still there');
+  assert.equal(group[1].trim(), '<div id="pwd"></div>', 'and the path is all it holds');
+  assert.match(PAGE, /<button id="zoomToggle"[^>]*onclick="toggleAssetZoom\(\)"[^>]*hidden/, 'the zoom is one icon among the view controls, asset only');
+});
+
+test('an asset hover never writes into the header', () => {
+  // The label is as long as a sentence, and in the status slot it pushed every control in the bar to
+  // the left and into the title. It is written to #hoverHint, which is fixed and moves nothing.
+  const hover = PAGE.match(/case 'hover': \{([\s\S]*?)break;/);
+  assert.ok(hover, 'the hover case is still there');
+  assert.match(hover[1], /setHoverHint\(/, 'the label goes to the hint');
+  assert.doesNotMatch(hover[1], /setStatus\(/, 'and never to the status slot');
+  assert.match(PAGE, /#hoverHint \{ position:fixed;[^}]*pointer-events:none;/, 'fixed, and never the thing a pick lands on');
 });
 
 /* ────────────────────────────────────────────────────────────────────────────

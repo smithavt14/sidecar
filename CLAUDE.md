@@ -100,8 +100,9 @@ sandbox withholds this page's origin. `docs/adr/0001-asset-frame-isolation.md` h
 for, and a 1600px artboard read inside it is read at half size, so `renderDoc` puts an `asset` class on
 `#doc` and the cap comes off the element that carries it. Nothing breaks out of anything: a breakout
 wrapper would have to reconstruct the column width it was escaping, against a track two draggable
-panels move, and `#doc` already is that column. The header's control then chooses between `fit` (scale
-the canvas into the column, the default, remembered as `sc:assetZoom`) and `100%` (natural size, the
+panels move, and `#doc` already is that column. The header's zoom, one icon in the slot the measure
+holds on prose, then chooses between `fit` (scale
+the canvas into the column, the default, remembered as `sc:assetZoom`) and `100%` (pressed: natural size, the
 wrapper scrolling sideways so the page never does). Three things `sizeFrame` keeps true across both:
 the wrapper carries the SCALED height, because a transform does not change layout size; the scroller
 class is toggled before the column is measured, or a fit computed against a width a leftover scrollbar
@@ -188,19 +189,22 @@ Auto-migrating an anchor across a diff was considered and refused; `annotateOrph
 silent re-anchoring picks the wrong target. Nothing here re-anchors anything. It buys the honest
 answer a few seconds so it can be delivered in place instead of somewhere else.
 
-## Three densities, and a mark that stopped shouting
+## Two densities, and a mark that stopped shouting
 
 The rail drew one kind of card, so a document under review wore every thread at full height whether or
-not any of them wanted reading. Google Docs' 2024 redesign gives a comment three densities and this is
-that idea, in sidecar's terms. **`public/turn.js` owns both halves** (`Turn.density`, `Turn.nextDensity`,
+not any of them wanted reading. Google Docs' 2024 redesign gives a comment densities and this is that
+idea, in sidecar's terms. **`public/turn.js` owns both halves** (`Turn.density`, `Turn.nextDensity`,
 `Turn.startCollapsed`), beside the `waiting` rule they are built from.
 
 - **full**: every card a full card, which is what the rail has always drawn.
 - **compact**: the default. A thread whose next move is the HUMAN's stays full; everything else rests
   as a pill level with its anchor: the provenance dot, one mono word for the kind, the reply count, and
   the last line said on it as a hover preview. Nothing else.
-- **hidden**: no cards, and no anchor marks in the prose. The track rests at the same 12px hairline the
-  bare state uses, so the draft reads straight through.
+
+**There was a third, hidden, and it is gone.** It drew no cards and no marks, and its control sat a few
+pixels from the header's *hide review panel*, so the bar carried two buttons that shut the rail and on
+a document with nothing active they were indistinguishable. Shutting the panel is the header toggle's;
+reading the draft with no marks in it is reading mode's. A stored `hidden` reads as compact.
 
 **Collapsed is the same rule the panel's badge already runs**, which is the point of putting it in
 `turn.js`: a card is full exactly when the badge would have counted it, and the two cannot drift because
@@ -214,11 +218,6 @@ preference for the tool rather than one per document, the same reasoning the ass
 manual expand or fold is held per item id **for the page's lifetime only** and `resetDocState` clears it:
 which threads a reader opened while working through one document says nothing about the next, and an item
 id is unique only within one review.
-
-**Hidden has one way back per viewport, on purpose.** On desktop the tab bar is inside the hairline, so
-the header's *show review panel* is it, and `toggleRail` sets the density back to compact rather than
-un-hiding an empty rail. Below 781px that header button is already gone and the rail is a sheet whose tab
-bar is still on screen, so the control cycles it back itself.
 
 A collapsed card measures about 23px, so **more cards sit level with their own anchors** instead of being
 pushed down by a tall neighbour: `dockCards` is unchanged, it just has less height to step over. The
