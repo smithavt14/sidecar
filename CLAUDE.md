@@ -23,7 +23,7 @@ No build step. Twenty-three files carry the whole tool:
 | `public/themes.js` | The palette, as data: the eight built-in themes, the value grammar a theme file is checked against, and the pre-paint boot. Loaded in <head> before the stylesheet; `server.js` requires the same file. |
 | `public/navsort.js` | The directory panel's ordering. Pure list in/out; no DOM, no dependency. |
 | `public/doclink.js` | Does a link in a document open IN sidecar, and which document. Pure string in/out. |
-| `public/turn.js` | Whose turn is it: the panel's badges, the inbox, the rail's resting shape and its density. Pure review in, counts + items out; `server.js` requires it too. |
+| `public/turn.js` | Whose turn is it: the panel's badges, the rail's resting shape and its density. Pure review in, counts + items out; `server.js` requires it too. |
 | `public/anchor.js` | The ONE content-anchor matcher, loaded by both the browser and Node. |
 | `public/stability.js` | What the rail shows while the document is rewritten under it: freeze, last known position, orphan grace. Pure; the clock is passed in. |
 | `public/focus.js` | Where the page has to sit for the caret's line to rest at 45% of the window. Pure numbers in/out; the clamp and the deadband. |
@@ -270,8 +270,8 @@ nothing open gets nothing. Three states rather than one count, because a folder 
 number stops meaning anything.
 
 `public/turn.js` is that rule and it is required by both sides, which is the point. The server is the
-only side that can see a document nobody has open, so `/api/dir` counts every document in the folder
-and sends the live items along for the Inbox; the page is the only side that knows about a resolve half
+only side that can see a document nobody has open, so `/api/dir` counts every document in the folder;
+the page is the only side that knows about a resolve half
 a second before the file watcher does, so `navSelfUpdate` re-runs the same function over the open
 document's review after every render. Two answers to one question agree by being one function.
 
@@ -632,8 +632,7 @@ thing Alex said was distracting. Minimizing the folder is a request for the fold
 
 What is left is 34px carrying two things. The expand handle, at the top where an IDE's activity bar
 puts it, inked when the pointer is anywhere on the edge. And the count of what is waiting on you
-across the folder, the number the inbox tab carried before `.nav-nav` went, which opens the panel on
-the inbox. `renderNav` hides that control outright at zero rather than leaving an empty pill, which
+across the folder, the sum of the rows' own badges, which opens the panel. `renderNav` hides that control outright at zero rather than leaving an empty pill, which
 would be a control that does nothing.
 
 Desktop only, like the review rail's own bare state: below 781px the panel is a drawer with no track

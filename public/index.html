@@ -53,7 +53,7 @@
 <script src="/flow.js"></script>   <!-- ```flow fences → SVG; pure string in/out, Node tests require the same file -->
 <script src="/navsort.js"></script>   <!-- the directory panel's ordering; pure list in/out, Node tests require the same file -->
 <script src="/doclink.js"></script>   <!-- does a link in the document open IN sidecar; pure string in/out, Node tests require the same file -->
-<script src="/turn.js"></script>   <!-- whose turn is it: the panel's badges and the inbox; server.js requires the same file -->
+<script src="/turn.js"></script>   <!-- whose turn is it: the panel's badges; server.js requires the same file -->
 <script src="/stability.js"></script>   <!-- freeze / last known position / orphan grace for the docked rail; Node tests require the same file -->
 <script src="/focus.js"></script>   <!-- where the page sits for the caret's line to rest at 45%; pure numbers in/out, Node tests require the same file -->
 <script src="/listkeys.js"></script>   <!-- Enter / Backspace / Tab inside a list item; pure elements in/out, Node tests require the same file -->
@@ -220,7 +220,7 @@
      lives. That half is on every button, because every button is pressed.
      The hover LIFT is opt-in, and only the moves that decide something carry it: accept and reject on a
      card, send in the comment popover, the selection toolbar. On `button` at large it put a 2% jump
-     under the pointer on every tab, breadcrumb segment, sort chip, zoom control and inbox row in the
+     under the pointer on every tab, breadcrumb segment, sort chip and zoom control in the
      tool, and seven rules existed to take it back off again. Pointer-gated: on touch there is no hover,
      and without the gate the scale sticks after a tap. */
   /* :not(:active) keeps the press below: .pop:hover alone outranks button:active in the cascade, so a
@@ -438,10 +438,6 @@
      ORGANIZATION). This panel has one: the files view is the only thing the label ever sat over, and
      the tab above it already reads `files`. A section label naming the only section is decoration. */
   .nav-sect { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:2px 5px 3px 1px; }
-  /* `hidden` is how the two views are switched, and a `display` set anywhere in this file beats the
-     browser's own `[hidden] { display:none }` — which is why both of the things it hides say so
-     themselves. The list stayed on screen under the inbox until they did. */
-  .nav-sect[hidden], .nav-list[hidden] { display:none; }
   /* the sort switcher — a menu, not three tabs: at 248px three labels have nowhere to sit, and the
      one that is chosen is the one worth reading. It is drawn as a CONTROL: an outlined chip with a
      caret, which is what a bare lowercase word sitting on the panel's ground could never say. */
@@ -495,55 +491,6 @@
   .nav-list a .meta .nb.dot { width:6px; height:6px; margin:0 5px; border-radius:50%;
     background:var(--fainter); }
   .nav-list a.on .meta .nb.dot { background:var(--muted); }
-  /* ---------- files / inbox ----------
-     One choice, two states, so it is drawn as one control: a recessed track with the chosen half
-     raised onto the page's own ground. GD's segmented switch, at the panel's scale. */
-  .nav-tabs { display:flex; gap:2px; margin:0 5px 2px; padding:2px; border-radius:var(--r-2);
-    background:var(--shell-row); }
-  .nav-tabs button { flex:1; display:flex; align-items:center; justify-content:center; gap:5px;
-    border:none; background:none; box-shadow:none; border-radius:var(--r-1); padding:4px 8px; color:var(--muted);
-    font:500 var(--t-2) 'Geist', ui-sans-serif, sans-serif; }
-  .nav-tabs button:hover { color:var(--ink); }
-  .nav-tabs button[aria-selected="true"] { background:var(--card); color:var(--ink); font-weight:600;
-    box-shadow:var(--shadow-raise); }
-  .nav-tabs .n { min-width:15px; height:15px; padding:0 4px; border-radius:var(--r-pill); background:var(--yellow);
-    color:var(--on-yellow); font:600 var(--t-1)/15px 'Geist', ui-sans-serif, sans-serif; text-align:center; }
-  .nav-tabs .n:empty { display:none; }
-  /* ---------- the inbox ----------
-     Every open item in the folder, grouped under the document it is on. A row has to be recognisable
-     without opening it, so it carries who spoke last, what kind of item it is, and the span it is
-     about — the quote on its own line, because at 248px a quote sharing a line with anything is two
-     words and an ellipsis. */
-  .nav-inbox { display:flex; flex-direction:column; gap:2px; padding:0 8px; }
-  .nav-inbox[hidden] { display:none; }
-  .ib-group { margin-bottom:9px; }
-  .ib-doc { display:flex; align-items:center; gap:6px; width:100%; padding:4px 9px; border:none;
-    background:none; box-shadow:none; border-radius:var(--r-2); color:var(--muted); text-align:left;
-    font:600 var(--t-1) 'Geist', ui-sans-serif, sans-serif; letter-spacing:var(--track-caps); text-transform:uppercase; }
-  .ib-doc:hover { background:var(--shell-row); color:var(--ink); }
-  .ib-doc .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .ib-doc .n { flex:none; margin-left:auto; letter-spacing:0; font-size:var(--t-1); color:var(--faint); }
-  .ib-item { display:block; width:100%; text-align:left; border:none; box-shadow:none;
-    background:var(--card); border:1px solid var(--line); border-radius:var(--r-2); padding:6px 9px 7px;
-    margin-top:2px; color:var(--fg); font:400 var(--t-2)/1.45 'Geist', ui-sans-serif, sans-serif; }
-  .ib-item:hover { border-color:var(--line-strong); }
-  /* Your turn reads as the agent's yellow, same as the badge and the same as a card's chip. Everything
-     else stays on the page's ground: open, and not yours to move.
-     `ib-turn` rather than a bare `turn`, which the header's open/orphaned cluster already owns as a
-     FLEX row — every yellow inbox row laid its quote out beside its header until this was renamed. */
-  .ib-item.ib-turn { background:var(--chip); border-color:var(--yellow-ring); }
-  .ib-item .hd { display:flex; align-items:center; gap:6px; margin-bottom:3px; }
-  .ib-item .who { flex:none; font-weight:600; font-size:var(--t-2); color:var(--ink); }
-  .ib-item .kind { flex:none; font-size:var(--t-1); font-weight:600; letter-spacing:var(--track-caps);
-    text-transform:uppercase; color:var(--muted); }
-  .ib-item .when { flex:none; margin-left:auto; font-family:'Geist Mono', ui-monospace, monospace;
-    font-size:var(--t-1); color:var(--faint); }
-  /* Two lines of the quote and then a cut: enough to recognise the sentence, never enough for one
-     item to own the panel. */
-  .ib-item .q { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
-    color:var(--muted); font-size:var(--t-2); line-height:1.45; }
-  .ib-empty { padding:14px 10px; margin:0 8px; color:var(--muted); font-size:var(--t-2); line-height:1.45; }
-  .ib-empty b { display:block; color:var(--ink); font-weight:600; margin-bottom:3px; }
   /* the handle between the panel and the document — the rail's grip mirrored, same 11px of grab area
      straddling the hairline, same reason it is placed over the boundary rather than given a track.
      Fixed now, because the boundary it straddles belongs to the window rather than to main. */
@@ -557,7 +504,7 @@
      is a drawer and its header is off screen with it. */
   #navToggle, #navExpand { display:none; }
   /* The collapsed edge's own, shown only there (see the collapsed block below). */
-  #navStripInbox { display:none; }
+  #navStripWaiting { display:none; }
   /* ---------- collapsed: a bare edge ----------
      It used to be a 48px icon strip: one initial per document, each wearing its own unread dot. That
      is the folder drawn a second time in a letter nobody can read, and it was the first thing Alex
@@ -577,21 +524,18 @@
     body.nav-collapsed .nav-brand .home { display:none; }
     body.nav-collapsed #navCollapse { display:none; }
     body.nav-collapsed #navExpand { display:flex; margin-left:0; }
-    /* The list, the inbox and the empty state all go, whichever view the panel was left on. Expanding
-       restores it. */
-    body.nav-collapsed .nav-list, body.nav-collapsed #navInbox,
-    body.nav-collapsed .nav-empty { display:none; }
+    /* The list and the empty state go. Expanding restores them. */
+    body.nav-collapsed .nav-list, body.nav-collapsed .nav-empty { display:none; }
     /* The pointer anywhere on the edge inks the handle, so a 34px band still says it is a control. */
     body.nav-collapsed #nav:hover #navExpand { color:var(--ink); }
-    /* The one number the edge keeps: what is waiting on you across the whole folder, the count the
-       inbox tab carried before .nav-nav went. Clicking it opens the panel on the inbox. renderNav
+    /* The one number the edge keeps: what is waiting on you across the whole folder, the sum of the
+       rows' own badges. Clicking it opens the panel, where those badges say which documents. renderNav
        hides the button outright at zero (see the [hidden] rule) rather than leaving an empty pill,
        which would be a control that does nothing. */
-    body.nav-collapsed #navStripInbox { display:flex; align-self:center; width:auto; height:auto;
+    body.nav-collapsed #navStripWaiting { display:flex; align-self:center; width:auto; height:auto;
       margin:9px 0 0; padding:0; border-radius:var(--r-pill); }
-    body.nav-collapsed #navStripInbox[hidden] { display:none; }
-    body.nav-collapsed #navStripInbox svg { display:none; }
-    body.nav-collapsed #navStripInbox .n { min-width:18px; height:18px; padding:0 5px;
+    body.nav-collapsed #navStripWaiting[hidden] { display:none; }
+        body.nav-collapsed #navStripWaiting .n { min-width:18px; height:18px; padding:0 5px;
       border-radius:var(--r-pill); background:var(--yellow); color:var(--on-yellow);
       font:600 var(--t-1)/18px 'Geist', ui-sans-serif, sans-serif; text-align:center; }
   }
@@ -1429,22 +1373,12 @@
           <rect x="2.5" y="3.75" width="15" height="12.5" rx="2.5"/><path d="M7.1 3.75v12.5"/>
           <path d="M11.4 7.9 13.5 10l-2.1 2.1"/></svg></button>
       </div>
-      <!-- Collapsed only, and hidden by renderNav at zero. The collapse takes .nav-nav and the folder's
-           inbox tab with it, and the count on that tab is what says something is waiting. The edge keeps
-           the count, as a bare pill, and clicking it opens the panel on the inbox. -->
-      <button id="navStripInbox" class="ghost iconbtn" onclick="openInbox()" hidden
-        title="Open the inbox" aria-label="Open the inbox"><svg viewBox="0 0 20 20" fill="none"
-        stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M2.5 12.2h4.1l1.1 1.9h4.6l1.1-1.9h4.1"/>
-        <path d="M4.7 4.2 2.5 12.2v3.6h15v-3.6l-2.2-8H4.7Z"/></svg><span class="n" id="navStripCount"></span></button>
+      <!-- Collapsed only, and hidden by renderNav at zero. The collapse takes the list and its badges
+           with it, and the badges are what say something is waiting. The edge keeps their sum, as a
+           bare pill, and clicking it opens the panel. -->
+      <button id="navStripWaiting" class="ghost iconbtn" onclick="toggleNav(true)" hidden><span
+        class="n" id="navStripCount"></span></button>
       <div class="nav-nav">
-        <!-- Two ways to read the same folder: what is IN it, and what is still open across it. A
-             segmented pair rather than two buttons, because they are one choice and only one can be
-             true. The count rides on the inbox side, so the reason to go there is legible from here. -->
-        <div class="nav-tabs" role="tablist" aria-label="folder view">
-          <button role="tab" data-view="files" aria-selected="true">files</button>
-          <button role="tab" data-view="inbox" aria-selected="false">inbox<span class="n" id="navInboxCount"></span></button>
-        </div>
         <div class="nav-sect" id="navSect">
           <div id="navPath">
             <button class="pathbtn" onclick="togglePathMenu()" aria-haspopup="true" aria-expanded="false"><span
@@ -1460,7 +1394,6 @@
       </div>
     </div>
     <div id="navList" class="nav-list"></div>
-    <div id="navInbox" class="nav-inbox" hidden></div>
     <!-- App-level, so it lives in the panel's foot with the rest of the frame's chrome — the header
          carries only what belongs to the open document. -->
     <a class="doclink nav-docs" href="https://github.com/smithavt14/sidecar" target="_blank" rel="noopener">docs</a>
@@ -4469,11 +4402,6 @@ const dirOf = (rel) => { const i = String(rel || '').lastIndexOf('/'); return i 
 let navDir = null;    // the folder currently LISTED, which the breadcrumb can walk away from the open doc
 let navData = null;   // the last /api/dir payload
 let navSort = 'spine';
-// Files or inbox. Remembered globally rather than per folder, unlike the sort: which ORDER a folder
-// wants is a fact about that folder, while working out of the inbox is how you are working today, and
-// having it flip back to files every time you follow a citation would undo the choice constantly.
-let navView = uiStore.get('navView', '') === 'inbox' ? 'inbox' : 'files';
-
 // The sort is remembered PER FOLDER: a project folder wants its spine on top, a folder of dated notes
 // wants the newest, and one preference cannot be both.
 const navSortFor = (dir) => {
@@ -4545,24 +4473,17 @@ function navMarker(d) {
 function renderNav() {
   if (!navData) return;
   renderCrumb();
-  const inbox = navView === 'inbox';
   $('navSortLabel').textContent = Nav.LABELS[navSort];
   $('navSortMenu').innerHTML = Nav.MODES.map(m =>
     `<button role="menuitemradio" aria-checked="${m === navSort}" data-mode="${m}">${esc(Nav.LABELS[m])}</button>`).join('');
-  // Sorting orders the FILE LIST; the inbox has its own order (waiting on you first, then whatever
-  // moved most recently), so the switcher goes away rather than sitting there doing nothing.
-  $('navSect').hidden = inbox;
-  $('navList').hidden = inbox;
-  $('navInbox').hidden = !inbox;
   const waiting = navData.docs.reduce((n, d) => n + (d.turn || 0), 0);
-  const waitingLabel = waiting ? (waiting > 9 ? '9+' : String(waiting)) : '';
-  $('navInboxCount').textContent = waitingLabel;
-  $('navStripCount').textContent = waitingLabel;
+  $('navStripCount').textContent = waiting ? (waiting > 9 ? '9+' : String(waiting)) : '';
   // The collapsed edge draws the count and nothing else, so a zero takes the whole control with it
   // rather than leaving an empty pill sitting under the handle.
-  $('navStripInbox').hidden = !waiting;
-  for (const b of document.querySelectorAll('.nav-tabs button'))
-    b.setAttribute('aria-selected', b.dataset.view === navView ? 'true' : 'false');
+  const strip = $('navStripWaiting');
+  strip.hidden = !waiting;
+  strip.title = waiting + ' waiting on you';
+  strip.setAttribute('aria-label', strip.title);
   const docs = Nav.sort(navData.docs, navSort);
   $('navList').innerHTML = docs.length ? docs.map(d => {
     const i = d.name.lastIndexOf('.');
@@ -4580,40 +4501,8 @@ function renderNav() {
       navIcon(d.name) +
       `<span class="nm">${esc(stem)}</span>` +
       `<span class="meta">${ago}${navMarker(d)}</span></a>`;
-  }).join('') : '<div class="nav-empty">No documents in this folder. The path above is live, in both directions.</div>';
-  renderInbox();
+  }).join('') : '<div class="nav-empty">No documents in this folder.</div>';
   revealOpenDoc();
-}
-// ---------- the inbox: everything still open in this folder ----------
-// The panel's other question. The file list says what is here; this says what is left, across all of
-// it, so a review that spans a brief and its research is one list instead of three visits.
-//
-// It is built from the SAME /api/dir payload the rows are (each document carries its live items), so
-// opening the inbox costs no fetch and it refreshes on exactly the events the badges do.
-function renderInbox() {
-  const groups = Turn.inbox(Nav.sort(navData.docs, 'spine'));
-  if (!groups.length) {
-    // Two different nothings, and conflating them would be a lie either way. A folder with no documents
-    // in it has no inbox to be empty; a folder of documents with everything settled is the good state
-    // and should read like one.
-    $('navInbox').innerHTML = navData.docs.length
-      ? `<div class="ib-empty"><b>All clear in this folder.</b>Every comment and suggestion here is settled. New ones show up in this list as they arrive.</div>`
-      : `<div class="ib-empty"><b>Nothing to read here yet.</b>This folder holds no documents. The path above is live, in both directions.</div>`;
-    return;
-  }
-  $('navInbox').innerHTML = groups.map(g => {
-    const rows = g.items.map(it => {
-      const when = it.at ? `<span class="when">${esc(timeAgo(Date.parse(it.at)))}</span>` : '';
-      return `<a class="ib-item${it.turn ? ' ib-turn' : ''}" href="/?f=${encodeURIComponent(g.rel)}"` +
-        ` data-rel="${esc(g.rel)}" data-id="${esc(it.id)}" title="${esc(it.quote)}">` +
-        `<span class="hd"><span class="who">${esc(it.by || '?')}</span>` +
-        `<span class="kind">${esc(it.kind)}</span>${when}</span>` +
-        `<span class="q">${esc(it.quote || 'no quote')}</span></a>`;
-    }).join('');
-    return `<div class="ib-group"><a class="ib-doc" href="/?f=${encodeURIComponent(g.rel)}"` +
-      ` data-rel="${esc(g.rel)}" title="${esc(g.name)}"><span class="nm">${esc(g.name)}</span>` +
-      `<span class="n">${g.turn ? g.turn + ' for you' : g.open + ' open'}</span></a>${rows}</div>`;
-  }).join('');
 }
 // The panel's numbers for the OPEN document, recomputed from the review this page is already holding.
 // The watcher would deliver the same answer a quarter of a second later, and a badge that lags the
@@ -4624,8 +4513,8 @@ function navSelfUpdate() {
   const d = navData.docs.find(x => x.rel === FILE);
   if (!d) return;
   const t = Turn.of(state.review, state.agent);
-  if (d.turn === t.turn && d.open === t.open && JSON.stringify(d.items) === JSON.stringify(t.items)) return;
-  d.turn = t.turn; d.open = t.open; d.items = t.items;
+  if (d.turn === t.turn && d.open === t.open) return;
+  d.turn = t.turn; d.open = t.open;
   renderNav();
 }
 // A folder can be sixty documents long (this vault has one), and the open one is then somewhere below
@@ -4637,9 +4526,6 @@ function navSelfUpdate() {
 // time they typed — the same mistake the rail made rebuilding itself on a presence heartbeat.
 let revealedFor = null;
 function revealOpenDoc() {
-  // Nothing to reveal while the list is the inbox: the row is in the DOM but display:none, so every
-  // measurement below reads zero and the panel would scroll itself to the top for no reason.
-  if (navView !== 'files') return;
   const key = navDir + '|' + FILE;
   if (revealedFor === key) return;
   revealedFor = key;
@@ -4660,30 +4546,6 @@ $('navList').addEventListener('click', (e) => {
   e.preventDefault();
   openDoc(a.dataset.rel);
 });
-// An inbox row names a document AND an item in it. Real hrefs again, so a modified click still opens
-// the document in a tab; a plain click lands on the anchored span with the card flashing beside it.
-$('navInbox').addEventListener('click', (e) => {
-  const a = e.target.closest && e.target.closest('a[data-rel]');
-  if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-  e.preventDefault();
-  const id = a.dataset.id || '';
-  // Already open: no swap, just the jump. openDoc's own early return would eat the anchor.
-  if (a.dataset.rel === FILE) { closeNavDrawer(); if (id) jumpToItem(id); return; }
-  openDoc(a.dataset.rel, id ? { anchor: id } : null);
-});
-$('nav').addEventListener('click', (e) => {
-  const b = e.target.closest && e.target.closest('.nav-tabs button[data-view]');
-  if (!b) return;
-  setNavView(b.dataset.view === 'inbox' ? 'inbox' : 'files');
-});
-function setNavView(view) {
-  navView = view === 'inbox' ? 'inbox' : 'files';
-  uiStore.set('navView', navView);
-  renderNav();
-}
-// The collapsed edge's way into the inbox. Switching the view and expanding the panel are one move from
-// there: the edge has no tab bar to land on, and a count you can see but not follow is a tease.
-function openInbox() { setNavView('inbox'); toggleNav(true); }
 $('navPathMenu').addEventListener('click', (e) => {
   const b = e.target.closest && e.target.closest('button[data-dir]');
   if (b) { togglePathMenu(false); loadDir(b.dataset.dir); }
@@ -4750,7 +4612,6 @@ function resetDocState() {
   frameEl = null; frameNatural = null; frameGeometry = {}; frameAnchors = {}; frameScale = 1;
   pointerInFrame = false;
   pendingScrollY = null;    // a restore the outgoing document never got tall enough to satisfy
-  pendingAnchor = null;     // and an item id that belongs to the document being left
   hideTool(); hidePopover(); hideBanner(); toggleSheet(false); closeNavDrawer();
   lightbox.classList.remove('on');
   setStatus('');
@@ -4795,42 +4656,9 @@ function restoreScroll(y) {
   setTimeout(applyPendingScroll, 120);
   setTimeout(applyPendingScroll, 400);   // images and fonts land late and the height moves with them
 }
-// ---------- arriving at an ITEM rather than at a document ----------
-// The inbox lands on a span, not on a file, so the jump has to survive the same render timing the
-// scroll restore does: a markdown document is laid out synchronously and the first attempt lands, an
-// asset's element rects arrive over postMessage some frames later. Same shape as pendingScrollY —
-// try, then try again as the document acquires a height — and the same lifetime, cleared on a swap.
-//
-// It SCROLLS and FLASHES and does nothing else. Docking is the rail's own business (public/stability.js
-// may be holding a card frozen mid-reply, or inside a grace window), and forcing a re-dock to bring a
-// card into view would move the one thing the human might be typing into.
-let pendingAnchor = null;
-function jumpToItem(id) {
-  markAnchors();
-  document.querySelectorAll('.flash').forEach(m => m.classList.remove('flash'));
-  const els = anchorEls(id);
-  if (els.length) { els[0].scrollIntoView({ behavior: 'smooth', block: 'center' }); pulse(els); }
-  else if (isAsset()) {
-    // Inside the frame the flash is the picker's to draw; this side can only scroll to the rect.
-    sendFrame('pulse', { id });
-    const r = frameRectFor(id);
-    if (r) scrollTo({ top: Math.max(0, scrollY + r.top - innerHeight / 2), behavior: 'smooth' });
-  }
-  const card = $('side').querySelector('.card[data-id="' + cssId(id) + '"]');
-  if (card) pulse([card]);
-  // An orphan has no span in the document and no rect in the frame; its card is the whole of it, and
-  // flashing that is a successful arrival rather than a reason to keep retrying.
-  return !!(els.length || card);
-}
-function applyPendingAnchor() {
-  if (pendingAnchor && jumpToItem(pendingAnchor)) pendingAnchor = null;
-}
 // Load a document into the view we already have. No navigation, so the EventSource, the layout
 // preferences and the page itself survive; `FILE` is a let and every reader of it (the SSE filter, the
 // /assets rewriter, every api call) picks up the new value on its own.
-//
-// `opts.anchor` is an item id to land on, the inbox's way in, and it rides beside `opts.y` because they
-// are the same kind of thing: where in the incoming document the reader wants to be.
 async function openDoc(rel, opts) {
   const o = opts || {};
   if (!rel) return;
@@ -4851,14 +4679,6 @@ async function openDoc(rel, opts) {
   try { await reloadFile(); }             // applyState → renderPwd, renderDoc (frame or blocks), renderSide
   catch (e) { showBanner('Could not open ' + rel + '. ' + e.message, [{ label: 'OK', fn: () => {} }]); }
   restoreScroll(Number(o.y) || 0);        // the top, unless this is a back to somewhere
-  // Set after resetDocState (which clears it) so the arrival survives its own swap. The jump overrides
-  // the scroll restore above, which for an inbox click is a restore to the top of a document the reader
-  // never asked to see the top of.
-  pendingAnchor = o.anchor || null;
-  applyPendingAnchor();
-  requestAnimationFrame(applyPendingAnchor);
-  setTimeout(applyPendingAnchor, 200);
-  setTimeout(applyPendingAnchor, 700);    // an asset's rects cross a postMessage boundary
   if (dirOf(rel) !== navDir) await loadDir(dirOf(rel));
   else renderNav();           // same folder: only the current row moved
 }

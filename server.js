@@ -14,7 +14,7 @@ const { SERVED_TYPES, FONT_TYPES, MAX_BYTES, saveAsset } = require('./lib/assets
 // The element anchor's shared rules — the sel validation this file runs on a write, and the Node-side
 // liveness annotateOrphans resolves with (lib/element.js).
 const Element = require('./lib/element.js');
-// Whose turn is it — the ONE rule behind the panel's badges and the inbox, shared with the browser
+// Whose turn is it — the ONE rule behind the panel's badges, shared with the browser
 // (public/turn.js, loaded there via <script>) so a count computed here and one computed there can
 // never disagree.
 const Turn = require('./public/turn.js');
@@ -317,8 +317,8 @@ const unfenceTheme = (abs, text) => {
 // nothing that is not a document by the same `docKind` allowlist the picker and the watcher use.
 // `path` is the DIRECTORY, relative to the served root; empty means the root itself.
 //
-// Every document also carries what is still open on it — the your-turn count the panel badges, and the
-// live items themselves, which is what the Inbox lists. This is the only place that can see a document
+// Every document also carries what is still open on it, as two counts: how many items are waiting on
+// the human, which the panel badges, and how many are open at all. This is the only place that can see a document
 // nobody has open, so the counting happens here rather than in the client, and it is the SAME function
 // the client runs over the open document (public/turn.js).
 //
@@ -337,9 +337,9 @@ app.get('/api/dir', (req, res) => {
     // is a claim about the DOCUMENT. /api/files says "last reviewed" and takes the max on purpose —
     // two different questions, so they read two different numbers rather than one shared fudge.
     let mtime = 0; try { mtime = fs.statSync(p).mtimeMs; } catch (_) {}
-    let t = { turn: 0, open: 0, items: [] };
+    let t = { turn: 0, open: 0 };
     try { t = Turn.of(JSON.parse(fs.readFileSync(sidecarPath(p), 'utf8')), AGENT); } catch (_) {}
-    docs.push({ rel: path.relative(BASE_DIR, p), name: e.name, mtime, turn: t.turn, open: t.open, items: t.items });
+    docs.push({ rel: path.relative(BASE_DIR, p), name: e.name, mtime, turn: t.turn, open: t.open });
   }
   // The panel walks up through `parent`; at the served root there is nowhere further up, and null
   // says so rather than handing back a path outside the root that safePath would then refuse.

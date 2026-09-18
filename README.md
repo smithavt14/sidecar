@@ -23,7 +23,7 @@ Sidecar brings the review to the file instead: suggestion cards, word-level diff
 - **Real files, real diffs.** Edits write the actual markdown, and untouched blocks keep their exact original bytes, so `git diff` shows just what changed, and git is your undo.
 - **Any agent with a shell.** Claude Code, Cursor, Codex, and the rest. One small CLI, no plugin, no API key.
 - **A live loop, not a mailbox.** Your agent can watch the review and answer inside your comment threads the moment you act, and the thread shows _claude is replying_ while the answer is being written.
-- **A folder, not one file.** Serve a project directory and the review is the whole project: a panel lists its documents, badges say which ones are waiting on you, and an inbox collects every open thread across them. Your agent watches the folder with one `wait --dir`.
+- **A folder, not one file.** Serve a project directory and the review is the whole project: a panel lists its documents, and badges say which ones are waiting on you. Your agent watches the folder with one `wait --dir`.
 - **Anchored to content, not line numbers.** If text moves, anchors follow; if it's gone, the item goes orphaned, loudly, instead of editing the wrong place.
 - **Cheap turns.** After the first read, your agent sees only what changed since its last look, so a long review doesn't mean re-reading the document every turn.
 - **Mobile friendly.** One `tailscale serve` line puts the review on your phone over your own tailnet, where a comment can carry the screenshot you just took.
@@ -96,8 +96,7 @@ paragraph you left.
 **See what is still waiting on you.** Each row carries a count of the items on that document whose
 next move is yours: an open comment whose latest message is your agent's, plus every pending
 suggestion card. A document waiting on the agent shows a neutral dot, and a settled one shows
-nothing. The **inbox** tab lists those open items across the whole folder, grouped by document, and
-clicking one opens that document at the anchored text. Your agent sees the same folder from its side:
+nothing. Your agent sees the same folder from its side:
 `sidecar wait --dir <folder>` is one process over every document in it, so nothing sits unwatched
 while you read. `sidecar watchers` lists what is armed and whether each one is still running, with
 `--clean` to clear the records of watchers that died with the session that started them.

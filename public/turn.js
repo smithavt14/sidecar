@@ -1,6 +1,6 @@
 /* sidecar — whose turn is it, per item, per document, per folder.
 
-   The panel's badges and the inbox both need one answer to "what is still waiting on the human here",
+   The panel's badges and the rail's resting cards both need one answer to "what is still waiting on the human here",
    and the rail already had it in three different places. This is that answer, extracted: a review
    object in, counts and a flat list out. Pure — no fs, no DOM, no fetch — so the server can run it
    over a folder (server.js's /api/dir), the page can run it over the open document (index.html's
@@ -40,17 +40,14 @@
   // Not settled: still on somebody's plate. Same triple /api/files has always counted.
   const LIVE = ['open', 'pending', 'orphaned'];
 
-  // A quote is a whole sentence or more, and an inbox row shows one line of it. Cut server-side so a
-  // folder of long anchors is not a payload the panel throws away — the same reasoning that keeps
-  // /api/dir to one directory.
+  // A quote is a whole sentence or more, and a pill's preview shows one line of it.
   const QUOTE_MAX = 160;
 
   const isLive = (it) => LIVE.indexOf(it && it.status) >= 0;
   const lastMsg = (it) => { const t = (it && it.thread) || []; return t.length ? t[t.length - 1] : null; };
   // Who spoke last on this item: the tail of its thread, or its author when it has none.
   function lastBy(it) { const m = lastMsg(it); return m ? m.by : (it && it.by); }
-  // When it last moved. Used for "newest first" in the inbox only, so a missing timestamp sorts last
-  // rather than being invented — insertion order is the tiebreak and it is already chronological.
+  // When it last moved. A missing timestamp reads as empty rather than being invented.
   function lastAt(it) { const m = lastMsg(it); return (m && m.at) || (it && it.decidedAt) || ''; }
 
   function waiting(it, agent) {
@@ -83,29 +80,6 @@
       });
     }
     return { turn: turn, open: items.length, items: items };
-  }
-
-  // Newest first, and `i` is what makes that total: two items written in the same second, or two with
-  // no timestamp at all, fall back to their position in the file, which is insertion order and so is
-  // already chronological. Without it the order depends on the sort's stability and shuffles between
-  // renders for no reason the reader can see.
-  const byNewest = (a, b) => String(b.at).localeCompare(String(a.at)) || (b.i - a.i);
-
-  // The inbox: every live item in the folder, grouped by the document it is on. Documents with nothing
-  // open are dropped entirely — an inbox is what is left to do, not a second copy of the file list.
-  //
-  // Groups lead with the ones waiting on the human (most first), then by whichever moved most recently,
-  // then by the panel's own spine order, which arrives as the caller's ordering and is preserved by a
-  // stable sort. Inside a group, newest first.
-  function inbox(docs) {
-    const groups = [];
-    for (const d of (docs || [])) {
-      const items = (d.items || []).slice().sort(byNewest);
-      if (!items.length) continue;
-      groups.push({ rel: d.rel, name: d.name, turn: d.turn || 0, open: items.length,
-        at: items[0].at, items: items });
-    }
-    return groups.sort((a, b) => (b.turn - a.turn) || String(b.at).localeCompare(String(a.at)));
   }
 
   // What shape the review rail rests in, from the two counts the rail has already sorted out for
@@ -212,6 +186,6 @@
   }
 
   const api = { LIVE, QUOTE_MAX, DENSITIES, DENSITY_REST, THREAD_HEAD, THREAD_TAIL, isLive, lastBy,
-    lastAt, waiting, of, inbox, byNewest, rail, density, nextDensity, startCollapsed, foldThread, peek };
+    lastAt, waiting, of, rail, density, nextDensity, startCollapsed, foldThread, peek };
   if (typeof module === 'object' && module.exports) module.exports = api; else root.Turn = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
