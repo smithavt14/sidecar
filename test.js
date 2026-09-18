@@ -6210,6 +6210,14 @@ test('the header names the document and the panel holds the whole path', () => {
   // menu that lists every level.
   assert.match(PAGE, /\$\('pwd'\)\.innerHTML = `<span class="file">/, 'the title is the filename');
   assert.match(PAGE, /\$\('pwd'\)\.title = p;/, 'and the whole path is its hover');
+  // Exercised, not pattern-matched: the split has to find the name in a Windows path too, or the title
+  // is the whole path again on the one platform that writes it with backslashes.
+  const split = PAGE.match(/const i = (Math\.max\(p\.lastIndexOf[^;]+);/);
+  assert.ok(split, 'the split is still one expression');
+  const nameOf = new Function('p', 'const i = ' + split[1] + '; return i >= 0 ? p.slice(i + 1) : p;');
+  assert.equal(nameOf('~/hq/vault/brief.md'), 'brief.md');
+  assert.equal(nameOf('C:\\Users\\alex\\project\\brief.md'), 'brief.md');
+  assert.equal(nameOf('brief.md'), 'brief.md');
   assert.doesNotMatch(PAGE, /id="navCrumb"/, 'the clipped breadcrumb is gone');
   assert.match(PAGE, /<div class="menu" id="navPathMenu" role="menu" hidden><\/div>/, 'the folder is a menu');
   assert.match(PAGE, /\$\('navPathMenu'\)\.addEventListener\('click'[\s\S]{0,200}loadDir\(b\.dataset\.dir\)/, 'and every level in it is live');

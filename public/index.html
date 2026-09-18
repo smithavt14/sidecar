@@ -1595,7 +1595,8 @@ function applyState(s) {
 function renderPwd() {
   paintZoom();
   const p = state.pwd || FILE || '';
-  const i = p.lastIndexOf('/');
+  // Either separator: the server sends its own platform's path, and on Windows that is backslashes.
+  const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
   // The name is the title. The folders are in the panel beside it, as a menu that can show all of
   // them, so printing them here a second time only made the bar longer; the whole path is the hover.
   $('pwd').innerHTML = `<span class="file">${esc(i >= 0 ? p.slice(i + 1) : p)}</span>`;
