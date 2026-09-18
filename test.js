@@ -6240,6 +6240,17 @@ test('the header title group holds the path and nothing else', () => {
   assert.doesNotMatch(paint[1], /aria-label|\.title =/, 'its name is fixed in the markup; aria-pressed alone carries the state');
 });
 
+test('the header names the document and the panel holds the whole path', () => {
+  // The title printed the full path, and the panel printed it again as a one-line breadcrumb clipped
+  // to its last two segments. The name is the title now, the path is its hover, and the folder is a
+  // menu that lists every level.
+  assert.match(PAGE, /\$\('pwd'\)\.innerHTML = `<span class="file">/, 'the title is the filename');
+  assert.match(PAGE, /\$\('pwd'\)\.title = p;/, 'and the whole path is its hover');
+  assert.doesNotMatch(PAGE, /id="navCrumb"/, 'the clipped breadcrumb is gone');
+  assert.match(PAGE, /<div class="menu" id="navPathMenu" role="menu" hidden><\/div>/, 'the folder is a menu');
+  assert.match(PAGE, /\$\('navPathMenu'\)\.addEventListener\('click'[\s\S]{0,200}loadDir\(b\.dataset\.dir\)/, 'and every level in it is live');
+});
+
 test('an asset hover never writes into the header', () => {
   // The label is as long as a sentence, and in the status slot it pushed every control in the bar to
   // the left and into the title. It is written to #hoverHint, which is fixed and moves nothing.

@@ -87,8 +87,8 @@ it publicly.
 
 **Move around a folder.** The panel down the left lists every document in the folder you are reading,
 and clicking one opens it in place. Sort by *spine* (`summary.md` first, `brief.md` second, then
-alphabetical), by *last updated*, or by *waiting on you*; the choice sticks per folder. A breadcrumb
-steps up a level, the panel collapses to an icon strip, and below 780px it becomes a drawer. Relative
+alphabetical), by *last updated*, or by *waiting on you*; the choice sticks per folder. The folder's
+name opens its whole path as a menu, every level a click, the panel collapses to an icon strip, and below 780px it becomes a drawer. Relative
 links between documents work too: `[the research](./market-research.md)` opens in sidecar rather than
 in a download, so following a citation keeps you in the review, and browser back returns you to the
 paragraph you left.

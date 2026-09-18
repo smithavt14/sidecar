@@ -409,32 +409,35 @@
   /* Everything under the brand row that is still chrome: the path, then the list's label and its
      ordering control. Gone when the panel is collapsed. */
   .nav-nav { display:flex; flex-direction:column; gap:2px; padding:11px 8px 4px; }
-  /* The breadcrumb is the OPEN DOCUMENT's path, not a trail of where you have clicked, and every
-     segment is live. Stepping up a level is clicking a shallower one; coming back down is clicking a
-     deeper one, which is the half a one-way "up" button loses — a folder above a project usually
-     holds no documents at all, so up with no way back is a dead end.
-     ONE LINE. It wrapped into a three-line stack at 248px, which read as a paragraph of grey rather
-     than as a path. Every segment keeps its whole name and the row overflows to the LEFT instead —
-     pushed right, clipped, and faded out where it is cut. Ellipsising each segment in turn was worse
-     at the width this actually runs at: four stubs reading `h… / vau… / projec… / ccdc-portal` is a
-     path nobody can read, and the deep end, the folder the list below belongs to, is the end that has
-     to survive. The fade is what says there is more to the left rather than leaving a hard cut. */
-  #navCrumb { display:flex; flex-wrap:nowrap; align-items:center; justify-content:flex-end;
-    gap:0 1px; padding:0 5px; min-width:0; overflow:hidden;
-    /* a MASK: only the alpha is read, so the colour is arbitrary and the same in both themes */
-    -webkit-mask-image:linear-gradient(90deg, transparent 0, #000 22px);
-    mask-image:linear-gradient(90deg, transparent 0, #000 22px);
-    font-family:'Geist Mono', ui-monospace,SFMono-Regular,Menlo,monospace; font-size:var(--t-1); line-height:1.6; }
-  #navCrumb button { flex:none; border:none; background:none; box-shadow:none;
-    padding:1px 3px; border-radius:var(--r-1); font:inherit; color:var(--faint); white-space:nowrap; }
-  #navCrumb button:hover { background:var(--shell-row); color:var(--fg); }
-  #navCrumb button.here { color:var(--ink-2); font-weight:600; }
-  #navCrumb .sep { flex:none; color:var(--fainter); }
+  /* The folder, as a menu. It was a one-line breadcrumb that overflowed to the left behind a fade, and
+     at the width this panel runs at that left two segments on screen: the rest of the path could be
+     neither read nor clicked. The row now names the folder the list belongs to, which is the one
+     segment that has to be read at rest, and the button opens the OPEN DOCUMENT's whole path as a
+     list, root first and indented by depth, every level live. Stepping up is a shallower row and
+     coming back down is a deeper one, which is what the breadcrumb was for. Same chip and menu as the
+     sort beside it, because it answers the same shape of question. */
+  #navPath { position:relative; flex:1 1 auto; min-width:0; }
+  #navPath .pathbtn { display:flex; align-items:center; gap:5px; max-width:100%;
+    border:none; background:none; box-shadow:none; padding:2px 4px; border-radius:var(--r-1);
+    color:var(--ink-2); font:600 var(--t-1)/1.6 'Geist Mono', ui-monospace,SFMono-Regular,Menlo,monospace; }
+  #navPath .pathbtn:hover { background:var(--shell-row); color:var(--ink); }
+  #navPath .pathbtn #navPathLabel { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #navPath .pathbtn .car { flex:none; font-size:var(--t-1); opacity:.5; }
+  #navPath .menu { position:absolute; top:calc(100% + 5px); left:0; min-width:100%; max-width:min(320px, 80vw);
+    z-index:6; background:var(--card); border:1px solid var(--line-2); border-radius:var(--r-2);
+    box-shadow:var(--shadow); padding:4px; display:flex; flex-direction:column; gap:1px; }
+  #navPath .menu[hidden] { display:none; }
+  #navPath .menu button { display:block; width:100%; text-align:left; border:none; background:none;
+    box-shadow:none; padding:6px 9px; border-radius:var(--r-1); color:var(--fg);
+    font:500 var(--t-2) 'Geist Mono', ui-monospace,SFMono-Regular,Menlo,monospace;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #navPath .menu button:hover { background:var(--fill); }
+  #navPath .menu button[aria-checked="true"] { font-weight:600; color:var(--ink); background:var(--fill); }
   /* The list's ordering control, on a row of its own. It used to share the row with an uppercase
      DOCUMENTS micro-label, borrowed from a rail that has two sections to tell apart (GD's WORK and
      ORGANIZATION). This panel has one: the files view is the only thing the label ever sat over, and
      the tab above it already reads `files`. A section label naming the only section is decoration. */
-  .nav-sect { display:flex; align-items:center; justify-content:flex-end; gap:8px; padding:9px 5px 3px; }
+  .nav-sect { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:2px 5px 3px 1px; }
   /* `hidden` is how the two views are switched, and a `display` set anywhere in this file beats the
      browser's own `[hidden] { display:none }` — which is why both of the things it hides say so
      themselves. The list stayed on screen under the inbox until they did. */
@@ -599,10 +602,8 @@
      never — a path ellipsised from the right hides the one word that names what is open. */
   #pwd { display:flex; align-items:baseline; min-width:0; flex:0 1 auto;
     font-family:'Geist Mono', ui-monospace,SFMono-Regular,Menlo,monospace; font-size:var(--t-2); letter-spacing:0; }
-  #pwd .dir { flex:0 9999 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--faint); }
-  /* The filename gives way last and only once the folders are gone: the shrink factors are four orders
-     apart, so the path is spent before the name loses a letter. When it does have to give, it
-     ellipsises inside its own box rather than printing under the controls beside it. */
+  /* When the name has to give, it ellipsises inside its own box rather than printing under the
+     controls beside it. */
   #pwd .file { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
     color:var(--ink); font-weight:600; }
   #pwd:empty { display:none; }
@@ -1444,8 +1445,12 @@
           <button role="tab" data-view="files" aria-selected="true">files</button>
           <button role="tab" data-view="inbox" aria-selected="false">inbox<span class="n" id="navInboxCount"></span></button>
         </div>
-        <div id="navCrumb"></div>
         <div class="nav-sect" id="navSect">
+          <div id="navPath">
+            <button class="pathbtn" onclick="togglePathMenu()" aria-haspopup="true" aria-expanded="false"><span
+              id="navPathLabel"></span><span class="car">▾</span></button>
+            <div class="menu" id="navPathMenu" role="menu" hidden></div>
+          </div>
           <div id="navSort">
             <button class="sortbtn" onclick="toggleSortMenu()" aria-haspopup="true" aria-expanded="false"
               title="Sort the folder"><span id="navSortLabel">spine</span><span class="car">▾</span></button>
@@ -1658,9 +1663,10 @@ function renderPwd() {
   paintZoom();
   const p = state.pwd || FILE || '';
   const i = p.lastIndexOf('/');
-  $('pwd').innerHTML = i >= 0
-    ? `<span class="dir">${esc(p.slice(0, i + 1))}</span><span class="file">${esc(p.slice(i + 1))}</span>`
-    : `<span class="file">${esc(p)}</span>`;
+  // The name is the title. The folders are in the panel beside it, as a menu that can show all of
+  // them, so printing them here a second time only made the bar longer; the whole path is the hover.
+  $('pwd').innerHTML = `<span class="file">${esc(i >= 0 ? p.slice(i + 1) : p)}</span>`;
+  $('pwd').title = p;
 }
 // Settled is silence: 'saved' is the steady state and a label that never changes is furniture. The
 // transient states (editing…, saving…) and the two that need acting on (conflict, save failed) show.
@@ -4496,8 +4502,19 @@ function renderCrumb() {
   const parts = [{ label: rootName(), dir: '' }];
   let acc = '';
   for (const s of dirOf(FILE).split('/').filter(Boolean)) { acc = acc ? acc + '/' + s : s; parts.push({ label: s, dir: acc }); }
-  $('navCrumb').innerHTML = parts.map((p, i) => (i ? '<span class="sep">/</span>' : '') +
-    `<button data-dir="${esc(p.dir)}" class="${p.dir === navDir ? 'here' : ''}" title="${esc(p.dir || p.label)}">${esc(p.label)}</button>`).join('');
+  const here = parts.find(p => p.dir === navDir) || parts[parts.length - 1];
+  $('navPathLabel').textContent = here.label;
+  $('navPath').querySelector('.pathbtn').title = here.dir || here.label;
+  // Indented by depth, so the list reads as the path it is rather than as six unrelated folders.
+  $('navPathMenu').innerHTML = parts.map((p, i) =>
+    `<button role="menuitemradio" aria-checked="${p === here}" data-dir="${esc(p.dir)}"` +
+    ` style="padding-left:${9 + i * 10}px" title="${esc(p.dir || p.label)}">${esc(p.label)}</button>`).join('');
+}
+function togglePathMenu(force) {
+  const m = $('navPathMenu');
+  const open = force === undefined ? m.hidden : !!force;
+  m.hidden = !open;
+  $('navPath').querySelector('.pathbtn').setAttribute('aria-expanded', open ? 'true' : 'false');
 }
 // A row's glyph. It carries the one distinction the panel can make without opening anything: a
 // markdown document you can edit, or an asset you can only look at. The extension used to say that as
@@ -4667,9 +4684,9 @@ function setNavView(view) {
 // The collapsed edge's way into the inbox. Switching the view and expanding the panel are one move from
 // there: the edge has no tab bar to land on, and a count you can see but not follow is a tease.
 function openInbox() { setNavView('inbox'); toggleNav(true); }
-$('navCrumb').addEventListener('click', (e) => {
+$('navPathMenu').addEventListener('click', (e) => {
   const b = e.target.closest && e.target.closest('button[data-dir]');
-  if (b) loadDir(b.dataset.dir);
+  if (b) { togglePathMenu(false); loadDir(b.dataset.dir); }
 });
 $('navSortMenu').addEventListener('click', (e) => {
   const b = e.target.closest && e.target.closest('button[data-mode]');
@@ -4692,6 +4709,7 @@ function setNavSort(mode) {
 // immediately close it on the way back up.
 document.addEventListener('click', (e) => {
   if (!$('navSortMenu').hidden && !(e.target.closest && e.target.closest('#navSort'))) toggleSortMenu(false);
+  if (!$('navPathMenu').hidden && !(e.target.closest && e.target.closest('#navPath'))) togglePathMenu(false);
 });
 
 // ---------- swapping the document in place ----------
