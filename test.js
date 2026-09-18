@@ -1510,6 +1510,38 @@ test('an agent is any name on the list, and a second human is not one', () => {
   assert.match(PAGE, /function whoCls\(by\) \{ return \(state && Turn\.isAgent\(by, who\(\)\)\)/, 'the card colours ask the same question');
 });
 
+test('an agent renamed by detection inherits the cursor it kept under its old name', () => {
+  const { legacyName, agentNames } = require('./lib/agent.js');
+  assert.equal(legacyName({ CODEX_THREAD_ID: 'x' }), 'claude', 'a detected Codex used to be claude');
+  assert.equal(legacyName({}), null, 'claude was always claude');
+  assert.equal(legacyName({ SIDECAR_AGENT: 'codex', CODEX_THREAD_ID: 'x' }), null, 'a named agent always had its name');
+  assert.deepEqual(agentNames({ SIDECAR_AGENT: 'robo', SIDECAR_USER: 'claude' }), ['robo', 'codex'],
+    'and a human called claude is not on the list of agents');
+
+  // The upgrade: a human reply lands while the cursor is filed under 'claude', then Codex is detected.
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'sc-legacy-'));
+  fs.writeFileSync(path.join(d, 'doc.md'), '# doc\n\nA sentence to anchor to.\n');
+  const run = (env, ...args) => spawnSync(process.execPath, [path.join(__dirname, 'server.js'), ...args],
+    { cwd: d, env: { ...process.env, SIDECAR_PORT: '4993', ...env }, encoding: 'utf8' });
+  run({}, 'comment', 'doc.md', '--quote', 'A sentence', '--text', 'a question');       // as 'claude'
+  run({}, 'digest', 'doc.md');                                                          // cursor saved under 'claude'
+  const id = JSON.parse(fs.readFileSync(path.join(d, 'doc.md.sidecar.json'), 'utf8')).items[0].id;
+  run({ SIDECAR_AGENT: 'alex' }, 'reply', 'doc.md', id, 'the unseen answer');
+  const first = run({ CODEX_THREAD_ID: 'x' }, 'digest', 'doc.md');
+  assert.match(first.stdout, /the unseen answer/, 'the first look as codex reports what claude never saw');
+  const dropped = run({ CODEX_THREAD_ID: 'x' }, 'drop', 'doc.md', id);
+  assert.equal(dropped.status, 0, 'and the card it wrote under the old name is still its own to drop: ' + dropped.stderr);
+  assert.match(dropped.stderr, /next: sidecar wait/, 'drop bypasses applyItems and still says to re-arm');
+});
+
+test('the wait reminder quotes a path that is not one shell word', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'sc nudge '));
+  fs.writeFileSync(path.join(d, 'doc.md'), '# doc\n\nA sentence to anchor to.\n');
+  const r = spawnSync(process.execPath, [path.join(__dirname, 'server.js'), 'comment', 'doc.md', '--quote', 'A sentence', '--text', 'hello'],
+    { cwd: d, env: { ...process.env, SIDECAR_AGENT: 'quoted', SIDECAR_PORT: '4993' }, encoding: 'utf8' });
+  assert.match(r.stderr, /next: sidecar wait '[^']*sc nudge [^']*doc\.md'/, 'a space in a folder name stays inside one word');
+});
+
 test('a write with no watcher armed says what to run next, on stderr', () => {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'sc-nudge-'));
   fs.writeFileSync(path.join(d, 'doc.md'), '# doc\n\nA sentence to anchor to.\n');

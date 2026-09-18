@@ -3511,7 +3511,9 @@ async function markDone() {
   try {
     const r = await api('PUT', '/api/review', { path: FILE, review: state.review });
     state.review = r.review; renderSide();
-    showBanner('Sent to ' + state.agent + '.', [{ label: 'ok', fn: () => {} }]);
+    // Whoever is here is who it went to; the server's own agent only when nobody is.
+    const live = state.presence && (!state.presence.until || state.presence.until > Date.now());
+    showBanner('Sent to ' + ((live && state.presence.agent) || state.agent) + '.', [{ label: 'ok', fn: () => {} }]);
   } catch (e) { alert('could not send: ' + e.message); }
 }
 // grow a textarea to fit its content so the whole comment stays visible while typing
