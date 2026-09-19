@@ -10,6 +10,10 @@
      calls it and the stylesheet declares no colour of its own — a theme is what puts the colours on the
      page. server.js requires the same file, so the page and the server agree on what a theme is. -->
 <script src="/themes.js"></script>
+<!-- The reading measure as a number, for the same reason and in the same place: the stamp below applies
+     it before the first paint, and the migration from the three old names lives in one file the page
+     and the tests both read. -->
+<script src="/measure.js"></script>
 <script>
   /* Theme, before the first paint. Every colour on the page is an inline custom property now, so this
      is not a hint about which way round the room is — it IS the palette, and it has to run here in
@@ -22,15 +26,14 @@
     try { Themes.boot(document, localStorage); }
     catch (e) { try { Themes.apply(document.documentElement, Themes.BUILTIN.paper); } catch (e2) {} }
   })();
+  /* The reading measure, before the first paint. A number in em now, read through measure.js so the
+     three old names (narrow, default, wide) keep meaning the widths they were. The catch is the same
+     one the theme has: a missing module or a throwing storage leaves the column at the default rather
+     than leaving the page unlaid. */
   (function () {
-    var W = { narrow: '29em', default: '33em', wide: '39em' };
-    var m;
-    try { m = localStorage.getItem('sidecar.measure'); } catch (e) {}
-    // hasOwnProperty, not a truth test: a stored `constructor` would otherwise resolve up the
-    // prototype chain and set the column's width to a function.
-    if (!Object.prototype.hasOwnProperty.call(W, m)) m = 'default';
-    document.documentElement.dataset.measure = m;
-    document.documentElement.style.setProperty('--measure', W[m]);
+    var em = 33;
+    try { em = Measure.read(localStorage); } catch (e) {}
+    document.documentElement.style.setProperty('--measure', em + 'em');
   })();
   /* The document's type size, before the first paint and for the same reason the theme is: a reader
      who set 20px and gets one frame of 16.5 watches the whole page reflow on every load. Four steps,
@@ -58,6 +61,7 @@
 <script src="/focus.js"></script>   <!-- where the page sits for the caret's line to rest at 45%; pure numbers in/out, Node tests require the same file -->
 <script src="/listkeys.js"></script>   <!-- Enter / Backspace / Tab inside a list item; pure elements in/out, Node tests require the same file -->
 <script src="/assetframe.js"></script>   <!-- an .html asset → the sandboxed frame's srcdoc; Node tests require the same file -->
+<script src="/tablecols.js"></script>   <!-- a table's column widths as a view preference: store, apply, hit-test; Node tests require the same file -->
 <script src="/lib/marked/marked.min.js"></script>
 <script src="/lib/dompurify/dist/purify.min.js"></script>   <!-- marked v12 has no sanitizer; scrub its HTML before it hits innerHTML (XSS) -->
 <script src="/lib/diff/dist/diff.min.js"></script>
@@ -115,9 +119,10 @@
        style, which beats every media query, and a window dragged across 780px has to re-clamp. */
     --prose-size:16.5px;
     --prose-floor:0px;
-    /* The reading measure: the width of the TEXT, the document's two 44px margins not included. One
-       of three the header cycles; the inline script in the head sets it on <html> before the first
-       paint, and this is what a browser with nothing stored reads. */
+    /* The reading measure: the width of the TEXT, the document's two 44px margins not included. A
+       number in em, from 26 up with no ceiling (past the column it is the column); the inline script
+       in the head sets it on <html> before the first paint, and this is what a browser with nothing
+       stored reads. */
     --measure:33em;
     /* ---------- the chrome's type scale ----------
        Six steps for the header, the folder panel, the rail, the cards, the toolbar, the popover, the
@@ -286,12 +291,26 @@
   #themeCtl .sw i { position:absolute; left:3px; right:3px; top:7px; height:2px; border-radius:var(--r-1);
     display:block; }
   #themeCtl .sep { height:1px; background:var(--line); margin:4px 2px; flex:none; }
-  /* The page-width icon reads the state it sets: its two rules sit where the column's edges do.
-     transform-box:fill-box so the scale is about the group's own bounds rather than the SVG origin. */
+  /* The page-width icon reads the state it sets: its two rules sit where the column's edges do, and
+     paintMeasure writes the scale inline from the number (Measure.iconScale) now that there are no
+     three states to name in CSS. transform-box:fill-box so the scale is about the group's own bounds
+     rather than the SVG origin. */
   #measureToggle .mwb { transform-box:fill-box; transform-origin:center; transition:transform .18s ease; }
-  :root[data-measure="narrow"] #measureToggle .mwb { transform:scaleX(.62); }
-  :root[data-measure="wide"] #measureToggle .mwb { transform:scaleX(1.18); }
   @media (prefers-reduced-motion: reduce) { #measureToggle .mwb { transition:none; } }
+  /* ---------- the page-width control ----------
+     The icon opens a slider rather than cycling three widths: the measure is a number now and the
+     column's edge is draggable (#docGrip), so this is the same setting reachable from the chrome, for
+     a reader who wants to see the number or has no pointer over the edge. The popover is the theme
+     menu's box; the slider runs from the floor to the column's full width at this window, and the
+     readout names the em and says "full" at the top of the range. */
+  #measureCtl { position:relative; display:flex; }
+  #measureCtl .menu { position:absolute; top:calc(100% + 6px); right:0; z-index:30; display:flex;
+    align-items:center; gap:10px; padding:10px 12px; background:var(--card); border:1px solid var(--line-2);
+    border-radius:var(--r-2); box-shadow:var(--shadow); white-space:nowrap; }
+  #measureCtl .menu[hidden] { display:none; }
+  #measureCtl input[type="range"] { width:150px; margin:0; accent-color:var(--ink); cursor:pointer; }
+  #measureCtl .readout { min-width:4.5em; text-align:right; color:var(--muted); font-variant-numeric:tabular-nums;
+    font:500 var(--t-1) 'Geist Mono', ui-monospace,SFMono-Regular,Menlo,monospace; }
   /* Two columns: the document and the review. It FILLS the frame rather than being capped and centred
      inside it. The 1280 cap used to be here, and on a wide window it cost twice over: a dead band of
      nothing to the right of the cards, and cards squeezed to 372px while that band sat beside them.
@@ -312,8 +331,23 @@
   /* While dragging, the cursor has to hold everywhere (the pointer leaves the 11px strip immediately)
      and nothing may select. The asset frame is a separate document that would otherwise swallow the
      pointer the moment the drag crossed it. */
-  body.rail-dragging, body.nav-dragging { cursor:col-resize; user-select:none; }
-  body.rail-dragging iframe, body.nav-dragging iframe { pointer-events:none; }
+  body.rail-dragging, body.nav-dragging, body.doc-dragging, body.col-dragging { cursor:col-resize; user-select:none; }
+  body.rail-dragging iframe, body.nav-dragging iframe, body.doc-dragging iframe { pointer-events:none; }
+  /* ---------- the document's own edge ----------
+     The measure's drag handle, on the document's right edge. Same contract as the two grips above: a
+     strip of grab area over the edge, a 1px line on hover, no track of its own. It is placed by JS
+     (layoutDocGrip) rather than by CSS, because the edge it sits on is the far side of a centred box
+     whose width is an em value resolved against the document's type size, and no selector outside #doc
+     can read that. It sits INSIDE the edge (ends on it, rather than straddling it) so that at full
+     width, where the document's edge is also the rail's, its left half is still under the pointer
+     and the rail's grip takes the right. */
+  #docGrip { position:absolute; top:0; bottom:0; width:10px; z-index:2; cursor:col-resize; touch-action:none; }
+  #docGrip::after { content:''; position:absolute; top:0; bottom:0; right:0; width:1px;
+    background:var(--ink); opacity:0; transition:opacity .15s ease; }
+  #docGrip:hover::after, #docGrip:focus-visible::after, body.doc-dragging #docGrip::after { opacity:.3; }
+  #docGrip:focus { outline:none; }
+  #docGrip[hidden] { display:none; }
+  @media (prefers-reduced-motion: reduce) { #docGrip::after, #railGrip::after, #navGrip::after { transition:none; } }
   /* Collapsed: the rail's track is gone, so the document column measures wider — which is why
      toggleRail re-runs the same relayout a window resize does. The panel's track stays; collapsing
      the two panels is two independent decisions. */
@@ -723,7 +757,18 @@
      overflow itself. */
   #doc table { display:block; width:max-content; max-width:100%; overflow-x:auto;
     border-collapse:collapse; margin:0 0 var(--doc-space-2); }
-  #doc td, #doc th { border:1px solid var(--line-2); padding:7px 11px; font-size:.909em; }
+  #doc td, #doc th { border:1px solid var(--line-2); padding:7px 11px; font-size:.909em; box-sizing:border-box; }
+  /* A column's width is a VIEW preference: dragged on a header cell's right edge, remembered per
+     document in localStorage (tablecols.js), put back after every render, and never written into the
+     markdown, which has nowhere to hold it. The width is an inline style on the header cell and that
+     is the whole mechanism, so border-box above is what makes the number the drag stores the width
+     the eye measured. The grab zone is not an element (the document is contenteditable and turndown
+     would have to be taught to ignore one); the page hit-tests the pointer against the header row and
+     paints this class on the cell whose edge is under it. The cue is the cell's own right border in
+     ink, which costs the row nothing: under border-collapse the left cell's right border is the one
+     drawn, and a colour change does not reflow. */
+  #doc th.col-grip { cursor:col-resize; border-right-color:var(--ink); }
+  body.col-dragging #doc, body.col-dragging #doc th { cursor:col-resize; }
   /* a document blockquote is CONTENT, not the agent — keep it monochrome (yellow is reserved) */
   #doc blockquote { border-left:2px solid var(--line-2); margin:0 0 var(--doc-space-2);
     padding-left:var(--doc-space-1); color:var(--muted); }
@@ -1186,6 +1231,9 @@
        a wide window must not take the sheet with it — hence the display:flex, which wins on source
        order against the same-specificity rule above. */
     #railGrip, #railToggle { display:none; }
+    /* The document's edge goes with them: the column is the window down here and the slider in the
+       header still sets the number where it can still change anything (a tablet held wide). */
+    #docGrip { display:none; }
     body.rail-collapsed aside { display:flex; }
     /* The panel is a drawer down here, for the same reason the rail is a sheet: there is one column
        and nothing to divide, so the grip goes rather than half-working. Its header button stays,
@@ -1315,9 +1363,9 @@
         aria-expanded="false" title="Theme: system" aria-label="Theme: system"></button>
       <div class="menu" id="themeMenu" role="menu" hidden></div>
     </div>
-    <!-- The page width. Three measures, cycled, and the icon's two rules move with them: the only
-         thing there is to say about this control is what it does to the column, and the column says
-         it the moment it moves. Prose only: paintZoom hides it on an asset, which has a zoom. -->
+    <!-- The page width. A number in em: the icon opens a slider from the floor to the column's full
+         width, and the document's own right edge (#docGrip) drags the same number. The icon's two
+         rules move with it. Prose only: paintZoom hides it on an asset, which has a zoom. -->
     <!-- The asset's zoom, in the slot the measure holds on prose: the two are opposites and never both
          apply, so one position in the bar answers "how wide is this drawn" for either kind. Pressed is
          natural size; at rest the asset is scaled into the column. Painted by paintZoom. -->
@@ -1325,11 +1373,17 @@
       title="Actual size" aria-label="Actual size"><svg viewBox="0 0 20 20" fill="none"
       stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
       <path d="M3.5 7.5v-4h4"/><path d="M16.5 7.5v-4h-4"/><path d="M3.5 12.5v4h4"/><path d="M16.5 12.5v4h-4"/></svg></button>
-    <button id="measureToggle" class="ghost iconbtn" onclick="cycleMeasure()"
-      title="Page width" aria-label="Page width"><svg viewBox="0 0 20 20" fill="none"
-      stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
-      <g class="mwb"><path d="M4 4.75v10.5"/><path d="M16 4.75v10.5"/>
-      <path d="M7.6 10h4.8" opacity=".45"/></g></svg></button>
+    <div id="measureCtl">
+      <button id="measureToggle" class="ghost iconbtn" onclick="toggleMeasureMenu()" aria-haspopup="dialog"
+        aria-expanded="false" title="Page width" aria-label="Page width"><svg viewBox="0 0 20 20" fill="none"
+        stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+        <g class="mwb"><path d="M4 4.75v10.5"/><path d="M16 4.75v10.5"/>
+        <path d="M7.6 10h4.8" opacity=".45"/></g></svg></button>
+      <div class="menu" id="measureMenu" role="dialog" aria-label="Page width" hidden>
+        <input type="range" id="measureRange" min="26" max="60" step="0.5" aria-label="Page width, in em of the document's type">
+        <span class="readout" id="measureReadout"></span>
+      </div>
+    </div>
     <!-- The document's type size. Four steps, cycled, and ⌘= / ⌘- / ⌘0 do the same thing from the
          keyboard, which is where this control actually gets used. Prose only, like the measure it sits
          beside: an asset has a zoom. -->
@@ -1419,6 +1473,9 @@
     <!-- Asset only: what the pointer is over inside the frame. See the frame's `hover` message. -->
     <div id="hoverHint" aria-hidden="true"></div>
   </div>
+  <!-- The document's own edge: the page width's drag handle, placed over #doc's right edge by
+       layoutDocGrip. Same contract as the two panel grips, and the same keyboard operation. -->
+  <div id="docGrip" role="separator" aria-orientation="vertical" aria-label="Page width" tabindex="0" hidden></div>
   <!-- The drag handle, between the two columns in reading order and placed over their boundary by CSS.
        role=separator + tabindex so it is operable without a pointer (see the keydown handler). -->
   <div id="railGrip" role="separator" aria-orientation="vertical" aria-label="Resize review panel" tabindex="0"></div>
@@ -1707,6 +1764,12 @@ function renderDoc() {
     doc.appendChild(el);
     b.md0 = toMd(el);   // baseline for tight-diff change detection
   });
+  // The column widths the reader dragged on this document's tables go back on AFTER every baseline is
+  // taken: a width is an inline style turndown never reads, so the baseline is the same either way,
+  // and this order keeps that true by construction rather than by trust. Every re-render comes through
+  // here (an accepted suggestion, a file changed on disk, a document swap), so this is the one place.
+  applyTableCols();
+  layoutDocGrip();
 }
 
 // A relative image path in the document is relative to the DOCUMENT, but the page lives at `/?f=…`,
@@ -4168,31 +4231,249 @@ function applyRailWidth(w, persist) {
 }
 // The document column just changed width: an asset re-scales to it, and every docked card re-measures
 // against its anchor. The same two calls the window resize listener makes, for the same reason.
-function relayoutDoc() { if (isAsset()) sizeFrame(); scheduleDock(); }
+function relayoutDoc() { if (isAsset()) sizeFrame(); scheduleDock(); layoutDocGrip(); }
+
+// ---------- a table's column widths ----------
+// A markdown table renders at the width its content wants, so a column with a lot of text is a thin
+// column with a lot of lines in it. The reader drags a boundary in the header row to set a column's
+// width, double-clicks it to let the column go, and the widths are REMEMBERED rather than saved:
+// GFM markdown has nowhere to hold one, so they are a view preference under `sc:tableCols:<path>`,
+// keyed by the table's ordinal in the document, and applyTableCols puts them back at the end of every
+// renderDoc. The store, the parse and the hit test are tablecols.js, which the Node tests read too.
+//
+// Nothing here touches the document as text. The width is an inline style on the header cell, which
+// turndown never reads, so the block's markdown is unchanged and the tight-diff serialize emits its
+// original bytes; a test round-trips a resized document and asserts as much. Nor does it fire the
+// editor's own path: `dirty` and scheduleSave are the input event's, and a style set from script fires
+// none. The document scrolls sideways past the column exactly as it did, since the table's box is
+// unchanged and only its content grew.
+//
+// There is no grab element. The document is contenteditable, and an element inside it would be a
+// thing the caret can land in, Backspace can delete and turndown has to be taught to ignore. So the
+// pointer is hit-tested against the header row's rects on the way past (TableCols.zone), the cell
+// whose edge is under it wears `col-grip` for the cursor and the cue, and a pointerdown there is
+// cancelled, which is what keeps it from placing a caret or starting a selection. Touch never sees
+// any of it: a finger has no hover to find a five-pixel zone with, and a cancelled pointerdown there
+// would only eat a scroll.
+let tableCols = {};       // this document's remembered widths, { [table]: { [col]: px } }
+const docTables = () => [...$('doc').querySelectorAll('table')];
+function applyTableCols() {
+  tableCols = TableCols.parse(uiStore.get(TableCols.key(FILE), ''));
+  TableCols.apply(docTables(), tableCols);
+}
+function saveTableCols() { uiStore.set(TableCols.key(FILE), TableCols.serialize(tableCols)); }
+// Which boundary the pointer is on, or null. Only a header cell's edge counts, so the closest() is
+// the whole cost on every move that is not over one.
+function colHit(e) {
+  if (e.pointerType === 'touch' || isAsset()) return null;
+  const cell = e.target && e.target.closest && e.target.closest('#doc th, #doc td');
+  if (!cell) return null;
+  const table = cell.closest('table');
+  const cells = TableCols.headerCells(table);
+  if (!cells.includes(cell)) return null;
+  const c = TableCols.zone(cells.map(x => x.getBoundingClientRect()), e.clientX, e.clientY);
+  if (c === -1) return null;
+  return { table, t: docTables().indexOf(table), c, cell: cells[c] };
+}
+(function colDrag() {
+  const doc = $('doc');
+  let hot = null;               // the cell wearing col-grip
+  let drag = null;              // { id, hit, x0, w0, moved }
+  let last = null;              // the previous pointerdown on a boundary, for the double-click
+  const paintHot = (cell) => {
+    if (hot === cell) return;
+    if (hot) hot.classList.remove('col-grip');
+    hot = cell;
+    if (hot) hot.classList.add('col-grip');
+  };
+  doc.addEventListener('pointermove', (e) => {
+    if (drag) {
+      if (e.pointerId !== drag.id) return;
+      const { hit } = drag;
+      // The first move pins the table's other columns where they are (TableCols.fill), so the one
+      // under the pointer is the only one that moves and the table scrolls for the rest. Held in
+      // memory until the drag ends; a press that goes nowhere pins nothing.
+      if (!drag.moved) {
+        const cells = TableCols.headerCells(hit.table);
+        tableCols = TableCols.fill(tableCols, hit.t, cells.map(x => x.getBoundingClientRect().width));
+        cells.forEach((cell, c) => { if (c !== hit.c) TableCols.setCell(cell, TableCols.width(tableCols, hit.t, c)); });
+        drag.moved = true;
+      }
+      TableCols.setCell(hit.cell, TableCols.resize(drag.w0, e.clientX - drag.x0));
+      return;
+    }
+    const hit = colHit(e);
+    paintHot(hit ? hit.cell : null);
+  });
+  doc.addEventListener('pointerleave', () => { if (!drag) paintHot(null); });
+  doc.addEventListener('pointerdown', (e) => {
+    const hit = colHit(e);
+    if (!hit || e.button !== 0) return;
+    e.preventDefault();         // no caret, no selection: the edge is the target, the text under it is not
+    const now = Date.now();
+    // Two presses on the same boundary inside a double-click's window let the column go. Detected
+    // here rather than on dblclick, which is a compatibility mouse event a cancelled pointerdown may
+    // or may not still produce, depending on the engine.
+    if (last && last.t === hit.t && last.c === hit.c && now - last.at < 400) {
+      last = null;
+      tableCols = TableCols.reset(tableCols, hit.t, hit.c);
+      TableCols.setCell(hit.cell, null);
+      saveTableCols();
+      scheduleDock();           // the table changed height, so every card below it moved
+      return;
+    }
+    last = { t: hit.t, c: hit.c, at: now };
+    drag = { id: e.pointerId, hit, x0: e.clientX, w0: hit.cell.getBoundingClientRect().width, moved: false };
+    try { doc.setPointerCapture(e.pointerId); } catch {}
+    document.body.classList.add('col-dragging');
+  });
+  const endDrag = (e) => {
+    if (!drag || (e && e.pointerId !== drag.id)) return;
+    try { doc.releasePointerCapture(drag.id); } catch {}
+    document.body.classList.remove('col-dragging');
+    const { hit, moved } = drag;
+    drag = null;
+    if (!moved) return;         // a press that went nowhere remembers nothing
+    // What is stored is the width actually on screen, since a drag past a cell's min-content pins
+    // there; a remembered width nobody has seen applied is not a preference.
+    tableCols = TableCols.set(tableCols, hit.t, hit.c, hit.cell.getBoundingClientRect().width);
+    TableCols.setCell(hit.cell, TableCols.width(tableCols, hit.t, hit.c));
+    saveTableCols();
+    scheduleDock();
+  };
+  doc.addEventListener('pointerup', endDrag);
+  doc.addEventListener('pointercancel', endDrag);
+})();
 
 // ---------- the page width ----------
-// Three measures, cycled from the header. The same three the inline script in the head knows, because
-// that one runs before the first paint and this one cannot: keep the pairs identical.
+// A number in em, from 26 up with no ceiling, set three ways that all land in applyMeasure: the
+// document's own right edge dragged (docDrag, below the rail's), the slider behind the header icon,
+// and the arrow keys on the edge. It used to be three names cycled from the header; the names still
+// read (Measure.LEGACY), and the arithmetic, the floor and the migration are all measure.js, which the
+// pre-paint stamp in <head> and the Node tests read too.
 //
-// Three rather than a slider, for the reason the asset's zoom is two: the question is how wide a line
-// of this document should be, and a reader answers it once and moves on. A slider asks it on every
-// pixel. The stored value is the NAME, so the day a measure is retuned every browser that chose it
-// gets the new width instead of a number nobody can read back.
-const MEASURES = [['narrow', '29em'], ['default', '33em'], ['wide', '39em']];
-const measureName = () => document.documentElement.dataset.measure || 'default';
-function applyMeasure(name) {
-  const m = MEASURES.find(x => x[0] === name) || MEASURES[1];
-  document.documentElement.dataset.measure = m[0];
-  document.documentElement.style.setProperty('--measure', m[1]);
-  try { localStorage.setItem('sidecar.measure', m[0]); } catch {}
+// The stored value stays under `sidecar.measure`, the key the three names lived under, so a reader's
+// choice survives the upgrade. Written straight to localStorage inside a try, as it always was, rather
+// than through uiStore: the key predates the `sc:` prefix and renaming it would cost every saved width.
+//
+// "Full width" is whatever the column is at this window, so the drag and the slider both clamp to it,
+// and a stored value wider than the column a later window offers is simply that column: #doc's
+// max-width is the measure plus its gutters and its width is auto, so past the column it is the column.
+let measureEm = Measure.read(localStorage);
+// The pixels the em resolves against, read off the live document: its type size (the em), its two
+// reading gutters (44px each on the desktop, 18px on a phone) and the column it is centred in. `full`
+// is the largest measure that changes anything at this window.
+function measureMetrics() {
+  const doc = $('doc'), cs = getComputedStyle(doc);
+  const fs = parseFloat(cs.fontSize) || 16.5;
+  const gutter = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+  const col = doc.parentElement.getBoundingClientRect();
+  return { fs, gutter, col, full: Measure.fullEm(col.width, gutter, fs) };
+}
+function applyMeasure(em, persist) {
+  measureEm = Measure.clamp(em);
+  document.documentElement.style.setProperty('--measure', measureEm + 'em');
+  // One write at the end of a drag rather than one per pointermove, the same as the rail.
+  if (persist) { try { localStorage.setItem(Measure.KEY, Measure.format(measureEm)); } catch {} }
+  paintMeasure();
   // The column just changed width, so every docked card is level with the wrong pixel until it
   // re-measures. Same call the rail's own drag makes, for the same reason.
   relayoutDoc();
 }
-function cycleMeasure() {
-  const i = MEASURES.findIndex(x => x[0] === measureName());
-  applyMeasure(MEASURES[(i + 1) % MEASURES.length][0]);
+// Everything that shows the number: the icon's two rules, the slider and its readout, the edge's
+// aria values. The slider's top is the column's full width at THIS window, re-read every paint, so
+// dragging its thumb to the end is the same "full" the edge reaches.
+function paintMeasure() {
+  const mwb = document.querySelector('#measureToggle .mwb');
+  if (mwb) mwb.style.transform = 'scaleX(' + Measure.iconScale(measureEm) + ')';
+  const range = $('measureRange'), out = $('measureReadout'), grip = $('docGrip');
+  if (!range) return;
+  const { full } = measureMetrics();
+  const max = Math.max(full, Measure.MIN + 1);
+  range.max = String(max);
+  range.value = String(Math.min(measureEm, max));
+  const isFull = Measure.isFull(measureEm, full);
+  if (out) out.textContent = isFull ? 'full' : measureEm + 'em';
+  const label = 'Page width: ' + (isFull ? 'full' : measureEm + 'em');
+  if (grip) {
+    grip.setAttribute('aria-valuenow', String(Math.min(measureEm, max)));
+    grip.setAttribute('aria-valuemin', String(Measure.MIN));
+    grip.setAttribute('aria-valuemax', String(max));
+    grip.title = label;
+  }
+  const btn = $('measureToggle');
+  if (btn) { btn.title = label; btn.setAttribute('aria-label', label); }
 }
+// Where the edge is. #doc is a centred box whose width is an em value resolved against its own type
+// size, so nothing outside it can place the handle in CSS: it is measured and set, on every relayout
+// (relayoutDoc), on resize, and on any change to the document's own size (the ResizeObserver below,
+// which also catches a font arriving late). Desktop and prose only, for the reason the rail's grip is:
+// below the breakpoint the column is the window, and an asset has a zoom instead of a measure.
+function layoutDocGrip() {
+  const grip = $('docGrip');
+  if (!grip) return;
+  const show = !!state && !isAsset() && railResizable();
+  grip.hidden = !show;
+  if (!show) return;
+  const main = $('main').getBoundingClientRect(), d = $('doc').getBoundingClientRect();
+  grip.style.left = Math.round(d.right - main.left - 10) + 'px';
+}
+function toggleMeasureMenu(force) {
+  const m = $('measureMenu');
+  const open = force === undefined ? m.hidden : !!force;
+  if (open) paintMeasure();     // the slider's top is the column NOW, not at the last paint
+  m.hidden = !open;
+  $('measureToggle').setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open) $('measureRange').focus();
+}
+// The slider moves the column live and writes once, on change, which fires when the thumb is let go.
+$('measureRange').addEventListener('input', (e) => applyMeasure(Number(e.target.value), false));
+$('measureRange').addEventListener('change', (e) => applyMeasure(Number(e.target.value), true));
+// Anything outside the control shuts it, the same way the theme menu closes.
+document.addEventListener('click', (e) => {
+  if (!$('measureMenu').hidden && !(e.target.closest && e.target.closest('#measureCtl'))) toggleMeasureMenu(false);
+});
+(function docDrag() {
+  const grip = $('docGrip');
+  let dragId = null, metrics = null;
+  grip.addEventListener('pointerdown', (e) => {
+    if (!railResizable() || isAsset()) return;
+    dragId = e.pointerId;
+    metrics = measureMetrics();       // the column does not move during the drag; read it once
+    grip.setPointerCapture(dragId);
+    document.body.classList.add('doc-dragging');
+    e.preventDefault();
+  });
+  grip.addEventListener('pointermove', (e) => {
+    if (dragId === null) return;
+    const { col, gutter, fs, full } = metrics;
+    // The document is centred, so its edge moving one pixel widens the text by two: the measure is
+    // twice the pointer's distance from the column's centre, less the gutters (Measure.fromEdge).
+    applyMeasure(Measure.fromEdge({ center: col.left + col.width / 2, x: e.clientX, gutter, fontSize: fs, max: full }), false);
+  });
+  const endDrag = () => {
+    if (dragId === null) return;
+    try { grip.releasePointerCapture(dragId); } catch {}
+    dragId = null;
+    document.body.classList.remove('doc-dragging');
+    applyMeasure(measureEm, true);    // one write at the end, not one per pointermove
+  };
+  grip.addEventListener('pointerup', endDrag);
+  grip.addEventListener('pointercancel', endDrag);
+  // Right widens, because right is the direction the edge travels. One em a step, four with shift,
+  // bounded by the column the way the drag is.
+  grip.addEventListener('keydown', (e) => {
+    if (!railResizable() || isAsset()) return;
+    const dir = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+    if (!dir) return;
+    applyMeasure(Measure.step(measureEm, dir, e.shiftKey, measureMetrics().full), true);
+    e.preventDefault();
+  });
+})();
+// The document's box changed size without a relayout being asked for: a font landed, the type size
+// stepped, the rail rested bare. The edge follows.
+if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => layoutDocGrip()).observe($('doc'));
+paintMeasure();
 
 // ---------- the document's type size ----------
 // Four steps, cycled from the header and stepped from the keyboard. The same four the inline script in

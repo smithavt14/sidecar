@@ -685,6 +685,49 @@ test('reindex refreshes baselines after a tight save so the next diff measures a
   assert.equal(again.tight, true);
 });
 
+// ---- a table's column widths never reach the file ----
+// A width the reader drags is an inline style on the header cell (public/tablecols.js). The document
+// is contenteditable and saves through turndown, so this is the one thing that has to stay true: a
+// document with resized columns serializes to the bytes it was loaded from, down the tight path and
+// the structural one, and an edit beside the table still leaves the table alone.
+const TableCols = require('./public/tablecols.js');   // the SAME file index.html loads via <script>
+test('a document with resized columns round-trips through serialize unchanged', () => {
+  const { doc, blocks, td } = buildDoc(RT_DOC);
+  const tables = [...doc.querySelectorAll('table')];
+  assert.equal(tables.length, 1);
+  TableCols.apply(tables, { 0: { 0: 240, 1: 96 } });
+  const ths = [...tables[0].querySelectorAll('th')];
+  assert.equal(ths[0].style.width, '240px', 'the width is on the header cell');
+  assert.equal(ths[0].style.minWidth, '240px', 'and so is the floor the container cannot take back');
+  assert.equal(ths[1].style.width, '96px');
+  const { md, tight } = Serialize.serialize(doc, blocks, td);
+  assert.equal(tight, true, 'a width is not an edit: every block still matches its baseline');
+  assert.equal(md, RT_DOC, 'byte-identical, so the width is nowhere in the file');
+  // The structural path too: a paragraph goes, the block count changes, and the resized table still
+  // emits its exact original bytes.
+  blockByText(doc, 'A second paragraph here.').remove();
+  const out = Serialize.serialize(doc, blocks, td);
+  assert.equal(out.tight, false);
+  assert.ok(out.md.includes(TABLE_SRC), 'the table is its original bytes, non-canonical spacing and all');
+  assert.doesNotMatch(out.md, /width|style/, 'nothing about a width is in the markdown');
+  // Releasing a column takes both properties off.
+  TableCols.apply(tables, {});
+  assert.equal(ths[0].getAttribute('style') || '', '');
+});
+
+test('editing a paragraph beside a resized table changes only the paragraph', () => {
+  const { doc, blocks, td } = buildDoc(RT_DOC);
+  TableCols.apply([...doc.querySelectorAll('table')], { 0: { 1: 300 } });
+  blockByText(doc, 'Intro paragraph with bold text.').innerHTML = '<p>Intro edited.</p>';
+  const { md, tight } = Serialize.serialize(doc, blocks, td);
+  assert.equal(tight, true);
+  assert.equal(md, RT_DOC.replace('Intro paragraph with **bold** text.', 'Intro edited.'));
+  // And the re-baseline after that save reads the same table markdown with the width still on it.
+  const next = Serialize.reindex(doc, blocks, md, require('marked').marked, td);
+  const tableBlock = next.find(b => b.token.type === 'table');
+  assert.ok(tableBlock && tableBlock.md0 && !/width/.test(tableBlock.md0));
+});
+
 // ---- the list keys (public/listkeys.js) under the same jsdom #doc, serialized by the same save path ----
 // The three rules a bare contenteditable does not have: Enter on an empty item, Backspace at the start
 // of one, Tab and Shift+Tab. Every case below asserts BOTH halves — the DOM the transform leaves and the
@@ -7809,4 +7852,188 @@ test('Back restores a final asset fragment below the header on a fresh document 
       'the additional tail belongs to HTML assets only');
     incoming.dom.window.close();
   }
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+   THE PAGE WIDTH AS A NUMBER (public/measure.js)
+   Three named widths became one number in em, dragged on the document's own
+   edge or set from a slider, stored under the key the names lived under.
+   ──────────────────────────────────────────────────────────────────────────── */
+const Measure = require('./public/measure.js');   // the SAME file index.html loads in <head>
+
+test('the measure reads the three old names as the widths they were, and a number as itself', () => {
+  assert.equal(Measure.KEY, 'sidecar.measure', 'the key the names lived under, so a saved choice survives');
+  assert.equal(Measure.parse('narrow'), 29);
+  assert.equal(Measure.parse('default'), 33);
+  assert.equal(Measure.parse('wide'), 39);
+  assert.equal(Measure.parse('45'), 45);
+  assert.equal(Measure.parse('30.5'), 30.5);
+  assert.equal(Measure.parse('30.3'), 30.5, 'half-em steps');
+  assert.equal(Measure.parse(null), 33, 'nothing stored is the default');
+  assert.equal(Measure.parse(''), 33);
+  assert.equal(Measure.parse('constructor'), 33, 'a stored prototype name is not a width');
+  assert.equal(Measure.parse('10'), 33, 'under the floor is not honoured');
+  assert.equal(Measure.parse('99px; }'), 33, 'junk never reaches the style attribute');
+  assert.ok(Measure.parse('1000') === 1000, 'and there is no ceiling: past the column it is the column');
+  assert.equal(Measure.MIN, 26);
+  assert.equal(Measure.DEFAULT, 33);
+});
+
+test('the stamp applies the measure before the first paint, and falls back without the module', () => {
+  assert.ok(PAGE.indexOf('src="/measure.js"') < PAGE.indexOf('Measure.read(localStorage)'),
+    'the module is loaded before the stamp that calls it');
+  assert.ok(PAGE.indexOf('Measure.read(localStorage)') < PAGE.indexOf('<style>'), 'and both are ahead of the stylesheet');
+  const run = (cell, withModule) => {
+    const doc = new JSDOM('<!doctype html><html><body></body></html>').window.document;
+    new Function('localStorage', 'document', 'Themes', 'Measure', STAMP)(
+      { getItem: (k) => (k in cell ? cell[k] : null) }, doc, Themes, withModule ? Measure : undefined);
+    return doc.documentElement.style.getPropertyValue('--measure');
+  };
+  assert.equal(run({ 'sidecar.measure': 'wide' }, true), '39em', 'a name from before the upgrade');
+  assert.equal(run({ 'sidecar.measure': '48.5' }, true), '48.5em', 'a number');
+  assert.equal(run({}, true), '33em');
+  assert.equal(run({ 'sidecar.measure': 'wide' }, false), '33em', 'no module: the default rather than no column');
+  assert.doesNotMatch(PAGE, /data-measure|dataset\.measure/, 'the three named states are gone from the page');
+  assert.doesNotMatch(PAGE, /cycleMeasure/, 'and so is the cycle');
+});
+
+test('a drag on the document edge is twice the pointer\'s travel, clamped to the column', () => {
+  // A 1000px column centred on 500, 88px of gutters, 16.5px type. The default 33em puts the edge at
+  // 500 + (33 × 16.5 + 88) / 2 = 816.25, and moving it one pixel widens the text by two.
+  const full = Measure.fullEm(1000, 88, 16.5);
+  assert.equal(full, 55.5, 'the widest measure that changes anything at this column');
+  const m = { center: 500, gutter: 88, fontSize: 16.5, max: full };
+  assert.equal(Measure.fromEdge({ ...m, x: 816.25 }), 33);
+  assert.equal(Measure.fromEdge({ ...m, x: 900 }), 43);
+  assert.equal(Measure.fromEdge({ ...m, x: 600 }), 26, 'the floor');
+  assert.equal(Measure.fromEdge({ ...m, x: 5000 }), full, 'pinned at the column');
+  assert.equal(Measure.fromEdge({ ...m, x: 900, fontSize: 0 }), 33, 'no type size to resolve against is the default');
+  assert.ok(Measure.isFull(55.5, full));
+  assert.ok(Measure.isFull(55, full), 'within an em of the column reads as full: a scrollbar moves the column that much');
+  assert.ok(!Measure.isFull(50, full));
+  assert.equal(Measure.step(33, 1, false, full), 34, 'one em a key');
+  assert.equal(Measure.step(33, 1, true, full), 37, 'four with shift');
+  assert.equal(Measure.step(26, -1, false, full), 26, 'held at the floor');
+  assert.equal(Measure.step(55, 1, true, full), 55.5, 'and at the column');
+  assert.equal(Measure.format(33.26), '33.5', 'stored on the half em');
+  assert.equal(Measure.iconScale(33), 1, 'the icon rests at the default');
+  assert.ok(Measure.iconScale(26) < 1 && Measure.iconScale(39) > 1, 'and moves in and out with the column');
+  assert.equal(Measure.iconScale(200), 1.35, 'without drawing its rules off the button');
+  const doc = new JSDOM('<!doctype html><html><body></body></html>').window.document;
+  assert.equal(Measure.boot(doc, { getItem: () => 'narrow' }), 29);
+  assert.equal(doc.documentElement.style.getPropertyValue('--measure'), '29em');
+  assert.equal(Measure.boot(doc, { getItem: () => { throw new Error('private mode'); } }), 33, 'a throwing store is the default');
+});
+
+test('the page writes the measure under its old key, and the edge follows every relayout', () => {
+  assert.match(PAGE, /localStorage\.setItem\(Measure\.KEY, Measure\.format\(measureEm\)\)/,
+    'one write, at the end of a drag, under the key the names used');
+  assert.match(PAGE, /function relayoutDoc\(\) \{ if \(isAsset\(\)\) sizeFrame\(\); scheduleDock\(\); layoutDocGrip\(\); \}/,
+    'the edge is placed by the same call every column change already makes');
+  assert.match(PAGE, /<div id="docGrip" role="separator" aria-orientation="vertical"[^>]*tabindex="0"/,
+    'a separator, operable from the keyboard like the two panel grips');
+  assert.ok(PAGE.indexOf('id="measureToggle"') < PAGE.indexOf('id="measureRange"')
+    && PAGE.indexOf('id="measureRange"') < PAGE.indexOf('id="proseToggle"'),
+    'the icon opens the slider, in the slot the width has always had');
+  assert.match(PAGE, /<input type="range" id="measureRange" min="26"/, 'the slider starts at the floor');
+  assert.match(MOBILE, /#docGrip \{ display:none; \}/, 'no edge below the breakpoint, like the two panel grips');
+  assert.match(STYLE, /body\.rail-dragging iframe, body\.nav-dragging iframe, body\.doc-dragging iframe \{ pointer-events:none; \}/,
+    'an asset frame cannot swallow the drag');
+  assert.match(STYLE, /#doc \{[\s\S]*?max-width:calc\(var\(--measure\) \+ 88px\)/,
+    'the em still resolves against #doc\'s own size, so the type scale rule holds');
+  const block = PAGE.slice(PAGE.indexOf('// ---------- the page width ----------'),
+    PAGE.indexOf('// ---------- the document\'s type size ----------'));
+  assert.match(block, /if \(!railResizable\(\) \|\| isAsset\(\)\) return;/, 'desktop and prose only, the rail\'s own guard');
+  assert.match(block, /new ResizeObserver\(\(\) => layoutDocGrip\(\)\)\.observe\(\$\('doc'\)\)/,
+    'and the edge follows a size change nobody asked a relayout for');
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+   A TABLE'S COLUMN WIDTHS (public/tablecols.js)
+   A view preference: dragged on a header cell's edge, remembered per document
+   and table ordinal, put back after every render, never in the markdown.
+   ──────────────────────────────────────────────────────────────────────────── */
+test('column widths parse strictly, store sparsely, and pin the row on the first move', () => {
+  assert.deepEqual(TableCols.parse(''), {});
+  assert.deepEqual(TableCols.parse('nope'), {});
+  assert.deepEqual(TableCols.parse('[1]'), {});
+  assert.deepEqual(TableCols.parse('{"a":{"0":100}}'), {}, 'a table is an ordinal');
+  assert.deepEqual(TableCols.parse('{"0":{"1":120,"x":5,"2":"120","3":10}}'), { 0: { 1: 120 } },
+    'a column is an ordinal, a width is an integer, and under the floor is dropped: it is echoed into a style');
+  let w = TableCols.set({}, 0, 1, 120.4);
+  assert.deepEqual(w, { 0: { 1: 120 } });
+  w = TableCols.set(w, 0, 0, 10);
+  assert.equal(TableCols.width(w, 0, 0), TableCols.MIN_COL, 'floored');
+  assert.equal(TableCols.width(w, 2, 0), null);
+  w = TableCols.reset(w, 0, 1);
+  assert.deepEqual(w, { 0: { 0: 48 } });
+  w = TableCols.reset(w, 0, 0);
+  assert.deepEqual(w, {}, 'an emptied table leaves no key behind');
+  assert.deepEqual(TableCols.reset({}, 3, 3), {});
+  assert.equal(TableCols.serialize({}), '', 'nothing remembered stores nothing');
+  assert.equal(TableCols.serialize({ 0: { 1: 120 } }), '{"0":{"1":120}}');
+  assert.deepEqual(TableCols.fill({ 0: { 1: 300 } }, 0, [95, 191, 197, 61]), { 0: { 0: 95, 1: 300, 2: 197, 3: 61 } },
+    'every column pinned where it measures, except the one already remembered');
+  const before = { 0: { 1: 300 } };
+  TableCols.set(before, 0, 2, 50);
+  assert.deepEqual(before, { 0: { 1: 300 } }, 'set returns a new object rather than writing into the old one');
+  assert.equal(TableCols.key('a/b.md'), 'tableCols:a/b.md', 'per document');
+});
+
+test('the grab zone is five pixels either side of a header cell\'s right edge, the last edge included', () => {
+  const rects = [{ left: 0, right: 100, top: 0, bottom: 30 }, { left: 100, right: 250, top: 0, bottom: 30 },
+    { left: 250, right: 300, top: 0, bottom: 30 }];
+  assert.equal(TableCols.BAND, 5);
+  assert.equal(TableCols.zone(rects, 98, 10), 0, 'the last pixels of a cell');
+  assert.equal(TableCols.zone(rects, 104, 10), 0, 'and the first of the next belong to the same boundary');
+  assert.equal(TableCols.zone(rects, 106, 10), -1);
+  assert.equal(TableCols.zone(rects, 50, 10), -1, 'the middle of a cell is text');
+  assert.equal(TableCols.zone(rects, 299, 10), 2, 'the last column\'s edge is how the table grows');
+  assert.equal(TableCols.zone(rects, 100, 40), -1, 'outside the header row is not a boundary');
+  assert.equal(TableCols.zone(rects, 98, 10, 1), -1, 'the band is a parameter');
+  assert.equal(TableCols.resize(200, -30), 170);
+  assert.equal(TableCols.resize(200, -500), TableCols.MIN_COL, 'a drag past the floor pins there');
+});
+
+test('apply puts a width and a floor on the header cell, and takes both off', () => {
+  const { window } = new JSDOM('<!doctype html><div id="doc">'
+    + '<table><thead><tr><th>a</th><th>b</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table>'
+    + '<table><tbody><tr><td>x</td><td>y</td></tr></tbody></table></div>');
+  const tables = [...window.document.querySelectorAll('table')];
+  TableCols.apply(tables, { 0: { 1: 120 }, 1: { 0: 70 } });
+  const ths = [...tables[0].querySelectorAll('th')];
+  assert.equal(ths[0].getAttribute('style'), null, 'a column with nothing remembered carries nothing');
+  assert.equal(ths[1].style.width, '120px');
+  assert.equal(ths[1].style.minWidth, '120px', 'the floor is what lets the table grow past its container and scroll');
+  assert.equal(TableCols.headerCells(tables[1]).length, 2, 'a table with no <thead> uses its first row');
+  assert.equal(tables[1].querySelector('td').style.width, '70px');
+  assert.equal(tables[0].querySelector('td').getAttribute('style'), null, 'body cells are never touched');
+  TableCols.apply(tables, {});
+  assert.equal(ths[1].getAttribute('style') || '', '', 'released: both properties gone');
+  assert.equal(tables[1].querySelector('td').getAttribute('style') || '', '');
+});
+
+test('the page re-applies the widths after every render, after the baselines, and never through the save path', () => {
+  assert.match(PAGE, /<script src="\/tablecols\.js">/, 'the same file the tests require');
+  const render = PAGE.match(/function renderDoc\(\) \{[\s\S]*?\n\}/)[0];
+  assert.ok(render.indexOf('b.md0 = toMd(el)') > -1 && render.indexOf('b.md0 = toMd(el)') < render.indexOf('applyTableCols()'),
+    'widths go on after every block has its baseline, so a width can never read as an edit');
+  assert.match(PAGE, /function applyTableCols\(\) \{\n  tableCols = TableCols\.parse\(uiStore\.get\(TableCols\.key\(FILE\), ''\)\);/,
+    'read per document, so a swap loads the incoming document\'s widths');
+  const block = PAGE.slice(PAGE.indexOf('// ---------- a table\'s column widths ----------'),
+    PAGE.indexOf('// ---------- the page width ----------'));
+  assert.ok(block.length > 0);
+  // The comments name the save path to say it is not used; the code must not.
+  const code = block.replace(/^\s*\/\/.*$/gm, '');
+  assert.doesNotMatch(code, /dirty|scheduleSave|saveDoc|flushSave/,
+    'a resize is a view preference: nothing here reaches the editor\'s save path');
+  assert.match(block, /e\.pointerType === 'touch'/, 'touch never sees a handle');
+  assert.match(block, /e\.preventDefault\(\);\s+\/\/ no caret/, 'a press on a boundary places no caret');
+  assert.match(block, /uiStore\.set\(TableCols\.key\(FILE\), TableCols\.serialize\(tableCols\)\)/, 'per document, under the sc: prefix');
+  assert.match(block, /TableCols\.fill\(tableCols, hit\.t,/, 'the first move pins the rest of the row');
+  assert.match(STYLE, /#doc th\.col-grip \{ cursor:col-resize; border-right-color:var\(--ink\); \}/,
+    'the cue is the cell\'s own border in ink, which reflows nothing');
+  assert.match(STYLE, /#doc td, #doc th \{[^}]*box-sizing:border-box;/, 'so the stored number is the width the eye measured');
+  assert.match(STYLE, /#doc table \{ display:block; width:max-content; max-width:100%; overflow-x:auto;/,
+    'a table wider than the column still scrolls in its own box');
 });
