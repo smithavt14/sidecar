@@ -81,9 +81,23 @@
   // past it and scrolls, which is what a wider column asked for. Measured in headless Chrome against
   // the live page before either was chosen. Narrowing stops at the cell's own min-content either
   // way, so a word never breaks.
+  //
+  // Only what this module set is ever taken off. A raw-HTML block can carry a width its author wrote,
+  // and a release that stripped every header cell would strip that too; so the first set records
+  // the cell's own inline width and floor in `data-sc-col`, and a release puts them back and drops
+  // the mark. A cell without the mark is left exactly as it was.
+  const MARK = 'data-sc-col';
   function setCell(cell, px) {
-    if (px) { cell.style.width = px + 'px'; cell.style.minWidth = px + 'px'; }
-    else { cell.style.removeProperty('width'); cell.style.removeProperty('min-width'); }
+    if (px) {
+      if (!cell.hasAttribute(MARK)) cell.setAttribute(MARK, JSON.stringify([cell.style.width || '', cell.style.minWidth || '']));
+      cell.style.width = px + 'px'; cell.style.minWidth = px + 'px';
+    } else if (cell.hasAttribute(MARK)) {
+      let own = ['', ''];
+      try { own = JSON.parse(cell.getAttribute(MARK)); } catch (e) {}
+      if (own[0]) cell.style.width = own[0]; else cell.style.removeProperty('width');
+      if (own[1]) cell.style.minWidth = own[1]; else cell.style.removeProperty('min-width');
+      cell.removeAttribute(MARK);
+    }
   }
   // Put the remembered widths on the tables, in document order, and take them off cells that have
   // none remembered. Runs after every render, which is what makes a width survive one.

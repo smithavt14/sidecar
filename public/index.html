@@ -4298,6 +4298,7 @@ function colHit(e) {
         tableCols = TableCols.fill(tableCols, hit.t, cells.map(x => x.getBoundingClientRect().width));
         cells.forEach((cell, c) => { if (c !== hit.c) TableCols.setCell(cell, TableCols.width(tableCols, hit.t, c)); });
         drag.moved = true;
+        last = null;            // a drag is not the first click of a double-click
       }
       TableCols.setCell(hit.cell, TableCols.resize(drag.w0, e.clientX - drag.x0));
       return;
@@ -4359,7 +4360,9 @@ function colHit(e) {
 // "Full width" is whatever the column is at this window, so the drag and the slider both clamp to it,
 // and a stored value wider than the column a later window offers is simply that column: #doc's
 // max-width is the measure plus its gutters and its width is auto, so past the column it is the column.
-let measureEm = Measure.read(localStorage);
+// The identifier itself is guarded, not only the getItem inside Measure.read: a browser that blocks
+// site data throws on touching `localStorage` at all, and the stamp in <head> wraps it the same way.
+let measureEm = (() => { try { return Measure.read(localStorage); } catch { return Measure.DEFAULT; } })();
 // The pixels the em resolves against, read off the live document: its type size (the em), its two
 // reading gutters (44px each on the desktop, 18px on a phone) and the column it is centred in. `full`
 // is the largest measure that changes anything at this window.
@@ -4471,8 +4474,14 @@ document.addEventListener('click', (e) => {
   });
 })();
 // The document's box changed size without a relayout being asked for: a font landed, the type size
-// stepped, the rail rested bare. The edge follows.
-if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => layoutDocGrip()).observe($('doc'));
+// stepped, the rail rested bare. The edge follows. The COLUMN is observed as well as the document,
+// because a capped document re-centres in a column that grew without changing size itself, and an
+// observer on #doc alone left the edge at the old x. The window resize listener re-places it too.
+if (typeof ResizeObserver !== 'undefined') {
+  const ro = new ResizeObserver(() => layoutDocGrip());
+  ro.observe($('doc'));
+  ro.observe($('doc').parentElement);
+}
 paintMeasure();
 
 // ---------- the document's type size ----------
@@ -5328,6 +5337,7 @@ window.addEventListener('resize', () => {
   paintNavToggle();          // the button means "collapse" above the breakpoint and "open" below it
   if (isAsset()) sizeFrame();
   scheduleDock();
+  layoutDocGrip();           // the column moved under a capped document, which re-centred without resizing
 });
 // Everything in the document that stands for this item: its prose highlights, or the diagram node
 // standing in for them. One helper so jumping, flashing and docking can never disagree about where an

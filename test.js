@@ -7944,8 +7944,11 @@ test('the page writes the measure under its old key, and the edge follows every 
   const block = PAGE.slice(PAGE.indexOf('// ---------- the page width ----------'),
     PAGE.indexOf('// ---------- the document\'s type size ----------'));
   assert.match(block, /if \(!railResizable\(\) \|\| isAsset\(\)\) return;/, 'desktop and prose only, the rail\'s own guard');
-  assert.match(block, /new ResizeObserver\(\(\) => layoutDocGrip\(\)\)\.observe\(\$\('doc'\)\)/,
-    'and the edge follows a size change nobody asked a relayout for');
+  assert.match(block, /const ro = new ResizeObserver\(\(\) => layoutDocGrip\(\)\);\s+ro\.observe\(\$\('doc'\)\);\s+ro\.observe\(\$\('doc'\)\.parentElement\);/,
+    'and the edge follows a size change nobody asked a relayout for, of the document or of its column');
+  assert.match(PAGE, /scheduleDock\(\);\n  layoutDocGrip\(\);\s+\/\/ the column moved/, 'and a window resize re-places it');
+  assert.match(block, /try \{ return Measure\.read\(localStorage\); \} catch \{ return Measure\.DEFAULT; \}/,
+    'touching localStorage at all is guarded, as the stamp guards it');
 });
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -8011,6 +8014,19 @@ test('apply puts a width and a floor on the header cell, and takes both off', ()
   TableCols.apply(tables, {});
   assert.equal(ths[1].getAttribute('style') || '', '', 'released: both properties gone');
   assert.equal(tables[1].querySelector('td').getAttribute('style') || '', '');
+  assert.equal(ths[1].hasAttribute('data-sc-col'), false, 'and the mark goes with them');
+  // A width an author wrote into a raw-HTML table is not this module's to remove: a release puts it
+  // back, and a cell the module never set is never touched.
+  ths[0].setAttribute('style', 'width: 30%; min-width: 80px;');
+  ths[1].setAttribute('style', 'width: 12em;');
+  TableCols.apply(tables, { 0: { 0: 200 } });
+  assert.equal(ths[0].style.width, '200px');
+  assert.equal(ths[1].style.width, '12em', 'nothing remembered for it, so its own width stays');
+  TableCols.apply(tables, {});
+  assert.equal(ths[0].style.width, '30%', 'released: the author\'s width is back');
+  assert.equal(ths[0].style.minWidth, '80px', 'and the author\'s floor');
+  assert.equal(ths[1].style.width, '12em');
+  assert.equal(tables[0].querySelector('[data-sc-col]'), null);
 });
 
 test('the page re-applies the widths after every render, after the baselines, and never through the save path', () => {
