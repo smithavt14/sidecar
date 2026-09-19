@@ -5,7 +5,7 @@ For *driving* sidecar as an agent (reviewing a document with a human), see
 
 ## Shape
 
-No build step. Twenty-four files carry the whole tool:
+No build step. Twenty-six files carry the whole tool:
 
 | File | What it is |
 |---|---|
@@ -32,6 +32,8 @@ No build step. Twenty-four files carry the whole tool:
 | `public/serialize.js` | The tight-diff serialize/reindex round-trip, shared with the Node tests. |
 | `public/flow.js` | ```flow fences → SVG. Pure string in/out; no DOM, no dependency. |
 | `public/assetframe.js` | An asset's HTML → the sandboxed frame's srcdoc: the sanitize profile, the `/assets` rewriting, the picker inlining. |
+| `public/measure.js` | The reading measure as a number in em: the migration from the three old names, the floor, and the arithmetic the edge drag and the slider run. Loaded in `<head>` ahead of the pre-paint stamp, like `themes.js`. |
+| `public/tablecols.js` | A table's column widths as a view preference: the per-document store, the apply onto header cells, and the hit test for a boundary. Pure; never touches the markdown. |
 | `public/picker.js` | The ONE script that runs inside an asset frame. Picks, cues, geometry, and the postMessage protocol. |
 
 ## Two document kinds, two anchor kinds
@@ -365,11 +367,13 @@ hover title in the UI.
   Keep that when you change the surrounding code; delete them when the reason stops being true.
 - Layout preferences (each panel's width, whether it is collapsed, whether the review rail's width was
   set by hand rather than filled, how dense the rail draws its cards, an asset's zoom, the directory
-  panel's sort one key per folder, typewriter scrolling, and the theme, which is a mode plus one theme
-  per scheme) persist in `localStorage`
+  panel's sort one key per folder, typewriter scrolling, a table's column widths one key per document,
+  and the theme, which is a mode plus one theme per scheme) persist in `localStorage`
   under an `sc:` prefix, through the wrapped `uiStore`. Safari in private mode throws
   on `setItem`, and nothing about a preference is worth an exception on the path that renders the
-  review. Document and review state never go there; those are files.
+  review. Document and review state never go there; those are files. The one key without the prefix
+  is the page width, `sidecar.measure`, which predates it and keeps its name so a saved width
+  survives; it holds a number in em now and still reads the three names it used to hold.
 - The shell is the panel fixed to the window, the document inset past it, and the review rail taking
   whatever width is left over, up to 520px. The measure the old 1280px cap was protecting belongs to
   the document, so the document carries it (908px) and the rail fills the rest. `sc:railPinned` is
