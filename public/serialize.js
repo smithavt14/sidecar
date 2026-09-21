@@ -20,6 +20,22 @@
       return node.__md;
     }
     const clone = node.cloneNode(true);
+    // A pending suggestion is PREVIEWED in the document, at its anchor, showing text nobody has accepted
+    // yet. `#doc` is contenteditable and this function is the save path, so a preview left in the clone
+    // would write the un-accepted proposal into the file, the one bug this feature cannot ship with.
+    // Two node kinds, removed in this order because the order is the difference between them:
+    // `sugview="new"` is preview-only and goes entirely, while `sugview="old"` is the ORIGINAL text
+    // wrapped so CSS can hide it, and is unwrapped back to exactly the nodes that were there. What is
+    // left is the document without the preview, byte for byte (test.js pins that for every view).
+    //
+    // The attribute is `sugview` and NOT `data-sugview`, which is the whole of its safety: DOMPurify
+    // drops an unknown bare attribute from everything that goes through the render path, and keeps
+    // `data-*` and `class`. So a document whose own inline HTML reads `<span data-sugview="new">keep
+    // me</span>` renders with that attribute intact, and a serializer that deleted on it would delete
+    // the author's words. Nothing in a document can carry `sugview`; only this code sets it, on nodes it
+    // built itself, after sanitizing. Same mechanism `contenteditable` already relies on.
+    clone.querySelectorAll('[sugview="new"]').forEach(n => n.remove());
+    clone.querySelectorAll('[sugview="old"]').forEach(s => s.replaceWith(...s.childNodes));
     clone.querySelectorAll('mark.anchor').forEach(m => m.replaceWith(...m.childNodes)); // locate highlights never save
     // Strip any ​ caret-escape left by an inline input rule (see tryInlineRule); it's invisible and never saved.
     return td.turndown(clone.innerHTML).replace(/​/g, '').replace(/\n{3,}/g, '\n\n').trim();

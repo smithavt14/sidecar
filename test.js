@@ -728,6 +728,343 @@ test('editing a paragraph beside a resized table changes only the paragraph', ()
   assert.ok(tableBlock && tableBlock.md0 && !/width/.test(tableBlock.md0));
 });
 
+// ---- a pending suggestion previewed IN the document never reaches the file ----
+// The proposal is drawn at its anchor now, inside the mark, which puts un-accepted text inside a
+// contenteditable that serializes to markdown. These are the tests that say it cannot escape: a document
+// carrying a preview serializes byte-identically to the same document without one, in every view, for an
+// edit, for a rewrite, and for a span crossing two blocks.
+const Sugview = require('./public/sugview.js');   // the SAME file index.html loads via <script>
+
+// The DOM shape index.html's wrapAnchor + buildPreview produce, built here over a jsdom #doc: the
+// original text nodes wrapped in `[sugview="old"]` inside the mark, and the proposal in a separate
+// `[sugview="new"]` node placed as a SIBLING after the last mark, hoisted clear of any inline
+// formatting the span started inside. The attribute is the contract public/serialize.js strips on, so a
+// change to either side fails these rather than writing a proposal into somebody's file.
+const INLINE_WRAP = 'strong,b,em,i,a,code,s,del,ins,u,sub,sup,small,abbr,span,mark';
+function hoistPoint(doc, mark) {
+  const block = mark.closest('.block') || doc;
+  let node = mark;
+  while (node.parentElement && node.parentElement !== block && node.parentElement.matches(INLINE_WRAP)) {
+    if (node !== node.parentElement.lastChild) return null;
+    node = node.parentElement;
+  }
+  return node;
+}
+function addPreview(win, doc, quote, replacement, { view = 'new', id = 's1' } = {}) {
+  const walker = doc.ownerDocument.createTreeWalker(doc, win.NodeFilter.SHOW_TEXT);
+  const nodes = []; let full = '';
+  while (walker.nextNode()) { nodes.push({ node: walker.currentNode, start: full.length }); full += walker.currentNode.textContent; }
+  const hit = Anchor.findNth(full, quote, 0);
+  assert.ok(hit, 'the fixture must contain the quote being suggested on: ' + quote);
+  const marks = [];
+  for (const { node, start: ns } of nodes) {
+    const ne = ns + node.textContent.length;
+    if (ne <= hit.start || ns >= hit.end) continue;
+    const s = Math.max(0, hit.start - ns), e = Math.min(node.textContent.length, hit.end - ns);
+    const slice = node.textContent.slice(s, e);
+    if (!slice.trim() && slice.includes('\n')) continue;
+    const r = doc.ownerDocument.createRange(); r.setStart(node, s); r.setEnd(node, e);
+    const mark = doc.ownerDocument.createElement('mark');
+    mark.className = 'anchor'; mark.dataset.id = id; mark.setAttribute('contenteditable', 'false');
+    r.surroundContents(mark); marks.push(mark);
+  }
+  const kind = Sugview.classify(quote, replacement);
+  const at = hoistPoint(doc, marks[marks.length - 1]);
+  if (!at) return { marks, kind, nu: null };
+  for (const m of marks) {
+    const old = doc.ownerDocument.createElement('span');
+    old.className = 'sug-old';
+    old.setAttribute('sugview', 'old');
+    while (m.firstChild) old.appendChild(m.firstChild);
+    m.appendChild(old);
+    m.dataset.sug = id; m.dataset.sugKind = kind;
+    m.classList.add('sug-view-' + (kind === 'edit' ? 'edit' : view));
+  }
+  const nu = doc.ownerDocument.createElement('span');
+  nu.className = 'sug-new sug-view-' + (kind === 'edit' ? 'edit' : view);
+  nu.setAttribute('sugview', 'new');
+  nu.dataset.sug = id;
+  nu.setAttribute('contenteditable', 'false');
+  nu.innerHTML = kind === 'edit'
+    ? '<del>' + quote + '</del><ins>' + replacement + '</ins>'
+    : replacement;
+  at.parentNode.insertBefore(nu, at.nextSibling);
+  return { marks, kind, nu };
+}
+
+const PREVIEW_DOC = [
+  '# Heading One', '',
+  'The quick brown fox jumps over the lazy dog. It was a fine morning.', '',
+  'A second paragraph here.', '',
+  '| Name | Value |', '|------|-------|', '| x    | y     |', '',
+  'Closing paragraph.', '',
+].join('\n');
+
+test('a previewed edit serializes to the same bytes as a document with no preview', () => {
+  const { window, doc, blocks, td } = buildDoc(PREVIEW_DOC);
+  const before = Serialize.serialize(doc, blocks, td);
+  assert.equal(before.md, PREVIEW_DOC);
+  const { kind } = addPreview(window, doc, 'the lazy dog', 'the sleeping dog');
+  assert.equal(kind, 'edit', 'two words out of three is a small change');
+  assert.ok(doc.querySelector('[sugview="new"]'), 'the proposal really is in the DOM');
+  const after = Serialize.serialize(doc, blocks, td);
+  assert.equal(after.tight, true, 'injecting a preview must not read as an edit to the block');
+  assert.equal(after.md, PREVIEW_DOC, 'byte-identical: the proposal is nowhere in the file');
+  assert.ok(!after.md.includes('sleeping'), 'and the proposed words are not in it');
+});
+
+test('a previewed rewrite serializes unchanged in both of its views', () => {
+  const quote = 'The quick brown fox jumps over the lazy dog. It was a fine morning.';
+  const replacement = 'A grey heron waited at the river edge. Nothing moved for an hour.';
+  for (const view of ['new', 'original']) {
+    const { window, doc, blocks, td } = buildDoc(PREVIEW_DOC);
+    const { kind } = addPreview(window, doc, quote, replacement, { view });
+    assert.equal(kind, 'rewrite', 'a two-sentence replacement of a two-sentence quote is a rewrite');
+    const { md, tight } = Serialize.serialize(doc, blocks, td);
+    assert.equal(tight, true, view + ': still the tight path');
+    assert.equal(md, PREVIEW_DOC, view + ': byte-identical to the source');
+    assert.ok(!md.includes('heron'), view + ': the proposal is not in the file');
+    assert.ok(md.includes(TABLE_SRC), view + ': the untouched table is still its own bytes');
+  }
+});
+
+test('a preview on a span crossing two blocks leaves both blocks byte-identical', () => {
+  const { window, doc, blocks, td } = buildDoc(PREVIEW_DOC);
+  // One quote, two paragraphs: wrapAnchor produces a mark per block, the proposal goes in the first,
+  // and every one of them has to unwrap back to exactly the text it was holding.
+  const quote = 'It was a fine morning. A second paragraph here.';
+  const { marks } = addPreview(window, doc, quote, 'It rained all day. The second paragraph is gone.');
+  assert.ok(marks.length >= 2, 'the span really did cross a block boundary');
+  const { md, tight } = Serialize.serialize(doc, blocks, td);
+  assert.equal(tight, true);
+  assert.equal(md, PREVIEW_DOC, 'both blocks emit their original bytes');
+});
+
+test('a preview survives an edit elsewhere: only the edited block changes', () => {
+  const { window, doc, blocks, td } = buildDoc(PREVIEW_DOC);
+  addPreview(window, doc, 'the lazy dog', 'the sleeping dog');
+  // Type in an unrelated paragraph, which is what a debounced save actually serializes.
+  blockByText(doc, 'Closing paragraph.').querySelector('p').textContent = 'Closing paragraph, edited.';
+  const { md, tight } = Serialize.serialize(doc, blocks, td);
+  assert.equal(tight, true);
+  assert.equal(md, PREVIEW_DOC.replace('Closing paragraph.', 'Closing paragraph, edited.'));
+  assert.ok(!md.includes('sleeping'), 'the un-accepted proposal stayed out of the save');
+});
+
+test('reindex over a previewed document keeps the baselines the preview-free ones', () => {
+  const { window, doc, blocks, td, marked } = buildDoc(PREVIEW_DOC);
+  addPreview(window, doc, 'the lazy dog', 'the sleeping dog');
+  const { md } = Serialize.serialize(doc, blocks, td);
+  const next = Serialize.reindex(doc, blocks, md, marked, td);
+  const para = next.find(b => b.md0 && b.md0.includes('quick brown fox'));
+  assert.ok(para, 'the previewed paragraph is still one block');
+  assert.ok(!para.md0.includes('sleeping'), 'its baseline is the file text, not the proposal');
+  assert.equal(Serialize.serialize(doc, next, td).md, md, 'so the next save is still a no-op');
+});
+
+// ---- public/sugview.js: edit or rewrite, and the line the rail prints ----
+test('a few words changed is an edit; more than half the words is a rewrite', () => {
+  assert.equal(Sugview.classify('the quick brown fox jumps over the lazy dog',
+    'the quick brown fox leaps over the lazy dog'), 'edit', 'one word in nine');
+  assert.equal(Sugview.classify('the quick brown fox jumps over the lazy dog',
+    'a slow grey heron waited beside the still river'), 'rewrite', 'almost nothing survives');
+  assert.equal(Sugview.classify('we shipped it', 'we shipped it on Tuesday'), 'edit',
+    'an addition that keeps the sentence is an edit');
+});
+
+test('a change crossing a sentence boundary is a rewrite however few words moved', () => {
+  // Two words, but they sit either side of the full stop: shown as tracked changes it reads as noise
+  // across two sentences rather than as one correction.
+  assert.equal(Sugview.classify('We shipped it. Nobody noticed at all. The end.',
+    'We shipped it today. Somebody noticed at all. The end.'), 'rewrite');
+  assert.equal(Sugview.classify('We shipped it. Nobody noticed at all.',
+    'We shipped it. Nobody noticed at first.'), 'edit', 'inside one sentence, it stays an edit');
+});
+
+test('a diffWords parts array counts the same as the module\'s own word diff', () => {
+  const Diff = require('diff');
+  const quote = 'the quick brown fox jumps over the lazy dog';
+  const rep = 'a slow grey heron waited beside the still river';
+  assert.equal(Sugview.classify(quote, rep, Diff.diffWords(quote, rep)),
+    Sugview.classify(quote, rep), 'the two ways in agree');
+});
+
+test('the rail summary names the change for an edit and the size of it for a rewrite', () => {
+  assert.equal(Sugview.summary('the quick brown fox', 'the quick red fox'), 'brown → red');
+  assert.equal(Sugview.summary('We shipped it. Nobody noticed.',
+    'We released it on Tuesday. Everybody complained loudly.'), 'Rewrites 2 sentences');
+  assert.equal(Sugview.summary('One long sentence that is entirely replaced here',
+    'A completely different clause standing in its place'), 'Rewrites 1 sentence');
+  assert.ok(Sugview.summary('a'.repeat(200) + ' tail', 'b'.repeat(200) + ' tail').length < 90,
+    'a long one is clipped rather than wrapping the card');
+});
+
+test('sentenceCount counts a trailing fragment and never returns zero for real text', () => {
+  assert.equal(Sugview.sentenceCount('One. Two. Three.'), 3);
+  assert.equal(Sugview.sentenceCount('One. Two. And a trailing fragment'), 3);
+  assert.equal(Sugview.sentenceCount('no terminator here'), 1);
+  assert.equal(Sugview.sentenceCount('   '), 0);
+});
+
+// The document's OWN inline HTML may say anything, including the words this feature marks its nodes
+// with. `sugview` is a bare attribute rather than a `data-` one precisely so it cannot: DOMPurify drops
+// an unknown bare attribute from everything the render path touches and keeps `data-*` and `class`, so
+// only code that built a node itself, after sanitizing, can put `sugview` on one.
+const AUTHOR_HTML_DOC = [
+  '# Heading One', '',
+  'Before <span data-sugview="new">keep me</span> after.', '',
+  'And <span class="sug-old">this one too</span> please.', '',
+  'The quick brown fox jumps over the lazy dog.', '',
+].join('\n');
+
+test("an author's own data-sugview and sug-old spans survive serialization untouched", () => {
+  const { window, doc, blocks, td } = buildDoc(AUTHOR_HTML_DOC);
+  assert.ok(doc.querySelector('[data-sugview]'), 'DOMPurify kept the author\'s data- attribute');
+  assert.ok(doc.querySelector('.sug-old'), "and the author's class");
+  assert.equal(Serialize.serialize(doc, blocks, td).md, AUTHOR_HTML_DOC,
+    'an untouched document with those spans round-trips byte for byte');
+  // …and it still does with a real preview live somewhere else in the same document.
+  addPreview(window, doc, 'the lazy dog', 'the sleeping dog');
+  const { md } = Serialize.serialize(doc, blocks, td);
+  assert.equal(md, AUTHOR_HTML_DOC, 'the preview is gone and the author\'s words are all still here');
+  assert.ok(md.includes('<span data-sugview="new">keep me</span>'), 'including the one that looks like ours');
+  assert.ok(md.includes('<span class="sug-old">this one too</span>'), 'and the one wearing our class');
+});
+
+test('DOMPurify strips a bare sugview attribute, which is what makes it ours alone', () => {
+  const { window } = new JSDOM('<!doctype html><div id="doc"></div>');
+  const DOMPurify = require('dompurify')(window);
+  assert.doesNotMatch(DOMPurify.sanitize('a <span sugview="new">b</span> c'), /sugview/,
+    'nothing that goes through the render path can carry it');
+  assert.match(DOMPurify.sanitize('a <span data-sugview="new">b</span> c'), /data-sugview/,
+    'while the data- spelling survives, which is exactly why it cannot be the marker');
+});
+
+// ---- a span that starts inside inline formatting ----
+// The first mark of such a span sits inside the <strong> or the <a>, and a proposal appended there
+// previews bold, or as a link, when accept would save neither. It is hoisted to a sibling instead.
+const FORMAT_DOC = [
+  '# Heading One', '',
+  '**Bold lead** rest of the sentence.', '',
+  'See [the docs](https://example.org/a) for more detail.', '',
+  'A closing paragraph.', '',
+].join('\n');
+
+test('a proposal on a span starting inside strong is not drawn bold, and saves nothing', () => {
+  const { window, doc, blocks, td } = buildDoc(FORMAT_DOC);
+  const { marks, nu } = addPreview(window, doc, '**Bold lead** rest of the sentence.',
+    'Plain replacement with no emphasis at all.');
+  assert.ok(marks.some(m => m.closest('strong')), 'the span really does start inside the bold run');
+  assert.ok(nu, 'the proposal was placed');
+  assert.equal(nu.closest('strong'), null, 'and it is NOT inside it, so it previews as plain text');
+  assert.equal(nu.closest('a'), null);
+  const { md, tight } = Serialize.serialize(doc, blocks, td);
+  assert.equal(tight, true);
+  assert.equal(md, FORMAT_DOC, 'byte-identical: the bold run is intact and the proposal is absent');
+  assert.ok(md.includes('**Bold lead** rest'), 'the author\'s <strong> was never split in two');
+});
+
+test('a proposal on a span starting inside a link is not drawn as a link, and saves nothing', () => {
+  const { window, doc, blocks, td } = buildDoc(FORMAT_DOC);
+  const { marks, nu } = addPreview(window, doc, 'See [the docs](https://example.org/a) for more detail.',
+    'Read the handbook for more detail.');
+  assert.ok(marks.some(m => m.closest('a')), 'the span really does cover the link');
+  assert.equal(nu.closest('a'), null, 'the proposal is outside it, so it is not clickable and not blue');
+  const { md } = Serialize.serialize(doc, blocks, td);
+  assert.equal(md, FORMAT_DOC, 'byte-identical, link and all');
+  assert.ok(md.includes('[the docs](https://example.org/a)'), 'the link survived whole');
+});
+
+// ---- the token diff: a markdown delimiter never straddles two fragments ----
+test('an edit inside inline markdown keeps every fragment renderable on its own', () => {
+  // `**bold** text` against `**strong** text` is the reported case: a word diff splits at the word
+  // boundary INSIDE the delimiters, so one fragment is `**` and the paragraph shows asterisks.
+  for (const [q, r] of [
+    ['**bold** text', '**strong** text'],
+    ['The **north gate** is locked', 'The **north gate** stays locked'],
+    ['Read the `plan.md` file now', 'Read the `plan.md` file today'],
+    ['See [the docs](https://a.b) for more', 'See [the guide](https://a.b) for more'],
+    ['A ~~struck~~ word here', 'A ~~struck~~ word there'],
+  ]) {
+    const parts = Sugview.diffTokens(q, r);
+    assert.ok(Sugview.splittable(parts), `every fragment of ${q} is balanced`);
+    for (const p of parts) assert.ok(Sugview.balanced(p.value), `fragment ${JSON.stringify(p.value)}`);
+    assert.equal(parts.filter(p => !p.added).map(p => p.value).join(''), q, 'the removals reconstruct the quote');
+    assert.equal(parts.filter(p => !p.removed).map(p => p.value).join(''), r, 'and the additions the replacement');
+  }
+});
+
+test('a whole markdown construct moves as one token and is never cut in half', () => {
+  assert.deepEqual(Sugview.tokenize('**bold** text'), ['**bold**', ' ', 'text']);
+  assert.deepEqual(Sugview.tokenize('a `code span` b'), ['a', ' ', '`code span`', ' ', 'b']);
+  assert.deepEqual(Sugview.tokenize('x [a b](http://c) y'), ['x', ' ', '[a b](http://c)', ' ', 'y']);
+  assert.ok(!Sugview.balanced('**'), 'a lone delimiter is not renderable');
+  assert.ok(Sugview.balanced('**bold**'), 'a closed one is');
+});
+
+test('a change the fragments cannot carry is classified as a rewrite instead', () => {
+  // Nested emphasis the tokenizer does not recognise, and an unbalanced marker an author left behind:
+  // the guard catches both and the change is drawn as a rewrite, which renders each side whole and so
+  // can never split a delimiter.
+  for (const [q, r] of [
+    ['*an emphasis with **bold** inside it*', '*an emphasis with **strong** inside it*'],
+    ['a **bold text here', 'a **strong text here'],
+  ]) {
+    assert.ok(!Sugview.splittable(Sugview.diffTokens(q, r)), `some fragment of ${q} is unbalanced`);
+    assert.equal(Sugview.classify(q, r), 'rewrite', 'so it is not drawn as tracked changes');
+  }
+  // A delimiter pair around a space is not emphasis and marked prints it literally, so an even count of
+  // asterisks is not the question. This is what the first version of the guard got wrong.
+  assert.ok(!Sugview.balanced('*an aside *'), 'two asterisks, and still two literal asterisks');
+  assert.ok(Sugview.balanced('*an aside*'), 'closed properly, so it renders');
+  // And the everyday case is untouched: plain prose with one word changed is still an edit.
+  assert.equal(Sugview.classify('the quick brown fox', 'the quick red fox'), 'edit');
+  assert.equal(Sugview.classify('**bold** text', '**strong** text'), 'edit',
+    'a bold-to-bold change is small, and now safe, so it stays an edit');
+});
+
+test('the page loads sugview.js and keeps the preview out of every path that reads the document', () => {
+  // Read here rather than from the PAGE constant further down the file: this test sits beside the
+  // serialization ones it belongs with, and a fixture that has to be declared above its first use
+  // would move it away from them.
+  const PAGE = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+  const STYLE = PAGE.slice(PAGE.indexOf('<style>'), PAGE.indexOf('</style>'));
+  assert.match(PAGE, /<script src="\/sugview\.js">/, 'the same file the tests require');
+  // The serializer takes the proposal off and unwraps the original, in that order. Both selectors are
+  // the contract; a rename on one side without the other writes a proposal into somebody's file.
+  const ser = fs.readFileSync(path.join(__dirname, 'public/serialize.js'), 'utf8');
+  assert.ok(ser.indexOf(`querySelectorAll('[sugview="new"]')`) < ser.indexOf(`querySelectorAll('[sugview="old"]')`),
+    'the proposal goes before the wrapper around the original is unwrapped');
+  assert.match(ser, /\[sugview="old"\]'\)\.forEach\(s => s\.replaceWith\(\.\.\.s\.childNodes\)\)/,
+    'the original is unwrapped, never removed');
+  // The comments name `data-sugview` and `.sug-old` to say why they are NOT what it selects on; the
+  // code must not, since both are spellings a document can carry.
+  assert.doesNotMatch(ser.replace(/\/\*[\s\S]*?\*\/|^\s*\/\/.*$/gm, ''), /data-sugview|['"]\.sug-old/,
+    'neither selector can be forged by a document, so neither reads data- or a class');
+  // Every walk over the document's text skips the proposal, or an anchor later in the paragraph is
+  // counted past words that are not in the file.
+  assert.match(PAGE, /acceptNode: \(n\) => \(n\.parentElement && n\.parentElement\.closest\('\[data-atomic\],\[sugview="new"\]'\)\)/,
+    'docText skips it');
+  assert.match(PAGE, /function blockTextWalker\(el\) \{[\s\S]*?\[sugview="new"\]/, 'and so does the block walk');
+  assert.match(PAGE, /Anchor\.occurrenceAt\(blockText\(el\), quote, selOffset\)/,
+    'occurrenceFor counts over the preview-free text');
+  // The proposal is a sibling of the mark, hoisted clear of inline formatting, and uneditable on its
+  // own account rather than by inheriting from a mark it no longer sits in.
+  assert.match(PAGE, /nu\.contentEditable = 'false';/, 'the proposal is not a place the caret can go');
+  assert.match(PAGE, /at\.parentNode\.insertBefore\(nu, at\.nextSibling\)/, 'it is placed as a sibling');
+  assert.match(PAGE, /if \(node !== node\.parentElement\.lastChild\) return null;/,
+    'hoistPoint gives up rather than splitting an author\'s element in two');
+  // One span, one proposal: the first pending answer drives it and the rest keep their diff.
+  assert.match(PAGE, /function drivesPreview\(sug\)/, 'the rule is one function');
+  assert.match(PAGE, /!drivesPreview\(sug\) \|\| previewFailed\.has\(sug\.id\)/,
+    'and the card asks it before dropping its diff');
+  assert.match(STYLE, /body\.reading \.sug-new \{ display:none; \}/,
+    'reading mode shows the document, not the proposal');
+  assert.match(STYLE, /body\.reading #sugbar \{ display:none !important; \}/, 'and no bar over it');
+  assert.ok(PAGE.indexOf('<div id="sugbar">') > PAGE.indexOf('</main>'),
+    'the bar lives outside #doc, which serializes');
+});
+
 // ---- the list keys (public/listkeys.js) under the same jsdom #doc, serialized by the same save path ----
 // The three rules a bare contenteditable does not have: Enter on an empty item, Backspace at the start
 // of one, Tab and Shift+Tab. Every case below asserts BOTH halves — the DOM the transform leaves and the
