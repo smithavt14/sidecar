@@ -7,8 +7,8 @@ description: |
   community post, or any markdown file on disk. Triggers include naming it ("open this in sidecar,"
   "respond to my comments in sidecar") and generic collaborative-review intent without the word
   ("let's review this doc," "let's edit this together," "look this over and suggest changes," "work
-  through this proposal with me," "let's revise this"). Sidecar gives tracked suggestion cards with
-  word-level diffs, comment threads, and rich-text editing on the real file, anchored by content
+  through this proposal with me," "let's revise this"). Sidecar gives tracked changes drawn in the
+  document itself, comment threads, and rich-text editing on the real file, anchored by content
   rather than line numbers. It also reviews an .html file as the visual it renders — a poster, a
   social card, an email template — where comments anchor to elements instead of to text. NOT for a
   quick one-line take or a prose-tightening pass, and not for code review. Needs the document as a
@@ -27,12 +27,17 @@ Sidecar has two sides.
 
 You never call the HTTP API, and you never hand-edit the sidecar JSON. Every action is one command.
 
-**What your items look like to them.** A suggestion renders as a card showing a word-level diff of the
-quoted text against your replacement, with accept and reject buttons; `--note` appears as one line
-underneath. A comment renders as a thread they can reply to or resolve. An `answer` nests inside the
-thread it responds to, so the diff sits right under their question. Every open item softly highlights
-its span in the document. Keep replacements short enough to read as a diff — a card is not a good place
-for three paragraphs.
+**What your items look like to them.** A pending suggestion renders IN the document, at its anchor. A
+small change shows as tracked changes inside the paragraph, struck words and inserted ones; a rewrite
+shows your new text in place, with a New / Original / Both switch and accept and reject on a bar over
+the span. Its card in the rail carries one line about the change (`old → new`, or `Rewrites 2
+sentences`), the `--note`, and the thread. A suggestion whose anchor no longer resolves keeps the
+word-level diff in its card, since there is nowhere in the document left to draw it. A comment renders
+as a thread they can reply to or resolve. An `answer` nests inside the thread it responds to and drives
+the preview on that comment's span. Every open item softly highlights its span.
+
+So a replacement is read as prose in the document rather than as a diff, and a long one is fine. What
+still has to be true is that it reads as a finished sentence: it is what the paragraph becomes.
 
 ---
 
@@ -119,11 +124,11 @@ sidecar comment doc.md --quote "success metrics" --text "No targets here yet —
 # a "look here" with no question
 sidecar flag doc.md --quote "ship all six in week one" --text "This reads as an overcommit."
 
-# a specific edit, shown as a word-level diff they can accept or reject
+# a specific edit, drawn in the document where it would land, to accept or reject
 sidecar suggest doc.md \
   --quote "We will ship all six features in week one." \
   --replacement "Week one ships the three core features; the rest follow once those earn their place." \
-  --note "Optional one-line rationale, shown under the diff."
+  --note "Optional one-line rationale, shown under the change."
 ```
 
 ### Attaching an image

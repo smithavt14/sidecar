@@ -20,6 +20,15 @@
       return node.__md;
     }
     const clone = node.cloneNode(true);
+    // A pending suggestion is PREVIEWED in the document, at its anchor, showing text nobody has accepted
+    // yet. `#doc` is contenteditable and this function is the save path, so a preview left in the clone
+    // would write the un-accepted proposal into the file, the one bug this feature cannot ship with.
+    // Two node kinds, removed in this order because the order is the difference between them: anything
+    // carrying `data-sugview` is preview-only and goes entirely, while `.sug-old` is the ORIGINAL text
+    // wrapped so CSS can hide it, and is unwrapped back to exactly the nodes that were there. What is
+    // left is the document without the preview, byte for byte (test.js pins that for every view).
+    clone.querySelectorAll('[data-sugview]').forEach(n => n.remove());
+    clone.querySelectorAll('.sug-old').forEach(s => s.replaceWith(...s.childNodes));
     clone.querySelectorAll('mark.anchor').forEach(m => m.replaceWith(...m.childNodes)); // locate highlights never save
     // Strip any ​ caret-escape left by an inline input rule (see tryInlineRule); it's invisible and never saved.
     return td.turndown(clone.innerHTML).replace(/​/g, '').replace(/\n{3,}/g, '\n\n').trim();

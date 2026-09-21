@@ -5,7 +5,7 @@ For *driving* sidecar as an agent (reviewing a document with a human), see
 
 ## Shape
 
-No build step. Twenty-six files carry the whole tool:
+No build step. Twenty-seven files carry the whole tool:
 
 | File | What it is |
 |---|---|
@@ -26,6 +26,7 @@ No build step. Twenty-six files carry the whole tool:
 | `public/doclink.js` | Does a link in a document open IN sidecar, and which document. Pure string in/out. |
 | `public/turn.js` | Whose turn is it: the panel's badges, the rail's resting shape and its density. Pure review in, counts + items out; `server.js` requires it too. |
 | `public/anchor.js` | The ONE content-anchor matcher, loaded by both the browser and Node. |
+| `public/sugview.js` | How much a suggestion changed: edit or rewrite, and the rail's one-line summary. Pure strings in, strings out; its own word diff, so Node requires the same file. |
 | `public/stability.js` | What the rail shows while the document is rewritten under it: freeze, last known position, orphan grace. Pure; the clock is passed in. |
 | `public/focus.js` | Where the page has to sit for the caret's line to rest at 45% of the window. Pure numbers in/out; the clamp and the deadband. |
 | `public/listkeys.js` | Enter on an empty list item, Backspace at the start of one, Tab and Shift+Tab. Elements in, the element the caret should land in out; Node tests require the same file. |
@@ -264,6 +265,62 @@ at 30% over a near-black ground glows. The border stays declared at rest and tra
 it was a border in the first place: a border on an inline box does not enter the line box, and a mark that
 added a pixel would reflow the paragraph the moment a comment landed on it.
 
+## The proposal is in the document, and it must never reach the file
+
+A pending suggestion used to exist only as a word diff in a 300px mono column, clipped behind *show
+more*. That is readable for two words and useless for a rewrite: alternating struck and highlighted
+words leave neither version legible, and the document itself only got a wash over the text being
+replaced. So the proposal renders **at its anchor, in the document, in the document's own type**, and
+the card gives its room back to the thread.
+
+**`public/sugview.js` is the classifier**, and it is one function because the rail and the document
+have to agree about one change. `rewrite` when more than half the words changed (its own LCS word
+diff, or a `Diff.diffWords` parts array from the caller) or when the changed region crosses a sentence
+boundary; `edit` otherwise. An `edit` draws tracked changes inline. A `rewrite` draws the new text in
+place and offers **New / Original / Both**, stacked and never interleaved, because interleaved is
+exactly what the rail already failed at. The view is per suggestion, in memory, deliberately not
+persisted: which way somebody is reading one proposal right now is not a fact about the review.
+
+**The hard part is that `#doc` is contenteditable and serializes to markdown.** Un-accepted text
+sitting in it is one debounced save away from the file, which is the one bug this cannot ship with.
+The shape is two nodes and the difference between them is the whole guarantee.
+
+- `.sug-old` holds the ORIGINAL text nodes. It is always in the DOM and only ever hidden by CSS, and
+  `public/serialize.js` **unwraps** it back to exactly the nodes it was holding.
+- `[data-sugview]` is everything the agent proposed, `contenteditable="false"`, and the serializer
+  **removes** it outright. The tracked-change `del`/`ins` live inside it rather than in the prose, for
+  the same reason.
+
+So `toMd()` on a block carrying a preview returns the bytes it would have returned without one, the
+tight diff still reads the block as untouched, and nothing schedules a save. Five Node tests pin it:
+an edit, a rewrite in each of the three views, a span crossing two blocks, an edit typed elsewhere,
+and a reindex. Injecting a preview fires no `input` event, so nothing saves on its own either.
+
+**Every walk over the document's text skips the preview and nothing else does.** `docText()` rejects
+`[data-sugview]` beside `[data-atomic]`, and `blockText`/`blockOffset` do the same for
+`occurrenceFor` and the selection-to-anchor offset. Counting the proposed words would put every later
+anchor in that paragraph a few characters off, so the highlight and the splice would disagree.
+
+**The bar is one element outside `#doc`**, moved to whichever span is being asked about, the same
+idiom `#seltool` follows. Three ways in, because they are three different readers: hovering the span,
+hovering its card in the rail (`litAnchor` already lights the span, and this is the other half of it),
+and a tap, which is all a touch device has. The wash is always on and only the bar is hover-gated. On
+the narrow layout a tap raises the bar and does NOT open the sheet, which would slide over the span
+and the bar together. A short grace on the hide is what lets the pointer travel from the span up to
+the bar at all.
+
+**A span crossing blocks, or crossing inline markup, is several marks.** The proposal goes in the
+first and the rest hide their original, which is why `wrapAnchor` returns the whole array now. A
+suggestion anchor crossing a blank line is refused by the CLI, so the cross-block case only arises
+from a stored item or a document edited underneath one; the inline-markup case (`**north gate**`) is
+ordinary and common. Diff parts go through `marked.parseInline` + DOMPurify, never raw HTML, and with
+their surrounding spaces kept: a quote is usually the raw markdown, and escaping it printed literal
+asterisks in a paragraph that was bold either side of them.
+
+**Reading mode shows the document.** The proposal is hidden and the bar is suppressed by CSS rather
+than by rebuilding the marks, because `markAnchors` refuses to run while the doc holds the caret and
+a mode toggle must not depend on where the caret is.
+
 ## The folder says what is still waiting on you
 
 A badge on a panel row counts the items on that document whose next move is the HUMAN's: a live comment
@@ -405,10 +462,12 @@ hover title in the UI.
   in-process against its own baseline), atomic blocks emitting their source bytes rather than
   going through turndown, the legacy rename moving the full sibling set while never merging two
   reviews when both names are present, `/api/state` refusing a file in neither allowlist, save and
-  format refusing an asset, an element `sel` and `path` being validated wherever an item id is, the
-  asset frame's sandbox flag set being exactly `allow-scripts` (asserted against the whole served
-  page, which is why no comment in `public/index.html` spells the same-origin flag), and the
-  assembled srcdoc carrying no script but the picker.
+  format refusing an asset, an element `sel` and `path` being validated wherever an item id is, a
+  pending suggestion's in-document preview serializing away to nothing (a document carrying one
+  writes the same bytes as the same document without one, in every view), the asset frame's sandbox
+  flag set being exactly `allow-scripts` (asserted against the whole served page, which is why no
+  comment in `public/index.html` spells the same-origin flag), and the assembled srcdoc carrying no
+  script but the picker.
 
 ## Two axes of focus, two controls
 
