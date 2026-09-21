@@ -3,7 +3,7 @@
 All notable changes to sidecar. Versions follow [semver](https://semver.org); dates are the day the
 version was tagged.
 
-## Unreleased
+## 1.14.0 (2026-09-21)
 
 **A suggestion is drawn where it would land.** A pending suggestion lived only as a word-level diff in
 a 300px mono column, clipped behind *show more*, and a full rewrite arrived there as alternating struck
@@ -37,6 +37,24 @@ anchor, in the document's own type.
 - **The proposal is hoisted clear of the formatting its span started inside.** A span beginning on a
   bold run or a link previewed entirely bold, or as a link, which is not what accept would have saved.
 - Reading mode shows the original text, no preview and no bar.
+
+**The page is as wide as you set it.** The measure was one of three presets. It is a number in em now,
+from 26 up to the full width of the document column, with no ceiling, and `public/measure.js` holds the
+arithmetic.
+
+- **Drag the document's right edge** to set it. The edge draws a hairline on hover like the two panel
+  grips, and the arrow keys step it one em, four with Shift. Desktop and prose only.
+- **The page-width icon opens a slider** in place of cycling the presets. It reads the width in em, or
+  *full* at the top.
+- A choice saved under the old names still reads as 29, 33 and 39em, so nobody's width moves on
+  upgrade. Assets still ignore the measure.
+
+**Table columns take the width you drag them to.** Drag a header cell's right edge to set that
+column's width, and double-click the edge to let it go. The first move pins the other columns at what
+they measure, so only the boundary under the pointer moves and a table wider than the column scrolls.
+The widths are a view preference in `public/tablecols.js`, kept per document in local storage and never
+written into the markdown; a document with resized columns saves byte for byte as it would without
+them. Touch pointers are left alone.
 
 ## 1.13.0 (2026-09-18)
 
