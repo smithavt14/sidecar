@@ -275,29 +275,55 @@ the card gives its room back to the thread.
 
 **`public/sugview.js` is the classifier**, and it is one function because the rail and the document
 have to agree about one change. `rewrite` when more than half the words changed (its own LCS word
-diff, or a `Diff.diffWords` parts array from the caller) or when the changed region crosses a sentence
-boundary; `edit` otherwise. An `edit` draws tracked changes inline. A `rewrite` draws the new text in
-place and offers **New / Original / Both**, stacked and never interleaved, because interleaved is
-exactly what the rail already failed at. The view is per suggestion, in memory, deliberately not
-persisted: which way somebody is reading one proposal right now is not a fact about the review.
+diff, or a `Diff.diffWords` parts array from the caller), when the changed region crosses a sentence
+boundary, or when the fragments of the change cannot each be rendered on their own; `edit` otherwise. An
+`edit` draws tracked changes inline. A `rewrite` draws the new text in place and offers **New** or
+**Original**. The view is per suggestion, in memory, deliberately not persisted: which way somebody is
+reading one proposal right now is not a fact about the review.
+
+**The diff is over TOKENS, not words** (`Sugview.tokenize` / `diffTokens`). Each fragment of a tracked
+change is rendered on its own, so a fragment boundary falling inside a markdown delimiter pair prints
+the delimiter: `**bold** text` against `**strong** text` splits at the word boundary between `**` and
+`bold`, and the paragraph grows a pair of asterisks it never had. A whole construct is one token and
+moves as a unit, which is also what the reader means, since you cannot half-change a bold run.
+`balanced`/`splittable` is the guard behind it for what the tokenizer does not recognise (nested
+emphasis, an unbalanced marker an author left), and a change that fails it becomes a `rewrite`, which
+renders each side whole and can split nothing.
 
 **The hard part is that `#doc` is contenteditable and serializes to markdown.** Un-accepted text
 sitting in it is one debounced save away from the file, which is the one bug this cannot ship with.
 The shape is two nodes and the difference between them is the whole guarantee.
 
-- `.sug-old` holds the ORIGINAL text nodes. It is always in the DOM and only ever hidden by CSS, and
-  `public/serialize.js` **unwraps** it back to exactly the nodes it was holding.
-- `[data-sugview]` is everything the agent proposed, `contenteditable="false"`, and the serializer
+- `[sugview="old"]` holds the ORIGINAL text nodes. It is always in the DOM and only ever hidden by CSS,
+  and `public/serialize.js` **unwraps** it back to exactly the nodes it was holding.
+- `[sugview="new"]` is everything the agent proposed, `contenteditable="false"`, and the serializer
   **removes** it outright. The tracked-change `del`/`ins` live inside it rather than in the prose, for
   the same reason.
 
+**`sugview` is a bare attribute and not a `data-` one, and that is the whole of its safety.** DOMPurify
+drops an unknown bare attribute from everything that goes through the render path and keeps `data-*` and
+`class`, so a document whose own inline HTML reads `<span data-sugview="new">keep me</span>` renders
+with that attribute intact. A serializer that deleted on `data-sugview`, or unwrapped on `.sug-old`,
+would delete the author's words. Nothing in a document can carry `sugview`; only this code sets it, on
+nodes it built itself, after sanitizing. Same mechanism `contenteditable` already relies on, and a test
+pins both halves.
+
+**The proposal is a SIBLING of the mark, not a child.** A span that starts on a bold run or a link puts
+the first mark inside that element, and a proposal appended there previews entirely bold, or as a link,
+which is not what accept would save. `hoistPoint` climbs out of every inline ancestor the mark closes
+and **gives up rather than split one**: splitting an author's `<strong>` in two changes the document's
+own structure, and `**Bold** **lead**` is not `**Bold lead**`. Giving up is nearly unreachable, since
+the CLI already refuses an anchor that starts or ends INSIDE inline markup, and when it happens the item
+keeps its diffbox (`previewFailed`, one re-render).
+
 So `toMd()` on a block carrying a preview returns the bytes it would have returned without one, the
-tight diff still reads the block as untouched, and nothing schedules a save. Five Node tests pin it:
-an edit, a rewrite in each of the three views, a span crossing two blocks, an edit typed elsewhere,
-and a reindex. Injecting a preview fires no `input` event, so nothing saves on its own either.
+tight diff still reads the block as untouched, and nothing schedules a save. Node tests pin it: an edit,
+a rewrite in each view, a span crossing two blocks, one starting inside `<strong>`, one starting inside
+a link, an edit typed elsewhere, a reindex, and an author's own `data-sugview` and `.sug-old` spans
+coming through untouched. Injecting a preview fires no `input` event, so nothing saves on its own.
 
 **Every walk over the document's text skips the preview and nothing else does.** `docText()` rejects
-`[data-sugview]` beside `[data-atomic]`, and `blockText`/`blockOffset` do the same for
+`[sugview="new"]` beside `[data-atomic]`, and `blockText`/`blockOffset` do the same for
 `occurrenceFor` and the selection-to-anchor offset. Counting the proposed words would put every later
 anchor in that paragraph a few characters off, so the highlight and the splice would disagree.
 
@@ -309,13 +335,17 @@ the narrow layout a tap raises the bar and does NOT open the sheet, which would 
 and the bar together. A short grace on the hide is what lets the pointer travel from the span up to
 the bar at all.
 
-**A span crossing blocks, or crossing inline markup, is several marks.** The proposal goes in the
-first and the rest hide their original, which is why `wrapAnchor` returns the whole array now. A
+**A span crossing blocks, or crossing inline markup, is several marks.** The proposal goes after the
+last and every mark hides its own original, which is why `wrapAnchor` returns the whole array now. A
 suggestion anchor crossing a blank line is refused by the CLI, so the cross-block case only arises
 from a stored item or a document edited underneath one; the inline-markup case (`**north gate**`) is
-ordinary and common. Diff parts go through `marked.parseInline` + DOMPurify, never raw HTML, and with
-their surrounding spaces kept: a quote is usually the raw markdown, and escaping it printed literal
-asterisks in a paragraph that was bold either side of them.
+ordinary and common. Diff fragments go through `marked.parseInline` + DOMPurify, never raw HTML, and
+with their surrounding spaces kept: a quote is usually the raw markdown, and escaping it printed
+literal asterisks in a paragraph that was bold either side of them.
+
+**One span draws one proposal.** A comment can carry several pending answers, so the first pending one
+drives the preview (`drivesPreview`) and every other keeps its full diff in its own subcard. A card that
+dropped its diff for a preview nobody can see would be unreadable from both ends.
 
 **Reading mode shows the document.** The proposal is hidden and the bar is suppressed by CSS rather
 than by rebuilding the marks, because `markAnchors` refuses to run while the doc holds the caret and

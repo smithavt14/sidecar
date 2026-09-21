@@ -13,21 +13,29 @@ anchor, in the document's own type.
 - **How much changed decides how it is drawn**, in the new `public/sugview.js`. A few words is an
   `edit`: tracked changes inside the paragraph, removed words struck and faint, inserted ones on the
   yellow. More than half the words, or a change crossing a sentence boundary, is a `rewrite`: the new
-  text in place, with **New / Original / Both** on a bar over the span. Both stacks the struck original
-  above the new text and never interleaves them.
+  text in place, with **New** and **Original** on a bar over the span.
+- **The diff runs over tokens rather than words**, so a whole `**bold**` run, a code span or a link
+  moves as a unit. Rendering half a delimiter pair on its own printed the asterisks into the paragraph.
+  A change whose fragments cannot each stand alone is drawn as a rewrite instead.
 - **A bar over the span** carries the author, the view switch and accept and reject. It appears on
   hover of the span, while the span's card in the rail is lit, and on a tap, which is all a touch
   device has. The wash is always visible; only the bar is hover-gated.
 - **The card gives its room back.** A suggestion whose span is in the document shows one line about the
   change (`brown → red`, `Rewrites 2 sentences`) instead of the diff box, and keeps its accept, reject,
   reply and thread exactly as they were. An orphan keeps the diff, since there is nowhere else to read
-  it. A pending `answer` drives the preview on the comment's span it shares.
+  it, and so does the second pending `answer` under one comment: a span draws one proposal, the first
+  pending one, and the others stay readable in their own subcards.
 - **The preview can never reach the file.** `#doc` is contenteditable and serializes to markdown, so
-  the original text stays in the DOM inside `span.sug-old` and is only hidden, while everything
-  proposed lives in a `contenteditable=false` node `public/serialize.js` strips. A document carrying a
-  preview writes the same bytes as the same document without one, in every view, across a block
-  boundary, and after an edit typed elsewhere; tests pin all of it. Every walk over the document's text
-  skips the preview, so no other item's anchor moves.
+  the original text stays in the DOM inside a `sugview="old"` wrapper and is only hidden, while
+  everything proposed lives in a `contenteditable=false` `sugview="new"` node `public/serialize.js`
+  strips. `sugview` is a bare attribute rather than a `data-` one because DOMPurify drops it from every
+  string the render path touches, so a document whose own inline HTML says `data-sugview` keeps its
+  words. A document carrying a preview writes the same bytes as the same document without one, in both
+  views, across a block boundary, on a span starting inside a bold run or a link, and after an edit
+  typed elsewhere; tests pin all of it. Every walk over the document's text skips the preview, so no
+  other item's anchor moves.
+- **The proposal is hoisted clear of the formatting its span started inside.** A span beginning on a
+  bold run or a link previewed entirely bold, or as a link, which is not what accept would have saved.
 - Reading mode shows the original text, no preview and no bar.
 
 ## 1.13.0 (2026-09-18)

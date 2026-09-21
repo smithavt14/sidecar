@@ -22,6 +22,85 @@
     return String(s == null ? '' : s).trim().split(/\s+/).filter(Boolean);
   }
 
+  // ---------- the token diff the inline preview is drawn from ----------
+  // The tracked-change view renders each fragment of the diff on its own, so a fragment boundary that
+  // falls INSIDE a markdown delimiter pair prints the delimiter literally: `**bold** text` against
+  // `**strong** text` diffs at word boundaries, which puts `**` in one fragment and `bold` in the next,
+  // and the paragraph shows a pair of asterisks it never had. A code span, a link and `~~` all break
+  // the same way.
+  //
+  // So the diff runs over TOKENS where a whole inline-markdown construct is one token and can never be
+  // split. `**bold**` moves as a unit, which is also what the reader means: you cannot half-change a
+  // bold run. Anything the tokenizer does not recognise falls back to words and spaces, and `splittable`
+  // below is the guard for that case.
+  // The closing delimiter may not be preceded by a space, which is CommonMark's own rule: `*an aside *`
+  // is not emphasis and marked renders it as the literal characters. A looser pattern swallowed exactly
+  // that shape as a construct, and `balanced` below then called a fragment safe that printed asterisks.
+  const MD_RUN = /\*\*[^*\s](?:[^*]*[^*\s])?\*\*|__[^_\s](?:[^_]*[^_\s])?__|~~[^~\s](?:[^~]*[^~\s])?~~|`[^`]+`|\*[^*\s](?:[^*]*[^*\s])?\*|_[^_\s](?:[^_]*[^_\s])?_|!?\[[^\]]*\]\([^)\s]*(?:\s+"[^"]*")?\)/;
+  function tokenize(s) {
+    const t = String(s == null ? '' : s);
+    const out = [];
+    let i = 0;
+    while (i < t.length) {
+      const rest = t.slice(i);
+      const m = MD_RUN.exec(rest);
+      if (m && m.index === 0) { out.push(m[0]); i += m[0].length; continue; }
+      // Plain text up to the next construct, split into words and the whitespace between them so the
+      // diff lands on word boundaries the way the rail's own diff does.
+      const upto = m ? i + m.index : t.length;
+      for (const piece of t.slice(i, upto).split(/(\s+)/)) if (piece) out.push(piece);
+      i = upto;
+    }
+    return out;
+  }
+
+  // A standard LCS with a backtrace, over token arrays. `Diff.diffWords` cannot be used here because it
+  // is the thing that splits the delimiters, and Node has no `diff` bundle loaded in this module, so one
+  // implementation serves the page and the tests.
+  function diffTokens(quote, replacement) {
+    const a = tokenize(quote), b = tokenize(replacement);
+    const n = a.length, m = b.length;
+    const dp = [];
+    for (let i = 0; i <= n; i++) dp.push(new Array(m + 1).fill(0));
+    for (let i = n - 1; i >= 0; i--)
+      for (let j = m - 1; j >= 0; j--)
+        dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    const parts = [];
+    const push = (value, kind) => {
+      const last = parts[parts.length - 1];
+      if (last && last.added === (kind === 'added') && last.removed === (kind === 'removed')) last.value += value;
+      else parts.push({ value, added: kind === 'added', removed: kind === 'removed' });
+    };
+    let i = 0, j = 0;
+    while (i < n && j < m) {
+      if (a[i] === b[j]) { push(a[i], 'common'); i++; j++; }
+      else if (dp[i + 1][j] >= dp[i][j + 1]) { push(a[i], 'removed'); i++; }
+      else { push(b[j], 'added'); j++; }
+    }
+    while (i < n) push(a[i++], 'removed');
+    while (j < m) push(b[j++], 'added');
+    return parts;
+  }
+
+  // Is every fragment safe to render on its own? A delimiter that opens inside one and closes in the
+  // next is what prints literal markers, and the tokenizer only recognises the constructs it knows, so
+  // this is the guard that catches the rest (nested emphasis, an unbalanced marker an author left). A
+  // fragment that fails it makes the whole change a `rewrite`, which renders each side whole and cannot
+  // split anything.
+  // Take out every construct that closes inside the fragment; what is left may not contain anything
+  // that OPENS one. Counting delimiters instead is not enough and was the first version of this: two
+  // asterisks either side of a space are an even number and are still two literal asterisks on the page.
+  const MD_RUN_G = new RegExp(MD_RUN.source, 'g');
+  function balanced(s) {
+    const rest = String(s).replace(MD_RUN_G, '');
+    if (/[*_`~]/.test(rest)) return false;
+    if ((rest.match(/\[/g) || []).length !== (rest.match(/\]/g) || []).length) return false;
+    return true;
+  }
+  function splittable(parts) {
+    return parts.every(p => balanced(p.value));
+  }
+
   // Longest common subsequence LENGTH over two word arrays. O(n*m) on two sentences is nothing, and the
   // length is all the ratio needs; the actual alignment is the page's `Diff.diffWords` job.
   function commonWords(a, b) {
@@ -94,9 +173,13 @@
   }
 
   // The verdict. `parts` is optional Diff.diffWords output; without it the LCS above answers.
+  // The third rule is not about size at all: a change whose fragments cannot each be rendered on their
+  // own has to be a rewrite, because a rewrite renders each side whole and is the only shape that can
+  // carry inline markdown the word diff would have torn in half.
   function classify(quote, replacement, parts) {
     if (changedRatio(quote, replacement, parts) > 0.5) return 'rewrite';
     if (crossesSentence(quote, replacement)) return 'rewrite';
+    if (!splittable(diffTokens(quote, replacement))) return 'rewrite';
     return 'edit';
   }
 
@@ -135,6 +218,7 @@
     return (from || '""') + ' → ' + (to || '""');
   }
 
-  const API = { classify, summary, words, sentenceCount, changedRatio, crossesSentence, clip };
+  const API = { classify, summary, words, sentenceCount, changedRatio, crossesSentence, clip,
+    tokenize, diffTokens, balanced, splittable };
   if (typeof module !== 'undefined' && module.exports) module.exports = API; else root.Sugview = API;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

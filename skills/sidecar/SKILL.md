@@ -29,12 +29,13 @@ You never call the HTTP API, and you never hand-edit the sidecar JSON. Every act
 
 **What your items look like to them.** A pending suggestion renders IN the document, at its anchor. A
 small change shows as tracked changes inside the paragraph, struck words and inserted ones; a rewrite
-shows your new text in place, with a New / Original / Both switch and accept and reject on a bar over
-the span. Its card in the rail carries one line about the change (`old → new`, or `Rewrites 2
-sentences`), the `--note`, and the thread. A suggestion whose anchor no longer resolves keeps the
-word-level diff in its card, since there is nowhere in the document left to draw it. A comment renders
-as a thread they can reply to or resolve. An `answer` nests inside the thread it responds to and drives
-the preview on that comment's span. Every open item softly highlights its span.
+shows your new text in place, with a New / Original switch and accept and reject on a bar over the span.
+Its card in the rail carries one line about the change (`old → new`, or `Rewrites 2 sentences`), the
+`--note`, and the thread. A suggestion whose anchor no longer resolves keeps the word-level diff in its
+card, since there is nowhere in the document left to draw it. A comment renders as a thread they can
+reply to or resolve. An `answer` nests inside the thread it responds to and drives the preview on that
+comment's span; a second pending answer on the same comment keeps its own diff, because one span can
+only draw one proposal. Every open item softly highlights its span.
 
 So a replacement is read as prose in the document rather than as a diff, and a long one is fine. What
 still has to be true is that it reads as a finished sentence: it is what the paragraph becomes.

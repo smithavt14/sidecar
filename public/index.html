@@ -812,52 +812,64 @@
      The rail could only ever show a word diff in a 300px mono column, so a full rewrite arrived as
      alternating struck and highlighted words and neither version could be read. The proposal renders
      in the DOCUMENT now, at its anchor, in the document's own type.
-     Two nodes, and the split between them is the whole safety story (public/serialize.js): `.sug-old`
-     holds the ORIGINAL text nodes, always present and only ever hidden; `[data-sugview]` is everything
-     the agent proposed and is preview-only, stripped on the way to the file. Nothing here may change
-     what the caret can reach either, so the preview is unselectable and contenteditable:false. */
-  mark.anchor .sug-new { user-select:none; -webkit-user-select:none; }
-  /* New and edit both hide the original and draw the proposal in its place. */
-  mark.anchor.sug-view-new .sug-old, mark.anchor.sug-view-edit .sug-old { display:none; }
-  mark.anchor.sug-view-original .sug-new { display:none; }
-  /* The new text wears the underline the wash keeps for hover, so a span showing something the file does
-     not say is never silent about it. */
-  mark.anchor.sug-view-new .sug-new, mark.anchor.sug-view-both .sug-new {
+     Two nodes, and the split between them is the whole safety story (public/serialize.js):
+     `[sugview="old"]` holds the ORIGINAL text nodes, always present and only ever hidden;
+     `[sugview="new"]` is everything the agent proposed and is preview-only, stripped on the way to the
+     file. The proposal is a SIBLING of the mark rather than a child, hoisted clear of any inline
+     formatting the span started inside, because a proposal appended inside a `<strong>` previews
+     entirely bold and that is not what accept would save. Nothing here may change what the caret can
+     reach either, so the preview is unselectable and contenteditable:false. */
+  .sug-new { user-select:none; -webkit-user-select:none; color:inherit;
+    background:var(--anchor-wash); border-radius:var(--r-1);
+    /* The proposal says it is a proposal with the underline the wash keeps for hover, so a span showing
+       something the file does not say is never silent about it. A border on an inline box does not
+       enter the line box, so this costs the paragraph no reflow and draws per LINE rather than once
+       under the whole block, which is why the proposal stays inline in every view. */
     border-bottom:2px solid var(--yellow); }
-  /* Both: the original struck and faint, the proposal under it. Stacked, never interleaved, since
-     the interleaved reading is exactly what the rail's diff already failed at. */
-  mark.anchor.sug-view-both .sug-old { color:var(--faint); text-decoration:line-through; }
-  mark.anchor.sug-view-both .sug-old, mark.anchor.sug-view-both .sug-new { display:block; }
+  .sug-new.sug-view-original { display:none; }
+  /* New and edit both hide the original and let the proposal stand in its place. The mark is then an
+     empty inline box, so it paints nothing: a sliver of wash on a zero-width element reads as a mark
+     on the space between two words. */
+  mark.anchor.sug-view-new .sug-old, mark.anchor.sug-view-edit .sug-old { display:none; }
+  mark.anchor.sug-view-new, mark.anchor.sug-view-edit { background:none; border-bottom-color:transparent; }
   /* Tracked changes for an `edit`: the same del/ins look the rail's diffbox carries, in the document's
      own face rather than mono, because these words sit in a paragraph the reader is reading. */
-  mark.anchor .sug-new del { color:var(--faint); text-decoration:line-through; }
-  mark.anchor .sug-new ins { background:var(--yellow); color:var(--on-yellow); text-decoration:none;
+  .sug-new del { color:var(--faint); text-decoration:line-through; }
+  .sug-new ins { background:var(--yellow); color:var(--on-yellow); text-decoration:none;
     border-radius:var(--r-1); padding:0 2px; }
   /* A replacement carrying a blank-line paragraph break renders as separate lines inside the preview
      rather than as one run-on: the proposal is read here, so its shape has to survive. */
-  mark.anchor .sug-new .sug-line { display:block; }
-  mark.anchor .sug-new .sug-line + .sug-line { margin-top:.5em; }
+  .sug-new .sug-line { display:block; }
+  .sug-new .sug-line + .sug-line { margin-top:.5em; }
   /* Reading mode is reading: the original text, no proposal, and no bar over it. */
-  body.reading mark.anchor .sug-new { display:none; }
+  body.reading .sug-new { display:none; }
+  body.reading mark.anchor { display:inline; }
   body.reading mark.anchor .sug-old { display:inline; color:inherit; text-decoration:none; }
   body.reading #sugbar { display:none !important; }
   /* The bar for one suggestion's span: who proposed it, which view, and the two decisions. It lives
      OUTSIDE #doc (the document serializes, and a control inside it would have to be stripped on every
      save) and is positioned against the span's rect, the same way #seltool is against a selection. */
   #sugbar { position:absolute; display:none; z-index:30; background:var(--card); border:1px solid var(--line-2);
-    border-radius:var(--r-3); box-shadow:var(--shadow); padding:4px; align-items:center; gap:4px;
+    border-radius:var(--r-3); box-shadow:var(--shadow); padding:5px 7px; align-items:center; gap:7px;
     max-width:calc(100vw - 16px); flex-wrap:wrap; }
   #sugbar.on { display:flex; }
-  #sugbar .who { display:inline-flex; align-items:center; gap:5px; padding:0 6px 0 4px;
+  #sugbar .who { display:inline-flex; align-items:center; gap:6px; padding-left:2px;
     font:500 var(--t-2)/1 'Geist', ui-sans-serif, sans-serif; color:var(--muted); white-space:nowrap; }
   #sugbar .who .dot { width:7px; height:7px; border-radius:50%; background:var(--yellow); }
-  #sugbar .views { display:flex; gap:1px; background:var(--fill); border-radius:var(--r-2); padding:2px; }
+  /* The same separator the selection toolbar puts between its groups, so the view switch and the two
+     decisions read as two things rather than one long row of five controls. */
+  #sugbar .tsep { width:1px; height:16px; background:var(--line-2); }
+  #sugbar .views { display:flex; gap:2px; }
+  /* The selected segment is the rail tab's on state, which is the tool's one way of saying "this is the
+     one you are looking at": ink on the fill. It used to be the inverse (a track behind the group, the
+     selected one lifted onto the card colour), and against a card background the selected segment read
+     as the DIMMEST thing in the bar, which is how a disabled control looks. */
   #sugbar .views button { background:none; border:none; box-shadow:none; color:var(--muted);
-    padding:4px 8px; border-radius:var(--r-1); font:500 var(--t-2)/1 'Geist', ui-sans-serif, sans-serif; }
-  #sugbar .views button:hover { color:var(--fg); }
-  #sugbar .views button.on { background:var(--card); color:var(--fg); }
-  #sugbar .act { display:flex; gap:4px; }
-  #sugbar .act button { padding:5px 10px; border-radius:var(--r-2); font-size:var(--t-2); line-height:1; }
+    padding:5px 9px; border-radius:var(--r-2); font:500 var(--t-2)/1 'Geist', ui-sans-serif, sans-serif; }
+  #sugbar .views button:hover { background:var(--fill); color:var(--fg); }
+  #sugbar .views button.on { background:var(--fill); color:var(--ink); font-weight:600; }
+  #sugbar .act { display:flex; gap:6px; }
+  #sugbar .act button { padding:6px 12px; border-radius:var(--r-2); font-size:var(--t-2); line-height:1; }
   @media (prefers-reduced-motion: no-preference) { #sugbar { transition:opacity .12s ease; } }
   /* The rail scrolls WITH the page rather than in its own scroll box. That's what lets a card sit level
      with the text it's about (see dockCards): two independent scrollers can't stay aligned without a
@@ -2433,7 +2445,7 @@ function occurrenceFor(quote, blockIdx, selOffset) {
 // duplicate phrase differently on this side than on the side that splices it.
 function blockTextWalker(el) {
   return document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
-    acceptNode: (n) => (n.parentElement && n.parentElement.closest('[data-sugview]'))
+    acceptNode: (n) => (n.parentElement && n.parentElement.closest('[sugview="new"]'))
       ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
   });
 }
@@ -2965,7 +2977,9 @@ function diffHtml(quote, replacement) {
 // What a PENDING suggestion's card shows about the change. Where the span is in the document the change
 // is being read there, in the document's own type, so the card says one line about its shape and gives
 // the room back to the thread (public/sugview.js owns the wording). An orphan keeps the diff: there is
-// nowhere else for it to be read, which is the same reason the -1 rank floats it to the top.
+// nowhere else for it to be read, which is the same reason the -1 rank floats it to the top. So does
+// the second pending answer under one comment, since one span draws one proposal and the other would
+// otherwise be a card with neither a diff nor a preview to read it in (sugHasSpan asks both).
 function changeHtml(it) {
   if (it.status !== 'pending' || !sugHasSpan(it)) return diffHtml(it.anchor.quote, it.replacement);
   return `<div class="sugline">${esc(Sugview.summary(it.anchor.quote, it.replacement))}</div>`;
@@ -5009,7 +5023,7 @@ function resetDocState() {
   cardFold.clear(); litId = null;
   // Which view a rewrite was being read in belongs to the outgoing document's suggestions, same rule,
   // and the bar is pointed at a span that is about to stop existing.
-  sugView.clear(); hideSugbar();
+  sugView.clear(); previewFailed.clear(); hideSugbar();
   // …and so are the threads a reader unfolded and the long messages they opened, for the same reason.
   threadOpen.clear(); msgOpen.clear();
   // An unsent reply is a reply to one of the outgoing document's threads, so it leaves with them.
@@ -5292,7 +5306,7 @@ function docText() {
   // disagree with the highlight. `.sug-old` is not excluded: it IS the document's own text, merely
   // wrapped so CSS can hide it.
   const walker = document.createTreeWalker($('doc'), NodeFilter.SHOW_TEXT, {
-    acceptNode: (n) => (n.parentElement && n.parentElement.closest('[data-atomic],[data-sugview]'))
+    acceptNode: (n) => (n.parentElement && n.parentElement.closest('[data-atomic],[sugview="new"]'))
       ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
   });
   const nodes = []; let full = '';
@@ -5339,16 +5353,31 @@ const sugView = new Map();
 // A pending suggestion is the one thing that renders in place. A nested one (replyTo) shares its parent
 // comment's span, which markAnchors skips for exactly that reason, so the PARENT's marks carry it and
 // the bar and the accept target the child's own id.
+// A comment can have SEVERAL pending answers and one span can only draw one of them, so the first
+// pending one drives the preview. Every other keeps its own full diff in its subcard (see drivesPreview),
+// because a card that dropped its diff for a preview nobody can see would be unreadable from both ends.
+const pendingSug = (s, parentId) => s.kind === 'suggestion' && s.status === 'pending'
+  && s.replacement != null && s.replyTo === parentId;
 function previewSug(it) {
   if (it.kind === 'suggestion' && it.status === 'pending' && it.replacement != null) return it;
   if (it.kind !== 'comment') return null;
-  return state.review.items.find(s => s.kind === 'suggestion' && s.replyTo === it.id
-    && s.status === 'pending' && s.replacement != null) || null;
+  return state.review.items.find(s => pendingSug(s, it.id)) || null;
 }
-// Is this suggestion's span actually in the document? The card asks before dropping its diff for a
-// summary line, since an orphan has nowhere else to show the change and must keep the diffbox.
+// Is THIS suggestion the one its span is drawing? Its own, when it is top-level; the first pending
+// answer, when several sit under one comment.
+function drivesPreview(sug) {
+  if (!sug || sug.kind !== 'suggestion' || sug.status !== 'pending') return false;
+  if (!sug.replyTo) return true;
+  return state.review.items.find(s => pendingSug(s, sug.replyTo)) === sug;
+}
+// Items whose preview could not be built, so their card keeps its diff. One reason today: a span whose
+// proposal cannot be lifted clear of inline formatting (see hoistPoint). Page-lifetime, cleared with
+// everything else on a document swap.
+const previewFailed = new Set();
+// Is this suggestion's change readable in the document? The card asks before dropping its diff for a
+// summary line, since an orphan has nowhere else to show it and must keep the diffbox.
 function sugHasSpan(sug) {
-  if (!sug || isAsset()) return false;
+  if (!sug || isAsset() || !drivesPreview(sug) || previewFailed.has(sug.id)) return false;
   try { return !!Anchor.findNth(docText().full, sug.anchor.quote, sug.anchor.occurrence || 0); }
   catch { return false; }
 }
@@ -5374,38 +5403,66 @@ function inlineMdPart(s) {
   if (!mid) return esc(t);
   return esc(lead) + DOMPurify.sanitize(marked.parseInline(mid, { breaks: true })) + esc(tail);
 }
-// Build the preview into an item's marks. The ORIGINAL text nodes are moved into `.sug-old` and stay
-// there; the proposal is a separate `[data-sugview]` node that public/serialize.js removes outright.
-// Nothing in here may be reachable by the caret: the mark is already contenteditable:false and the
-// preview node says so again on its own, since a future change to the mark must not quietly make the
-// proposal editable.
+// Where the proposal can sit without wearing formatting that is not its own. A span STARTING on a bold
+// run or a link puts the first mark inside that element, and a proposal appended in there previews
+// entirely bold, or as a link, which is not what accept would save. So climb out of every inline
+// ancestor the mark closes, and give up rather than split one: splitting an author's `<strong>` in two
+// is a change to the document's own structure, and `**Bold** **lead**` is not `**Bold lead**`.
+// Giving up is nearly unreachable, because the CLI already refuses a suggestion anchor that starts or
+// ends INSIDE inline markup; what reaches here starts or ends ON one, where the mark closes its parent.
+const INLINE_WRAP = 'strong,b,em,i,a,code,s,del,ins,u,sub,sup,small,abbr,span,mark';
+function hoistPoint(mark) {
+  const block = mark.closest('.block') || $('doc');
+  let node = mark;
+  while (node.parentElement && node.parentElement !== block && node.parentElement.matches(INLINE_WRAP)) {
+    if (node !== node.parentElement.lastChild) return null;   // cannot leave without splitting it
+    node = node.parentElement;
+  }
+  return node;
+}
+// Build the preview for one item's marks. The ORIGINAL text nodes are moved into a `sugview="old"`
+// wrapper and stay there, hidden by CSS in the views that do not show them; the proposal is a separate
+// `sugview="new"` node that public/serialize.js removes outright, placed as a SIBLING after the last
+// mark rather than inside it, so no formatting around the span reaches it.
+// `sugview` is a bare attribute and not a `data-` one on purpose: DOMPurify drops it from every string
+// that goes through the render path, so a document that literally contains `<span data-sugview="new">`
+// cannot dress its own content up as a preview and have it deleted on the next save. Same trick, and the
+// same reason, as `contenteditable` being set from code after sanitizing.
+// Nothing here may be reachable by the caret, so the proposal says `contenteditable=false` on its own
+// rather than inheriting it from a mark it no longer sits in.
 function buildPreview(marks, sug) {
+  const at = hoistPoint(marks[marks.length - 1]);
+  if (!at) { previewFailed.add(sug.id); return false; }
   const kind = Sugview.classify(sug.anchor.quote, sug.replacement);
   const view = kind === 'edit' ? 'edit' : (sugView.get(sug.id) || 'new');
   for (const m of marks) {
     const old = document.createElement('span');
     old.className = 'sug-old';
+    old.setAttribute('sugview', 'old');
     while (m.firstChild) old.appendChild(m.firstChild);
     m.appendChild(old);
     m.dataset.sug = sug.id;
     m.dataset.sugKind = kind;
     m.classList.add('sug-view-' + view);
   }
-  const host = marks[0];
   const nu = document.createElement('span');
-  nu.className = 'sug-new';
-  nu.dataset.sugview = 'new';      // the one attribute the serializer removes on
+  nu.className = 'sug-new sug-view-' + view;
+  nu.setAttribute('sugview', 'new');
+  nu.dataset.sug = sug.id;
+  nu.dataset.sugKind = kind;
   nu.contentEditable = 'false';
   if (kind === 'edit') {
-    // Tracked changes, in the document's own type. The words come from the same Diff.diffWords the
-    // rail's diffbox has always used, so the two surfaces can never describe one change differently.
-    nu.innerHTML = Diff.diffWords(sug.anchor.quote, sug.replacement).map(p =>
+    // Tracked changes, in the document's own type. The fragments come from Sugview.diffTokens rather
+    // than Diff.diffWords: a word diff splits `**bold**` between two fragments, each fragment is
+    // rendered on its own, and the paragraph then shows a pair of asterisks it never had.
+    nu.innerHTML = Sugview.diffTokens(sug.anchor.quote, sug.replacement).map(p =>
       p.added ? '<ins>' + inlineMdPart(p.value) + '</ins>'
         : p.removed ? '<del>' + inlineMdPart(p.value) + '</del>' : inlineMdPart(p.value)).join('');
   } else {
     nu.innerHTML = inlineMd(sug.replacement);
   }
-  host.appendChild(nu);
+  at.parentNode.insertBefore(nu, at.nextSibling);
+  return true;
 }
 function markAnchors() {
   const doc = $('doc');
@@ -5416,8 +5473,9 @@ function markAnchors() {
   // Preview first, in the order serialize.js takes it down: the proposal goes entirely, the wrapper
   // around the original text is unwrapped back to the nodes it was holding, and only then do the marks
   // come off. Unwrapping the marks first would leave the proposal loose in the paragraph.
-  doc.querySelectorAll('[data-sugview]').forEach(n => n.remove());
-  doc.querySelectorAll('.sug-old').forEach(s => { const p = s.parentNode; while (s.firstChild) p.insertBefore(s.firstChild, s); p.removeChild(s); });
+  const failedBefore = previewFailed.size;
+  doc.querySelectorAll('[sugview="new"]').forEach(n => n.remove());
+  doc.querySelectorAll('[sugview="old"]').forEach(s => { const p = s.parentNode; while (s.firstChild) p.insertBefore(s.firstChild, s); p.removeChild(s); });
   doc.querySelectorAll('mark.anchor').forEach(m => { const p = m.parentNode; while (m.firstChild) p.insertBefore(m.firstChild, m); p.removeChild(m); });
   doc.querySelectorAll('.fl-node.anchored').forEach(g => { g.classList.remove('anchored'); delete g.dataset.itemId; });
   doc.normalize();
@@ -5438,9 +5496,9 @@ function markAnchors() {
     // a custom SIDECAR_USER or SIDECAR_AGENT colours both ends identically.
     try {
       const marks = wrapAnchor(it.anchor.quote, it.anchor.occurrence || 0, it.id, whoCls(it.by) === 'human');
-      // …and if a pending suggestion owns this span, the proposal is drawn into it. Built from the marks
-      // that actually landed, so a quote that resolved to nothing gets no preview and keeps the rail's
-      // diff, which is the only place left to read it.
+      // …and if a pending suggestion owns this span, the proposal is drawn beside it. Built from the
+      // marks that actually landed, so a quote that resolved to nothing gets no preview and keeps the
+      // rail's diff, which is the only place left to read it.
       const sug = marks && marks.length ? previewSug(it) : null;
       if (sug) buildPreview(marks, sug);
     }
@@ -5448,6 +5506,9 @@ function markAnchors() {
   }
   syncMarkEditing();
   syncSugbar();
+  // A preview that could not be built is a card that has to go back to showing its diff, and the cards
+  // were drawn before this ran. One re-render, only when the set actually grew, so it cannot loop.
+  if (previewFailed.size !== failedBefore) requestAnimationFrame(renderSide);
 }
 // A mark is contenteditable:false everywhere else, which is what makes it a clean tap target for its
 // card. In reading mode there is no card to tap and the mark is not painted, so an anchored sentence
@@ -5479,17 +5540,20 @@ function pulse(nodes) { nodes.forEach(m => m.classList.add('flash')); setTimeout
 // Tap a highlight in the doc → open its review (sheet on mobile) and flash the matching card.
 $('doc').addEventListener('click', (e) => {
   if (isReading()) return;   // the rail is not on screen; opening a card would drag it back on
-  const m = e.target.closest && e.target.closest('mark.anchor');
-  if (!m || !m.dataset.id) return;
+  // The proposal node is a sibling of the mark rather than a child, and in New view it is the only part
+  // of the span that is drawn, so it has to answer a tap the same way.
+  const el = e.target.closest && e.target.closest('mark.anchor,[data-sug]');
+  if (!el) return;
   // A suggestion's span answers a tap with its own bar, which is the only way a touch device reaches
   // one: there is no hover there. On the narrow layout that is ALL it does, because the review is a
   // sheet that slides over the document, and opening it would cover both the span and the bar that had
   // just appeared on it. The sheet's own pill is still one tap away when the thread is what is wanted.
-  if (m.dataset.sug) {
-    showSugbar(m.dataset.sug);
+  if (el.dataset.sug) {
+    showSugbar(el.dataset.sug);
     if (!window.matchMedia('(min-width: 781px)').matches) return;
   }
-  openReview(m.dataset.id);
+  const holder = el.closest('mark.anchor');
+  if (holder && holder.dataset.id) openReview(holder.dataset.id);
 });
 // A link to another document in this root opens IN sidecar, on a plain click, the way the panel's rows
 // do. Reviewing a folder means following its citations, and the alternative was editing the URL by
@@ -5618,29 +5682,37 @@ $('side').addEventListener('mouseleave', () => {
 // whichever span is being asked about: by the pointer, by the rail card the pointer is on, or by a tap,
 // which is the only one of the three a phone has.
 let sugbarId = null, sugbarHide = null;
-function sugMarks(sugId) {
-  return [...$('doc').querySelectorAll('mark.anchor[data-sug="' + cssId(sugId) + '"]')];
+// Everything in the document standing for one suggestion: its marks (the original text) and the
+// proposal node beside them, which is a sibling rather than a child now. Both carry `data-sug`, so the
+// hover, the positioning and the rebuild all read one selector.
+function sugEls(sugId) {
+  return [...$('doc').querySelectorAll('[data-sug="' + cssId(sugId) + '"]')];
 }
 function showSugbar(sugId) {
   clearTimeout(sugbarHide); sugbarHide = null;
   if (isReading()) return hideSugbar();
-  const marks = sugMarks(sugId);
+  const els = sugEls(sugId);
   const sug = state.review.items.find(i => i.id === sugId);
-  if (!marks.length || !sug) return hideSugbar();
+  if (!els.length || !sug) return hideSugbar();
   const bar = $('sugbar');
   if (sugbarId !== sugId) {
-    const kind = marks[0].dataset.sugKind;
+    const kind = els[0].dataset.sugKind;
     const view = kind === 'edit' ? null : (sugView.get(sugId) || 'new');
     const seg = (v, label) => `<button data-pick="${v}"${view === v ? ' class="on"' : ''}>${label}</button>`;
     bar.innerHTML = `<span class="who"><span class="dot"></span>${esc(sug.by || state.agent)}</span>`
-      + (view ? `<div class="views">${seg('new', 'New')}${seg('original', 'Original')}${seg('both', 'Both')}</div>` : '')
+      + (view ? `<span class="tsep"></span><div class="views">${seg('new', 'New')}${seg('original', 'Original')}</div>` : '')
+      + `<span class="tsep"></span>`
       + `<div class="act"><button class="primary" data-act="accept">accept</button>`
       + `<button data-act="reject">reject</button></div>`;
     sugbarId = sugId;
   }
   bar.classList.add('on');
   // Measured after it is shown, like #seltool: an element with display:none has no width to clamp by.
-  const r = marks[0].getBoundingClientRect();
+  // Against the first element that is actually DRAWN: in New view every mark is empty (its original is
+  // hidden) and reports a zero-width rect, so anchoring to the first one would put the bar at the left
+  // edge of the paragraph rather than over the text being read.
+  const drawn = els.find(el => el.getClientRects().length && el.getBoundingClientRect().width > 0) || els[0];
+  const r = drawn.getBoundingClientRect();
   const w = bar.offsetWidth || 240, h = bar.offsetHeight || 34;
   bar.style.left = Math.max(8, Math.min(r.left, innerWidth - w - 8)) + scrollX + 'px';
   // Above the span, so the sentence being proposed on stays readable; below when the line is at the top
@@ -5661,11 +5733,13 @@ function scheduleSugbarHide() {
 function syncSugbar() {
   if (!sugbarId) return;
   const id = sugbarId;
-  if (!sugMarks(id).length) return hideSugbar();
+  if (!sugEls(id).length) return hideSugbar();
   showSugbar(id);
 }
 $('doc').addEventListener('mouseover', (e) => {
-  const m = e.target.closest && e.target.closest('mark.anchor[data-sug]');
+  // The proposal counts as the span too: in New view it is the only part of it on screen, and a bar
+  // that only answered the (empty) mark would be unreachable by pointer.
+  const m = e.target.closest && e.target.closest('[data-sug]');
   if (m) showSugbar(m.dataset.sug);
   else if (sugbarId) scheduleSugbarHide();
 });
