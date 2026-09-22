@@ -19,12 +19,14 @@ manual reload to appear, indefinitely.
   *File changed on disk while you were editing* banner and is never replaced silently.
 - Reads that overlap land in the order they were asked. An older answer never paints over a newer
   one, a failed read never holds back a good one, and one document's or folder's answer never lands
-  under another's.
+  under another's. Opening a second document before the first has loaded no longer lets the first
+  one's scroll position or folder arrive afterwards under the second.
 - A document deleted or renamed while the page was away says *no longer on disk* and keeps the last
   copy on screen. If a switch to another document cannot read it at all, the previous document's text
   comes down and nothing is editable until the new one loads, so a save can never write one file's
-  text into another. `/api/state` answers 404 for a missing document; it was a 400 that carried the
-  absolute path.
+  text into another. The banner comes down once the file is back, even when it returns byte for byte.
+  `/api/state` answers 404 for a missing document, including one deleted while the request was being
+  served; it was a 400 that carried the absolute path.
 - **Reload (discard my edits)** discards them only once the file has actually been read again. If
   the read fails, the edits stay unsaved and the banner says so.
 

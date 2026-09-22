@@ -1796,8 +1796,12 @@ async function refreshDoc() {
     // If the text on screen is this document's, it stays, since it may be the only copy left; if it
     // is still the previous document's, it must not stay editable under this URL.
     if (e.status === 404) {
-      if (state.path === want) showBanner(want + ' is no longer on disk. This is the last copy sidecar read.',
-        [{ label: 'OK', fn: () => {} }]);
+      if (state.path === want) {
+        // Marked on the state, so the read that finds it back can take the banner down even when the
+        // file returns byte for byte and nothing else about the page would change.
+        state.missing = true;
+        showBanner(want + ' is no longer on disk. This is the last copy sidecar read.', [{ label: 'OK', fn: () => {} }]);
+      }
       else docUnreadable(want + ' is no longer on disk.');
     }
     // Anything else is the server on its way back up, and the next reconnect or event asks again.
@@ -1809,6 +1813,7 @@ async function refreshDoc() {
   // Same bytes AND same document: two files with identical contents are still two files.
   if (fresh.hash === state.hash && state.path === want) {   // our own save, or only the sidecar/presence moved — keep the caret
     docApplied.set(want, mine);
+    if (state.missing) { state.missing = false; hideBanner(); }   // back on disk, as it was
     // A presence heartbeat fires every 15s while an agent is watching, and it
     // arrives here with the review byte-identical. Rebuilding the rail for it
     // threw away scroll position mid-sentence — the rail jumping under you
@@ -5239,6 +5244,7 @@ function restoreScroll(y) {
   setTimeout(applyPendingScroll, 120);
   setTimeout(applyPendingScroll, 400);   // images and fonts land late and the height moves with them
 }
+let docNav = 0;   // one per openDoc switch; the latest is the only one allowed to finish
 // Load a document into the view we already have. No navigation, so the EventSource, the layout
 // preferences and the page itself survive; `FILE` is a let and every reader of it (the SSE filter, the
 // /assets rewriter, every api call) picks up the new value on its own.
@@ -5253,6 +5259,10 @@ async function openDoc(rel, opts) {
   if (o.push !== false) stampScroll();
   else { clearTimeout(scrollStampTimer); scrollStampTimer = null; }
   FILE = rel;
+  // Which switch this is. The read below can take long enough for the human to open something else,
+  // and everything after it (the banner, the scroll, the folder) belongs to the document this call
+  // opened: carried on under a later one, it scrolled and re-listed the folder for a file no longer open.
+  const nav = ++docNav;
   document.title = 'sidecar · ' + FILE;
   // The URL is the document, still: a reload, a bookmark or a copied address has to land back here.
   if (o.push !== false) history.pushState({ f: rel, y: 0 }, '', '/?f=' + encodeURIComponent(rel));
@@ -5264,11 +5274,13 @@ async function openDoc(rel, opts) {
   // review). Say so, and carry on to re-read the folder, which is where the truth shows up.
   try { await reloadFile(); }             // applyState → renderPwd, renderDoc (frame or blocks), renderSide
   catch (e) {
+    if (nav !== docNav) return;
     // Every read of it failed, so the outgoing text is still on screen: take it down rather than leave
     // it as though it were this file. If some other read landed meanwhile, the page is fine as it is.
     if (state.path !== FILE) docUnreadable('Could not open ' + rel + '. ' + e.message);
     else showBanner('Could not open ' + rel + '. ' + e.message, [{ label: 'OK', fn: () => {} }]);
   }
+  if (nav !== docNav) return;             // superseded while reading: the later switch does the rest
   restoreScroll(Number(o.y) || 0);        // the top, unless this is a back to somewhere
   if (dirOf(rel) !== navDir) await loadDir(dirOf(rel));
   else { navAsked = navDir; renderNav(); }   // same folder: only the current row moved, and a walk to

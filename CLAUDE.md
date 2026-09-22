@@ -485,8 +485,10 @@ hover title in the UI.
   be for `FILE`, and a folder answer for `navAsked`, the folder last asked for. A 404 counts as landed,
   so no older snapshot outlives a deletion; the banner says so and the last copy stays on screen,
   unless that copy is another document's, in which case `docUnreadable()` empties and locks the
-  surface. A switch whose every read fails ends the same way. "Reload (discard my edits)" clears
-  `dirty` only when the fresh state lands.
+  surface. A switch whose every read fails ends the same way, and a switch overtaken by a later one
+  stops where it is (`docNav`), leaving the scroll and the folder to the later one. The kept copy is
+  marked `state.missing`, so a read finding the file back clears the banner even through the
+  equal-hash shortcut. "Reload (discard my edits)" clears `dirty` only when the fresh state lands.
 - Whether a link opens IN sidecar is `public/doclink.js` and nothing else. Three callers ask it (the
   document's click handlers, the render that marks a link, and the asset frame's `pick`), so a rule
   added there is a rule all three follow. The frame reports the href out and the page decides, because

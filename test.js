@@ -4770,7 +4770,7 @@ test('opening a document in the listed folder cancels a walk to another one stil
   // folder they want is A now, so B's late answer must not move the panel away from the document.
   const { api, calls } = parkedApi();
   const env = {
-    FILE: 'a/one.md', dirty: false, docIssued: 0, docApplied: new Map(), saveTimer: null, scrollStampTimer: null,
+    FILE: 'a/one.md', dirty: false, docIssued: 0, docApplied: new Map(), saveTimer: null, scrollStampTimer: null, docNav: 0,
     navDir: 'a', navAsked: 'b', state: { path: 'a/one.md', hash: '1', review: { items: [] }, presence: {} },
     api, $: () => fakeDocEl(), document: {}, history: { pushState: () => {} },
     closeNavDrawer: () => {}, flushSave: async () => {}, stampScroll: () => {}, resetDocState: () => {},
@@ -4791,7 +4791,7 @@ test('a document read lands against that file\'s own history, not every file\'s'
   const { api, calls } = parkedApi();
   const el = fakeDocEl();
   const env = {
-    FILE: 'a.md', dirty: false, docIssued: 0, docApplied: new Map(), saveTimer: null, scrollStampTimer: null,
+    FILE: 'a.md', dirty: false, docIssued: 0, docApplied: new Map(), saveTimer: null, scrollStampTimer: null, docNav: 0,
     navDir: '', navAsked: null, state: { path: 'a.md', hash: 'a', review: { items: [] }, presence: {}, agent: 'claude' },
     api, $: () => el, document: {}, history: { pushState: () => {} },
     closeNavDrawer: () => {}, flushSave: async () => {}, stampScroll: () => {}, resetDocState: () => {},
@@ -4815,6 +4815,73 @@ test('a document read lands against that file\'s own history, not every file\'s'
   assert.equal(env.state.path, 'b.md', 'the first B read lands');
   assert.equal(el.innerHTML, 'B');
   assert.equal(el.contentEditable, 'true', 'and B is editable, not blank and locked');
+});
+
+test('a switch overtaken by a later one leaves the scroll and the folder to it', async () => {
+  // Open B (slow), then C; C lands first. B's call used to carry on when its read finally returned,
+  // restoring B's scroll and listing B's folder under C.
+  const { api, calls } = parkedApi();
+  const el = fakeDocEl(); const scrolls = [], dirs = [];
+  const env = {
+    FILE: 'a/one.md', dirty: false, docIssued: 0, docApplied: new Map(), saveTimer: null, scrollStampTimer: null, docNav: 0,
+    navDir: 'a', navAsked: 'a', state: { path: 'a/one.md', hash: '1', review: { items: [] }, presence: {} },
+    api, $: () => el, document: {}, history: { pushState: () => {} },
+    closeNavDrawer: () => {}, flushSave: async () => {}, stampScroll: () => {}, resetDocState: () => {},
+    restoreScroll: (y) => scrolls.push([env.FILE, y]), dirOf: (f) => f.split('/')[0],
+    loadDir: async (d) => { dirs.push(d); env.navDir = d; }, renderNav: () => {},
+    applyState: (st) => { env.state = st; el.contentEditable = 'true'; },   // renderDoc unlocks it
+    showBanner: () => {},
+  };
+  env.reloadFile = STREAM_FN('reloadFile', env);
+  env.docUnreadable = STREAM_FN('docUnreadable', env);
+  const openDoc = STREAM_FN('openDoc', env);
+  const tick = () => new Promise((r) => setImmediate(r));
+  const toB = openDoc('b/two.md', { y: 700 }); await tick();
+  const toC = openDoc('c/three.md', { y: 0 }); await tick();
+  calls[1].resolve({ path: 'c/three.md', hash: '3', review: { items: [] } });
+  await toC;
+  calls[0].resolve({ path: 'b/two.md', hash: '2', review: { items: [] } });
+  await toB;
+  assert.equal(env.state.path, 'c/three.md', 'C stays on screen');
+  assert.deepEqual(scrolls, [['c/three.md', 0]], 'only C restores a scroll position');
+  assert.deepEqual(dirs, ['c'], 'and only C lists its folder');
+  // The same for a switch that fails after it has been overtaken: nothing of it reaches the page.
+  const toD = openDoc('d/four.md'); await tick();
+  const toE = openDoc('e/five.md'); await tick();
+  calls[3].resolve({ path: 'e/five.md', hash: '5', review: { items: [] } });
+  await toE;
+  calls[2].reject(Object.assign(new Error('boom'), { status: 500 }));
+  await toD;
+  assert.equal(env.state.path, 'e/five.md');
+  assert.equal(el.contentEditable, 'true', 'no stale failure locks the document that did open');
+  assert.deepEqual(dirs, ['c', 'e']);
+});
+
+test('a missing document that comes back byte for byte clears its banner', async () => {
+  // The equal-hash shortcut is for presence pings, and it returned without touching the banner, so a
+  // file recreated with identical contents stayed marked "no longer on disk".
+  const { api, calls } = parkedApi();
+  const banners = []; let hidden = 0;
+  const env = { FILE: 'b.md', dirty: false, docIssued: 0, docApplied: new Map(),
+    state: { path: 'b.md', hash: 'same', review: {}, presence: {} }, api,
+    applyState: () => { throw new Error('the bytes did not change, so nothing is re-rendered'); },
+    showBanner: (text) => banners.push(text), hideBanner: () => { hidden++; },
+    renderSide: () => {}, renderPresence: () => {} };
+  const refreshDoc = STREAM_FN('refreshDoc', env);
+  const gone = refreshDoc();
+  calls[0].reject(Object.assign(new Error('no such document'), { status: 404 }));
+  await gone;
+  assert.match(banners[0], /no longer on disk/);
+  const back = refreshDoc();
+  calls[1].resolve({ path: 'b.md', hash: 'same', review: {}, presence: {} });
+  await back;
+  assert.equal(hidden, 1, 'the banner comes down');
+  assert.equal(env.state.missing, false, 'and the page no longer thinks the file is gone');
+  // An ordinary presence ping with the file present touches no banner at all.
+  const ping = refreshDoc();
+  calls[2].resolve({ path: 'b.md', hash: 'same', review: {}, presence: {} });
+  await ping;
+  assert.equal(hidden, 1);
 });
 
 test('a 404 outranks every older read of that file still in flight', async () => {
@@ -4893,7 +4960,7 @@ test('a switch whose every read fails takes the old text down instead of leaving
   const { api, calls } = parkedApi();
   const el = fakeDocEl(); const banners = [];
   const env = {
-    FILE: 'a.md', dirty: false, docIssued: 0, docApplied: new Map(), saveTimer: null, scrollStampTimer: null, navDir: '',
+    FILE: 'a.md', dirty: false, docIssued: 0, docApplied: new Map(), saveTimer: null, scrollStampTimer: null, docNav: 0, navDir: '',
     state: { path: 'a.md', hash: 'a', review: { items: [{ id: 'c1' }] }, presence: {}, agent: 'claude', user: 'you' },
     api, $: () => el, document: {}, history: { pushState: () => {} },
     closeNavDrawer: () => {}, flushSave: async () => {}, stampScroll: () => {}, resetDocState: () => {},
@@ -4960,6 +5027,33 @@ test('Reload (discard my edits) keeps them unsaved until the file is actually ba
   await new Promise((r) => setImmediate(r));
   assert.equal(env.dirty, false, 'and a read that lands is what discards them');
   assert.equal(env.state.hash, 'a2');
+});
+
+test('a document deleted mid-request is a 404 with no path, never a 400', async () => {
+  // Checking existence and then reading left a gap: a delete landing between the two threw ENOENT
+  // into the terminal handler, a 400 carrying the absolute path. Hammered here with a real delete
+  // racing real requests, so a check-then-read ever coming back shows up as a 400.
+  const rel = 'flicker.md', abs = path.join(dir, rel);
+  let running = true;
+  const churn = (async () => {
+    while (running) {
+      fs.writeFileSync(abs, '# Flicker\n');
+      await new Promise((r) => setImmediate(r));
+      fs.rmSync(abs, { force: true });
+      await new Promise((r) => setImmediate(r));
+    }
+  })();
+  const seen = new Set();
+  try {
+    for (let i = 0; i < 300; i++) {
+      const r = await fetchRetry(`${BASE}/api/state?path=${rel}`);
+      const body = await r.text();
+      seen.add(r.status);
+      assert.ok(r.status === 200 || r.status === 404, `status ${r.status}: ${body.slice(0, 160)}`);
+      assert.ok(!body.includes(dir) || r.status === 200, 'a failure never carries the absolute path');
+    }
+  } finally { running = false; await churn; fs.rmSync(abs, { force: true }); }
+  assert.ok(seen.has(404), 'the delete did land between requests');
 });
 
 test('the state route answers 404 for a document that is not there', async () => {

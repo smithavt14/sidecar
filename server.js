@@ -358,10 +358,14 @@ app.get('/api/state', (req, res) => {
   const kind = cli.docKind(abs) || (isTheme(abs) ? 'markdown' : null);
   if (!kind) return res.status(400).json({ error:
     `sidecar reviews markdown and html assets, not ${path.extname(abs) || 'extensionless files'}` });
-  // A document deleted or renamed under an open page is a 404, said plainly. Left to the read below it
-  // was a 400 carrying the absolute path, which the page could not tell apart from a server restarting.
-  if (!fs.existsSync(abs)) return res.status(404).json({ error: 'no such document' });
-  const markdown = fenceTheme(abs, fs.readFileSync(abs, 'utf8'));
+  // A document deleted or renamed under an open page is a 404, said plainly. Left to the terminal
+  // handler it was a 400 carrying the absolute path, which the page could not tell apart from a server
+  // restarting. Caught on the read itself rather than checked first: a delete landing between an
+  // existence check and the read would slip through the gap.
+  let raw;
+  try { raw = fs.readFileSync(abs, 'utf8'); }
+  catch (e) { if (e.code === 'ENOENT') return res.status(404).json({ error: 'no such document' }); throw e; }
+  const markdown = fenceTheme(abs, raw);
   const review = loadReview(abs);
   // Only persist when orphan states actually changed — an unconditional write here
   // feeds the fs-watcher, which tells the client to reload, which calls this again: a storm.
