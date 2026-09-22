@@ -1740,14 +1740,19 @@ async function resync() {
   await refreshDoc();
 }
 
-// Every read of the open document takes the next number, and an answer lands only if it is newer
-// than the last one that LANDED. Reads overlap: a reconnect, a tab coming back and a live event can
-// all be in flight at once, and a switch A → B → A can finish before A's first read does. The path
-// cannot tell the two A reads apart; the number can, so an older answer arriving last never paints
-// over a newer one. Measured against what landed rather than what was issued, because a newer read
-// that FAILS has put nothing on screen: holding the older good answer back for it would leave the
-// previous document's text live under this one's URL, and the next save would write it here.
-let docIssued = 0, docApplied = 0;
+// Every read of a document takes the next number, and an answer lands only if it is newer than the
+// last one that LANDED FOR THAT PATH. Reads overlap: a reconnect, a tab coming back and a live event
+// can all be in flight at once, and a switch A → B → A can finish before A's first read does. The
+// path cannot tell the two A reads apart; the number can, so an older answer arriving last never
+// paints over a newer one. Measured against what landed rather than what was issued, because a newer
+// read that FAILS has put nothing on screen, and per path because a read of A says nothing about B:
+// with one watermark for every file, loading A in between made B's only good answer look stale, and
+// B stayed blank. A 404 counts as landed, since it is the newest thing known about that file.
+let docIssued = 0;
+const docApplied = new Map();   // path → number of the last read that landed for it
+function landedFor(p) {
+  return docApplied.get(p) || 0;
+}
 
 // FILE has moved on and nothing of it could be read, so what is on screen is the previous document.
 // Left editable under the new URL, the next keystroke would save one file's text into another, so the
@@ -1782,7 +1787,11 @@ async function refreshDoc() {
   let fresh;
   try { fresh = await api('GET', '/api/state?path=' + encodeURIComponent(want)); }
   catch (e) {
-    if (mine <= docApplied || FILE !== want) return;
+    if (mine <= landedFor(want)) return;
+    // A 404 is an answer, not an outage: any older read of this file still in flight holds a snapshot
+    // from before the deletion, and must not bring it back over the "no longer on disk" state.
+    if (e.status === 404) docApplied.set(want, mine);
+    if (FILE !== want) return;
     // Deleted or renamed while nobody was listening: no reconnect will ever bring it back, so say so.
     // If the text on screen is this document's, it stays, since it may be the only copy left; if it
     // is still the previous document's, it must not stay editable under this URL.
@@ -1796,10 +1805,10 @@ async function refreshDoc() {
   }
   // The number cannot see a document switch on its own (A's answer can be newer than anything B has
   // landed yet), so the path is checked too.
-  if (mine <= docApplied || FILE !== want) return;
+  if (mine <= landedFor(want) || FILE !== want) return;
   // Same bytes AND same document: two files with identical contents are still two files.
   if (fresh.hash === state.hash && state.path === want) {   // our own save, or only the sidecar/presence moved — keep the caret
-    docApplied = mine;
+    docApplied.set(want, mine);
     // A presence heartbeat fires every 15s while an agent is watching, and it
     // arrives here with the review byte-identical. Rebuilding the rail for it
     // threw away scroll position mid-sentence — the rail jumping under you
@@ -1825,7 +1834,7 @@ async function refreshDoc() {
     ]);
     return;                                 // nothing landed, so a later read still may
   }
-  docApplied = mine;
+  docApplied.set(want, mine);
   applyState(fresh);
 }
 
@@ -1835,9 +1844,14 @@ async function reloadFile() {
   const want = FILE, mine = ++docIssued;
   let s;
   try { s = await api('GET', '/api/state?path=' + encodeURIComponent(want)); }
-  catch (e) { if (mine > docApplied && FILE === want) throw e; return; }
-  if (mine <= docApplied || FILE !== want) return;
-  docApplied = mine;
+  catch (e) {
+    if (mine <= landedFor(want)) return;
+    if (e.status === 404) docApplied.set(want, mine);   // as in refreshDoc: gone is the newest answer
+    if (FILE === want) throw e;
+    return;
+  }
+  if (mine <= landedFor(want) || FILE !== want) return;
+  docApplied.set(want, mine);
   applyState(s);
 }
 function applyState(s) {
@@ -4953,26 +4967,32 @@ const navSortFor = (dir) => {
   const v = uiStore.get('navSort:' + (dir || ''), 'spine');
   return Nav.MODES.includes(v) ? v : 'spine';
 };
-// Folder reads are numbered the same way as document reads, for the same reasons: a catch-up refresh
-// is not awaited, and the human can walk to another folder before it returns, so an answer lands only
-// if it is newer than the last one that landed, and a newer read that failed holds nothing back.
-// `navAsked` is the folder last asked for, known the moment it is asked for, while navDir only moves
-// when an answer lands.
-let dirIssued = 0, dirApplied = 0, navAsked = null;
+// Folder reads follow the document's rules. `navAsked` is the folder last asked for, known the moment
+// it is asked for (navDir only moves when an answer lands), and it plays the part FILE plays for a
+// document: only an answer for that folder may paint the panel, so a catch-up refresh the human has
+// walked away from is dropped. Within one folder, an answer lands only if it is newer than the last
+// one that landed for it, so a failed re-read holds back nothing and a read of another folder in
+// between invalidates nothing.
+let dirIssued = 0, navAsked = null;
+const dirApplied = new Map();   // folder → number of the last read that landed for it
 async function loadDir(dir) {
-  const mine = ++dirIssued;
-  navAsked = dir || '';
+  const want = dir || '', mine = ++dirIssued;
+  navAsked = want;
   try {
-    const d = await api('GET', '/api/dir?path=' + encodeURIComponent(dir || ''));
-    if (mine <= dirApplied) return;
-    dirApplied = mine;
+    const d = await api('GET', '/api/dir?path=' + encodeURIComponent(want));
+    if (want !== navAsked || mine <= (dirApplied.get(want) || 0)) return;
+    dirApplied.set(want, mine);
     navDir = d.dir; navData = d; navSort = navSortFor(navDir);
     renderNav();
   } catch (e) {
-    // A folder that could not be read is not the one to refresh next time. Cleared rather than set to
-    // navDir, because an older read may still land after this and move navDir; readers fall back to it.
-    if (mine === dirIssued) navAsked = null;
-    console.error('sidecar: could not read the folder', dir, e);
+    // A folder that is gone is an answer: older reads of it are dropped, and the panel and every later
+    // refresh stay on the folder that is listed. Any other failure is transient, so navAsked keeps
+    // pointing here: the next refresh asks again, and an older read of this folder may still land.
+    if (e.status === 404 && mine > (dirApplied.get(want) || 0)) {
+      dirApplied.set(want, mine);
+      if (navAsked === want) navAsked = navDir;
+    }
+    console.error('sidecar: could not read the folder', want, e);
   }
 }
 // The served root's own name, for the first crumb. It is the head of the document's pwd with the
@@ -5251,7 +5271,8 @@ async function openDoc(rel, opts) {
   }
   restoreScroll(Number(o.y) || 0);        // the top, unless this is a back to somewhere
   if (dirOf(rel) !== navDir) await loadDir(dirOf(rel));
-  else renderNav();           // same folder: only the current row moved
+  else { navAsked = navDir; renderNav(); }   // same folder: only the current row moved, and a walk to
+                                             // another folder still in flight is no longer wanted
 }
 // Back and forward move between documents rather than reloading the page. The initial entry carries no
 // state of ours (boot stamps one), so the URL is the fallback.
