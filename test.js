@@ -4524,7 +4524,7 @@ test('the watcher fires on an asset, so an agent edit reloads the frame', async 
 // every proxy sidecar is read through and by a phone suspending a backgrounded tab, and the page
 // that loses it goes stale with nothing to tell it so. Run against a server of its own so the
 // heartbeat can be turned down to something a test can wait for.
-test('an idle event stream pings, and hands the browser a reconnect interval', async () => {
+test('an idle event stream pings, and tells the browser the reconnect delay and the heartbeat', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-beat-'));
   fs.writeFileSync(path.join(root, 'doc.md'), '# Doc\n');
   const port = PORT + 4;
@@ -4544,16 +4544,19 @@ test('an idle event stream pings, and hands the browser a reconnect interval', a
         res.on('data', (c) => {
           buf += c;
           // Two, so this is the interval running rather than one write at connect time.
-          if ((buf.match(/^: ping$/gm) || []).length >= 2) { clearTimeout(timer); req.destroy(); resolve(buf); }
+          if ((buf.match(/^data: \{"event":"ping"\}$/gm) || []).length >= 2) { clearTimeout(timer); req.destroy(); resolve(buf); }
         });
       });
       req.on('error', () => {});
       req.end();
     });
     assert.match(raw, /^retry: \d+$/m, 'the reconnect delay is this server\'s to choose, not the browser\'s default');
-    assert.ok(raw.indexOf('retry:') < raw.indexOf(': ping'), 'and it arrives before anything else');
-    // A comment is not an event: the page must never parse one as a change.
-    assert.doesNotMatch(raw, /^data: /m);
+    // The ping is an event, not an SSE comment: a comment never reaches the page's script, and the
+    // page can only notice a stream that died reading OPEN by the pings stopping.
+    const events = raw.split('\n').filter((l) => l.startsWith('data: ')).map((l) => JSON.parse(l.slice(6)));
+    assert.deepEqual(events[0], { event: 'hello', heartbeat: 150 }, 'first, the interval the watchdog times against');
+    assert.ok(raw.indexOf('retry:') < raw.indexOf('data: '), 'after the reconnect delay');
+    assert.ok(events.slice(1).every((e) => e.event === 'ping' && !('rel' in e)), 'and every ping names no file');
   } finally {
     p.kill();
     fs.rmSync(root, { recursive: true, force: true });
@@ -4564,7 +4567,7 @@ test('an idle event stream pings, and hands the browser a reconnect interval', a
 // and an unref'd interval is never what keeps node alive.
 test('the heartbeat stops with the last client, and never holds the process open', async () => {
   const src = fs.readFileSync(path.join(__dirname, 'server.js'), 'utf8');
-  assert.match(src, /setInterval\([^\n]*': ping\\n\\n'[^\n]*\)\.unref\(\)/, 'unref\'d at the point it is started');
+  assert.match(src, /setInterval\([^\n]*'data: \{"event":"ping"\}\\n\\n'[^\n]*\)\.unref\(\)/, 'unref\'d at the point it is started');
   assert.match(src, /if \(!clients\.size && heartbeat\) \{ clearInterval\(heartbeat\); heartbeat = null; \}/,
     'and cleared when the set empties, so the next client starts a fresh one');
 });
@@ -4583,7 +4586,16 @@ const STREAM_FN = (name, env) => {
 class FakeSource {
   static CLOSED = 2;
   constructor(url) { this.url = url; this.readyState = 0; FakeSource.made.push(this); }
+  close() { this.readyState = FakeSource.CLOSED; this.closed = true; }
 }
+// Timers the test fires by hand: which are live, for how long, and the ability to run one.
+const fakeTimers = () => {
+  const live = new Map(); let id = 0;
+  return { live,
+    setTimeout: (fn, ms) => { live.set(++id, { fn, ms }); return id; },
+    clearTimeout: (i) => { live.delete(i); },
+    fire: (i) => { const t = live.get(i); live.delete(i); t.fn(); } };
+};
 
 test('every open of the stream catches up, the first one included', () => {
   // Boot reads the document, THEN opens the stream. An edit landing between the two was announced to
@@ -4591,6 +4603,7 @@ test('every open of the stream catches up, the first one included', () => {
   FakeSource.made = [];
   let resyncs = 0; const timers = [];
   const env = { es: null, resubscribe: null, EventSource: FakeSource, resync: () => { resyncs++; },
+    armWatchdog: () => {},   // its own test below; here the timers are the reconnect's alone
     setTimeout: (fn) => { timers.push(fn); return timers.length; } };
   const subscribe = STREAM_FN('subscribe', env);
   subscribe();
@@ -4610,6 +4623,101 @@ test('every open of the stream catches up, the first one included', () => {
   assert.equal(env.resubscribe, null, 'and the next give-up can schedule again');
   env.es.onopen();
   assert.equal(resyncs, 3, 'the rebuilt stream catches up on open too');
+});
+
+test('a stream that goes silent while it reads OPEN is rebuilt by the watchdog', () => {
+  // A laptop waking with the old socket, or a blackholed connection: no error ever fires and the
+  // EventSource still reads OPEN. The pings stopping is the only sign, so silence is what is timed.
+  FakeSource.made = [];
+  const t = fakeTimers(); const calls = [];
+  const env = { es: null, resubscribe: null, watchdog: null, heartbeatMs: 20000, EventSource: FakeSource,
+    setTimeout: t.setTimeout, clearTimeout: t.clearTimeout, console: { info: () => {} },
+    resync: () => calls.push('resync'), refreshDoc: async () => calls.push('doc'),
+    navTouched: () => calls.push('nav'), loadThemes: async () => calls.push('themes'), FILE: 'doc.md' };
+  env.armWatchdog = STREAM_FN('armWatchdog', env);
+  const subscribe = STREAM_FN('subscribe', env);
+  env.subscribe = subscribe;
+  subscribe();
+  const first = env.es;
+  const only = () => { assert.equal(t.live.size, 1, 'one watchdog, never a pile of them'); return [...t.live.keys()][0]; };
+  assert.equal(t.live.get(only()).ms, 50000, 'before the server says otherwise: 2.5 × the default 20s');
+  first.readyState = 1; first.onopen(); calls.length = 0;
+  // The server's interval (SIDECAR_HEARTBEAT_MS) arrives first and sets the fuse.
+  first.onmessage({ data: JSON.stringify({ event: 'hello', heartbeat: 1000 }) });
+  assert.equal(t.live.get(only()).ms, 2500, 'the watchdog follows the server\'s heartbeat');
+  // A ping is proof of life and nothing else: no read, no rail, no folder.
+  const before = only();
+  first.onmessage({ data: '{"event":"ping"}' });
+  assert.notEqual(only(), before, 'every message re-arms it');
+  assert.deepEqual(calls, [], 'a ping never reads state, the folder or the themes');
+  // So does any other message: a live stream never trips it.
+  first.onmessage({ data: JSON.stringify({ event: 'change', rel: 'other.md' }) });
+  only();
+  // Silence: the watchdog fires, the dead stream is closed and a new one opened, and its open catches up.
+  t.fire(only());
+  assert.equal(first.closed, true, 'the stream that reads OPEN but carries nothing is closed');
+  assert.equal(FakeSource.made.length, 2, 'and a new one opened');
+  assert.notEqual(env.es, first);
+  only();
+  env.es.readyState = 1; env.es.onopen();
+  assert.equal(calls.at(-1), 'resync', 'which catches up on whatever the silence hid');
+});
+
+test('a document that could not be read is retried: by resync, by its own row, and by the banner', async () => {
+  const { api, calls } = parkedApi();
+  const el = fakeDocEl(); const banners = [];
+  const env = {
+    FILE: 'b.md', dirty: false, docIssued: 0, docApplied: new Map(), saveTimer: null, docNav: 0,
+    state: { path: 'a.md', hash: 'a', review: { items: [] }, presence: {}, agent: 'claude' },
+    api, $: () => el, renderPwd: () => {}, renderSide: () => {}, renderPresence: () => {},
+    closeNavDrawer: () => {}, hideBanner: () => {},
+    showBanner: (text, actions) => banners.push({ text, labels: actions.map((a) => a.label), actions }),
+    applyState: (st) => { env.state = st; el.innerHTML = st.markdown; el.contentEditable = 'true'; },
+  };
+  for (const f of ['docUnreadable', 'retryDoc', 'reloadFile', 'refreshDoc']) env[f] = STREAM_FN(f, env);
+  const openDoc = STREAM_FN('openDoc', env);
+  const settle = () => new Promise((r) => setImmediate(r));
+  const b = (hash) => ({ path: 'b.md', hash, markdown: 'B' + hash, review: { items: [] }, presence: {} });
+  // One transient failure opening B: empty, locked, and a banner that can try again.
+  env.docUnreadable('Could not open b.md. boom');
+  assert.deepEqual(banners.at(-1).labels, ['Retry', 'OK']);
+  assert.equal(el.contentEditable, 'false');
+  // The banner's Retry, failing again, lands back in the same state with a banner that still offers it.
+  banners.at(-1).actions[0].fn(); await settle();
+  calls[0].reject(Object.assign(new Error('still down'), { status: 500 })); await settle();
+  assert.match(banners.at(-1).text, /^Could not open b\.md\. still down$/);
+  assert.deepEqual(banners.at(-1).labels, ['Retry', 'OK']);
+  // Clicking B's own row retries, where it used to return early because B was already FILE.
+  const click = openDoc('b.md'); await settle();
+  assert.equal(calls.length, 2, 'the click issued a read');
+  calls[1].resolve(b('1')); await click;
+  assert.equal(el.contentEditable, 'true', 'and B loads, editable');
+  assert.equal(env.state.path, 'b.md');
+  // A resync retries as well: back in the unreadable state, the next catch-up read lands B.
+  env.docUnreadable('Could not open b.md. boom');
+  const caughtUp = env.refreshDoc(); await settle();
+  calls[2].resolve(b('2')); await caughtUp;
+  assert.equal(env.state.markdown, 'B2', 'the resync read lands, since nothing on screen is B');
+  assert.equal(el.contentEditable, 'true');
+});
+
+test('a document that is not there keeps saying so, and offers nothing to retry', async () => {
+  const { api, calls } = parkedApi();
+  const el = fakeDocEl(); const banners = [];
+  const env = { FILE: 'b.md', dirty: false, docIssued: 0, docApplied: new Map(), saveTimer: null,
+    state: { path: 'a.md', hash: 'a', review: { items: [] }, presence: {} }, api, $: () => el,
+    renderPwd: () => {}, renderSide: () => {}, renderPresence: () => {}, applyState: () => {},
+    showBanner: (text, actions) => banners.push({ text, labels: actions.map((a) => a.label) }) };
+  env.docUnreadable = STREAM_FN('docUnreadable', env);
+  env.docUnreadable('b.md is no longer on disk.', true);
+  assert.deepEqual(banners.at(-1).labels, ['OK'], 'gone is an answer, not a failure to retry');
+  // A resync finding it still missing keeps that state, rather than the kept-copy wording for a page
+  // that holds no copy.
+  const p = STREAM_FN('refreshDoc', env)(); await new Promise((r) => setImmediate(r));
+  calls[0].reject(Object.assign(new Error('no such document'), { status: 404 })); await p;
+  assert.equal(banners.at(-1).text, 'b.md is no longer on disk.');
+  assert.equal(env.state.gone, true);
+  assert.equal(env.state.missing, undefined, 'never marked as a kept copy');
 });
 
 test('a catch-up re-reads the folder and the themes as well as the document, once each', async () => {
@@ -4985,7 +5093,7 @@ test('a switch whose every read fails takes the old text down instead of leaving
   assert.equal(env.sideItems, 0, 'A\'s cards leave the rail with it');
   assert.equal(env.state.agent, 'claude', 'while the server-wide fields the rail reads stay');
   assert.equal(env.dirty, false);
-  assert.match(banners.at(-1), /^Could not open b\.md\./);
+  assert.equal(banners.at(-1), 'b.md is no longer on disk.', 'the last read was a 404, and says so');
 });
 
 test('a catch-up that finds the open document missing takes it down if the screen still holds another', async () => {

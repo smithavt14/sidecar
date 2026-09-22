@@ -1695,13 +1695,14 @@ async function boot() {
 // an idle connection (sidecar is regularly read over `tailscale serve`), a phone suspends a
 // backgrounded tab, a laptop sleeps. With no onerror at all the page never noticed, so every change
 // an agent made after the drop was invisible until somebody reloaded by hand.
-let es = null, resubscribe = null;
+let es = null, resubscribe = null, watchdog = null, heartbeatMs = 20000;
 function subscribe() {
   es = new EventSource('/events');
+  armWatchdog();
   // Every open catches up, the first one included. Boot's snapshot was read before the stream
   // existed, so an edit landing between the two, or while the first connects were failing, was
   // announced to nobody. A resync with nothing to catch up on costs three reads and changes nothing.
-  es.onopen = () => resync();
+  es.onopen = () => { armWatchdog(); resync(); };
   es.onerror = () => {
     // CONNECTING is the browser retrying on its own, on the interval the server's `retry:` asked
     // for, and onopen will close the gap. CLOSED is it giving up — a non-200, or the server down at
@@ -1711,7 +1712,12 @@ function subscribe() {
     resubscribe = setTimeout(() => { resubscribe = null; subscribe(); }, 3000);
   };
   es.onmessage = async (e) => {
+    armWatchdog();         // anything arriving at all is proof the stream is alive
     const msg = JSON.parse(e.data);
+    // The server's heartbeat interval, which the watchdog times silence against, and the heartbeat
+    // itself. Neither is news about a file, so neither reads state or touches the rail.
+    if (msg.event === 'hello') { if (msg.heartbeat > 0) { heartbeatMs = msg.heartbeat; armWatchdog(); } return; }
+    if (msg.event === 'ping') return;
     // A theme file changed under the themes directory. Re-read them and re-apply, which is what makes
     // editing a theme in sidecar repaint the tool on save. It carries `rel` too when the file happens
     // to sit inside the served root, so the document below reloads through exactly the path any other
@@ -1723,6 +1729,19 @@ function subscribe() {
     if (rel !== FILE) return;
     await refreshDoc();
   };
+}
+// A stream can be dead while it still reads OPEN: a laptop waking with the old socket, a connection
+// blackholed on the way, and no error ever fires. The server pings every heartbeatMs, so a silence of
+// two and a half intervals means the stream is gone whatever it reports. Rebuild it; its onopen then
+// catches up on whatever the silence hid. Every message re-arms this, so a live stream never trips it.
+function armWatchdog() {
+  clearTimeout(watchdog);
+  watchdog = setTimeout(() => {
+    console.info('sidecar: no event for ' + Math.round(heartbeatMs * 2.5 / 1000) + 's, reconnecting the stream');
+    clearTimeout(resubscribe); resubscribe = null;
+    es.close();
+    subscribe();
+  }, heartbeatMs * 2.5);
 }
 // A tab that was hidden is where the stream dies most reliably, and the browser may not have noticed
 // yet on the way back. Coming into view re-reads the document rather than trusting it survived.
@@ -1757,15 +1776,31 @@ function landedFor(p) {
 // FILE has moved on and nothing of it could be read, so what is on screen is the previous document.
 // Left editable under the new URL, the next keystroke would save one file's text into another, so the
 // surface empties and locks until a read of this document lands (renderDoc unlocks it).
-function docUnreadable(message) {
+// `gone` is a 404: the file is not there, and its banner says so and offers nothing to retry (a live
+// event brings it back if it is recreated). Anything else was a failed read of a file that may be
+// fine, so the banner offers Retry, a click on its own row retries, and the next resync (a
+// reconnect, the watchdog, the tab coming back) reads it again through refreshDoc on its own.
+function docUnreadable(message, gone) {
   clearTimeout(saveTimer); saveTimer = null; dirty = false;
   // Only the document's fields are replaced. Who the user and agent are, and the server's code stamp,
   // belong to the server rather than to a file, and the rail's presence readout reads them.
-  state = { ...state, path: FILE, kind: 'unreadable', pwd: null, markdown: '', diff: '', hash: null,
+  state = { ...state, path: FILE, kind: 'unreadable', gone: !!gone, pwd: null, markdown: '', diff: '', hash: null,
     review: { items: [] }, presence: null };
   const doc = $('doc'); doc.innerHTML = ''; doc.contentEditable = 'false';
   renderPwd(); renderSide();
-  showBanner(message, [{ label: 'OK', fn: () => {} }]);
+  showBanner(message, gone ? [{ label: 'OK', fn: () => {} }]
+    : [{ label: 'Retry', fn: () => retryDoc() }, { label: 'OK', fn: () => {} }]);
+}
+// Read the open document again from the unreadable state. A failure lands back in that state with the
+// newer reason; a success is an ordinary applyState, which unlocks the surface.
+async function retryDoc() {
+  const want = FILE;
+  try { await reloadFile(); }
+  catch (e) {
+    if (FILE !== want || state.kind !== 'unreadable') return;
+    if (e.status === 404) docUnreadable(want + ' is no longer on disk.', true);
+    else docUnreadable('Could not open ' + want + '. ' + e.message);
+  }
 }
 
 // "Reload (discard my edits)" discards them once the file has been read and is on screen, which is
@@ -1796,13 +1831,15 @@ async function refreshDoc() {
     // If the text on screen is this document's, it stays, since it may be the only copy left; if it
     // is still the previous document's, it must not stay editable under this URL.
     if (e.status === 404) {
-      if (state.path === want) {
+      // Already empty and locked: say it is gone, with no copy on screen to speak of.
+      if (state.kind === 'unreadable') docUnreadable(want + ' is no longer on disk.', true);
+      else if (state.path === want) {
         // Marked on the state, so the read that finds it back can take the banner down even when the
         // file returns byte for byte and nothing else about the page would change.
         state.missing = true;
         showBanner(want + ' is no longer on disk. This is the last copy sidecar read.', [{ label: 'OK', fn: () => {} }]);
       }
-      else docUnreadable(want + ' is no longer on disk.');
+      else docUnreadable(want + ' is no longer on disk.', true);
     }
     // Anything else is the server on its way back up, and the next reconnect or event asks again.
     return;
@@ -5251,7 +5288,9 @@ let docNav = 0;   // one per openDoc switch; the latest is the only one allowed 
 async function openDoc(rel, opts) {
   const o = opts || {};
   if (!rel) return;
-  if (rel === FILE) { closeNavDrawer(); return; }
+  // Its own row, clicked while it could not be read, is a retry: there is no switch to make, and
+  // returning early left the human no way back but a reload.
+  if (rel === FILE) { closeNavDrawer(); if (state && state.kind === 'unreadable') await retryDoc(); return; }
   await flushSave();          // the outgoing document leaves with its text saved, not with it pending
   // The outgoing entry keeps where it was left, before the new one is pushed on top of it. On the way
   // BACK there is nothing to stamp (history has already moved), so a debounced write still in flight is
@@ -5277,7 +5316,8 @@ async function openDoc(rel, opts) {
     if (nav !== docNav) return;
     // Every read of it failed, so the outgoing text is still on screen: take it down rather than leave
     // it as though it were this file. If some other read landed meanwhile, the page is fine as it is.
-    if (state.path !== FILE) docUnreadable('Could not open ' + rel + '. ' + e.message);
+    if (state.path !== FILE) docUnreadable(e.status === 404 ? rel + ' is no longer on disk.'
+      : 'Could not open ' + rel + '. ' + e.message, e.status === 404);
     else showBanner('Could not open ' + rel + '. ' + e.message, [{ label: 'OK', fn: () => {} }]);
   }
   if (nav !== docNav) return;             // superseded while reading: the later switch does the rest

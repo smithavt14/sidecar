@@ -12,6 +12,9 @@ manual reload to appear, indefinitely.
 
 - The server sends a heartbeat every 20 seconds and tells the browser how soon to reconnect.
   `SIDECAR_HEARTBEAT_MS` shortens the interval for a proxy with a shorter idle timeout.
+- A connection can die while the browser still reports it open, after a laptop wakes or when the
+  network drops it silently. The page now notices when heartbeats stop: after two and a half
+  intervals with nothing, it reconnects and catches up, so later edits keep arriving.
 - Every time the stream opens, and every time the tab comes back into view, the page reads the
   document, the listed folder and the themes again, so whatever changed in the gap lands without a
   reload. A stream the browser has given up on is rebuilt.
@@ -24,7 +27,8 @@ manual reload to appear, indefinitely.
 - A document deleted or renamed while the page was away says *no longer on disk* and keeps the last
   copy on screen. If a switch to another document cannot read it at all, the previous document's text
   comes down and nothing is editable until the new one loads, so a save can never write one file's
-  text into another. The banner comes down once the file is back, even when it returns byte for byte.
+  text into another. A read that failed for any other reason is retried: the banner offers **Retry**,
+  clicking the document's row tries again, and so does the next reconnect or return to the tab. The banner comes down once the file is back, even when it returns byte for byte.
   `/api/state` answers 404 for a missing document, including one deleted while the request was being
   served; it was a 400 that carried the absolute path.
 - **Reload (discard my edits)** discards them only once the file has actually been read again. If

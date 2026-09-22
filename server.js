@@ -598,21 +598,25 @@ const clients = new Set();
 // A stream carrying nothing looks dead to everything between the page and here: a reverse proxy
 // drops it on its idle timeout (sidecar is regularly read over `tailscale serve`), a phone suspends
 // a backgrounded tab, a laptop sleeps with one open. Nobody is told — the page simply stops
-// updating, and an agent's edit then needs a manual reload to appear. A comment every 20s keeps
-// bytes moving, so an idle reader is never mistaken for a gone one and a connection that did break
-// fails fast enough for the browser to reconnect. Overridable for a proxy on a shorter fuse.
+// updating, and an agent's edit then needs a manual reload to appear. A ping every 20s keeps bytes
+// moving, so a proxy never sees an idle reader, and it is a real event rather than an SSE comment
+// because comments never reach the page's script: a socket can die while the EventSource still
+// reads OPEN (a laptop waking, a blackholed connection), and the page can only notice that by the
+// pings stopping. Overridable for a proxy on a shorter fuse; the page is told the interval.
 const HEARTBEAT_MS = Number(process.env.SIDECAR_HEARTBEAT_MS) || 20000;
 let heartbeat = null;
 app.get('/events', (req, res) => {
   res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
   res.flushHeaders();
   // Name the reconnect delay rather than leaving it to whatever each browser defaults to, so a page
-  // that lost the stream comes back on an interval this server chose.
+  // that lost the stream comes back on an interval this server chose. Then the heartbeat interval,
+  // which is what the page's watchdog times silence against.
   res.write('retry: 3000\n\n');
+  res.write(`data: ${JSON.stringify({ event: 'hello', heartbeat: HEARTBEAT_MS })}\n\n`);
   clients.add(res);
   // One timer for every client, started by the first arrival: a server nobody is reading pings
   // nothing. unref'd, because a heartbeat is not a reason for the process to stay alive.
-  if (!heartbeat) heartbeat = setInterval(() => { for (const c of clients) c.write(': ping\n\n'); }, HEARTBEAT_MS).unref();
+  if (!heartbeat) heartbeat = setInterval(() => { for (const c of clients) c.write('data: {"event":"ping"}\n\n'); }, HEARTBEAT_MS).unref();
   req.on('close', () => {
     clients.delete(res);
     if (!clients.size && heartbeat) { clearInterval(heartbeat); heartbeat = null; }

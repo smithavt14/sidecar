@@ -473,7 +473,11 @@ hover title in the UI.
   `resetDocState`, which runs on every swap.
 - The `/events` stream is assumed to break, because it does: a proxy drops it on its idle timeout
   (sidecar is regularly read over `tailscale serve`), a phone suspends a backgrounded tab, a laptop
-  sleeps. The server writes a `: ping` comment every 20s and a `retry:` hint on connect. The page runs
+  sleeps. The server writes a `retry:` hint and a `hello` event carrying the heartbeat interval on
+  connect, then a `ping` event every 20s (`SIDECAR_HEARTBEAT_MS`). The ping is an event, not an SSE
+  comment, because comments never reach the page's script and a socket can die while the
+  EventSource still reads OPEN: `armWatchdog()` rebuilds the stream after 2.5 intervals of silence.
+  Pings return before anything reads state or touches the rail. The page runs
   `resync()` on every open of the stream (the first included, since boot's snapshot predates it) and
   on a tab coming back into view: themes, the listed folder and the document, once each. The document
   lands through `refreshDoc()`, the same function a live event uses, so a change caught up on late
@@ -485,7 +489,9 @@ hover title in the UI.
   be for `FILE`, and a folder answer for `navAsked`, the folder last asked for. A 404 counts as landed,
   so no older snapshot outlives a deletion; the banner says so and the last copy stays on screen,
   unless that copy is another document's, in which case `docUnreadable()` empties and locks the
-  surface. A switch whose every read fails ends the same way, and a switch overtaken by a later one
+  surface (`state.kind === 'unreadable'`; `gone` for a 404). A read that failed any other way is
+  retried by the banner's Retry, by clicking the document's own row, and by the next resync. A
+  switch whose every read fails ends the same way, and a switch overtaken by a later one
   stops where it is (`docNav`), leaving the scroll and the folder to the later one. The kept copy is
   marked `state.missing`, so a read finding the file back clears the banner even through the
   equal-hash shortcut. "Reload (discard my edits)" clears `dirty` only when the fresh state lands.
