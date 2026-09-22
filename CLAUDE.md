@@ -471,6 +471,30 @@ hover title in the UI.
   `scrollRestoration` is off, since switching documents never navigates and its restore would fire
   against the outgoing document's height. Anything else belonging to one document is cleared in
   `resetDocState`, which runs on every swap.
+- The `/events` stream is assumed to break, because it does: a proxy drops it on its idle timeout
+  (sidecar is regularly read over `tailscale serve`), a phone suspends a backgrounded tab, a laptop
+  sleeps. The server writes a `retry:` hint and a `hello` event carrying the heartbeat interval on
+  connect, then a `ping` event every 20s (`SIDECAR_HEARTBEAT_MS`). The ping is an event, not an SSE
+  comment, because comments never reach the page's script and a socket can die while the
+  EventSource still reads OPEN: `armWatchdog()` rebuilds the stream after 2.5 intervals of silence.
+  Pings return before anything reads state or touches the rail. The page runs
+  `resync()` on every open of the stream (the first included, since boot's snapshot predates it) and
+  on a tab coming back into view: themes, the listed folder and the document, once each. The document
+  lands through `refreshDoc()`, the same function a live event uses, so a change caught up on late
+  gets the unsaved-edits banner like any other. Reads overlap, so document reads (`refreshDoc` and
+  `reloadFile`) and folder reads (`loadDir`) are each numbered, and an answer lands only if it is
+  newer than the last one that *landed for that path* (`docApplied`, `dirApplied`: maps, never one
+  number). Counting from the last one issued let a failed read hold back a good one, and one number
+  for every path let a read of A make B's only good answer look stale. A document answer also has to
+  be for `FILE`, and a folder answer for `navAsked`, the folder last asked for. A 404 counts as landed,
+  so no older snapshot outlives a deletion; the banner says so and the last copy stays on screen,
+  unless that copy is another document's, in which case `docUnreadable()` empties and locks the
+  surface (`state.kind === 'unreadable'`; `gone` for a 404). A read that failed any other way is
+  retried by the banner's Retry, by clicking the document's own row, and by the next resync. A
+  switch whose every read fails ends the same way, and a switch overtaken by a later one
+  stops where it is (`docNav`), leaving the scroll and the folder to the later one. The kept copy is
+  marked `state.missing`, so a read finding the file back clears the banner even through the
+  equal-hash shortcut. "Reload (discard my edits)" clears `dirty` only when the fresh state lands.
 - Whether a link opens IN sidecar is `public/doclink.js` and nothing else. Three callers ask it (the
   document's click handlers, the render that marks a link, and the asset frame's `pick`), so a rule
   added there is a rule all three follow. The frame reports the href out and the page decides, because

@@ -3,6 +3,37 @@
 All notable changes to sidecar. Versions follow [semver](https://semver.org); dates are the day the
 version was tagged.
 
+## 1.14.1 (unreleased)
+
+**The page stays current when the connection drops.** The live stream went quiet between changes, and
+a quiet stream is dropped by a proxy on its idle timeout (`tailscale serve` included), by a phone
+backgrounding the tab and by a laptop sleeping. The page never noticed, so an agent's edit needed a
+manual reload to appear, indefinitely.
+
+- The server sends a heartbeat every 20 seconds and tells the browser how soon to reconnect.
+  `SIDECAR_HEARTBEAT_MS` shortens the interval for a proxy with a shorter idle timeout.
+- A connection can die while the browser still reports it open, after a laptop wakes or when the
+  network drops it silently. The page now notices when heartbeats stop: after two and a half
+  intervals with nothing, it reconnects and catches up, so later edits keep arriving.
+- Every time the stream opens, and every time the tab comes back into view, the page reads the
+  document, the listed folder and the themes again, so whatever changed in the gap lands without a
+  reload. A stream the browser has given up on is rebuilt.
+- A change caught up on late goes through the same path as a live one, so unsaved text gets the
+  *File changed on disk while you were editing* banner and is never replaced silently.
+- Reads that overlap land in the order they were asked. An older answer never paints over a newer
+  one, a failed read never holds back a good one, and one document's or folder's answer never lands
+  under another's. Opening a second document before the first has loaded no longer lets the first
+  one's scroll position or folder arrive afterwards under the second.
+- A document deleted or renamed while the page was away says *no longer on disk* and keeps the last
+  copy on screen. If a switch to another document cannot read it at all, the previous document's text
+  comes down and nothing is editable until the new one loads, so a save can never write one file's
+  text into another. A read that failed for any other reason is retried: the banner offers **Retry**,
+  clicking the document's row tries again, and so does the next reconnect or return to the tab. The banner comes down once the file is back, even when it returns byte for byte.
+  `/api/state` answers 404 for a missing document, including one deleted while the request was being
+  served; it was a 400 that carried the absolute path.
+- **Reload (discard my edits)** discards them only once the file has actually been read again. If
+  the read fails, the edits stay unsaved and the banner says so.
+
 ## 1.14.0 (2026-09-21)
 
 **A suggestion is drawn where it would land.** A pending suggestion lived only as a word-level diff in
