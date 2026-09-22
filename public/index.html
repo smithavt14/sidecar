@@ -1681,7 +1681,31 @@ async function boot() {
   try { history.scrollRestoration = 'manual'; } catch (e) {}
   await reloadFile();
   loadDir(dirOf(FILE));   // not awaited: the document is what was asked for, the folder is context
-  const es = new EventSource('/events');
+  subscribe();
+}
+
+// The event stream, and the two ways the page gets back what it missed while it was down. It is the
+// only thing keeping the document current, and the thing most likely to die quietly: a proxy drops
+// an idle connection (sidecar is regularly read over `tailscale serve`), a phone suspends a
+// backgrounded tab, a laptop sleeps. With no onerror at all the page never noticed, so every change
+// an agent made after the drop was invisible until somebody reloaded by hand.
+let es = null, streamUp = false, resubscribe = null;
+function subscribe() {
+  es = new EventSource('/events');
+  es.onopen = () => {
+    // The first open has nothing to catch up on. Every later one means there was a window where
+    // events went nowhere, and the page cannot know whether any of them were for this document.
+    if (streamUp) resync();
+    streamUp = true;
+  };
+  es.onerror = () => {
+    // CONNECTING is the browser retrying on its own, on the interval the server's `retry:` asked
+    // for, and onopen will close the gap. CLOSED is it giving up — a non-200, or the server down at
+    // the moment it tried — and nothing ever reopens a closed EventSource, so build a new one here
+    // or this page is stale for the rest of its life.
+    if (es.readyState !== EventSource.CLOSED || resubscribe) return;
+    resubscribe = setTimeout(() => { resubscribe = null; subscribe(); }, 3000);
+  };
   es.onmessage = async (e) => {
     const msg = JSON.parse(e.data);
     // A theme file changed under the themes directory. Re-read them and re-apply, which is what makes
@@ -1693,33 +1717,48 @@ async function boot() {
     if (!rel) return;
     navTouched(rel);       // a sibling moved: the folder's order may have, and a new file may exist
     if (rel !== FILE) return;
-    const fresh = await api('GET', '/api/state?path=' + encodeURIComponent(FILE));
-    if (fresh.hash === state.hash) {          // our own save, or only the sidecar/presence moved — keep the caret
-      // A presence heartbeat fires every 15s while an agent is watching, and it
-      // arrives here with the review byte-identical. Rebuilding the rail for it
-      // threw away scroll position mid-sentence — the rail jumping under you
-      // every 15 seconds while writing a reply. Only re-render what moved.
-      const reviewMoved = JSON.stringify(fresh.review) !== JSON.stringify(state.review);
-      // The rail must also rebuild when the per-thread marks changed (a wait exit delivering item
-      // ids, or a re-arm clearing them) — but NOT on the plain 15s watching heartbeat, whose empty
-      // item list matches the previous one and would otherwise rebuild the rail under the caret.
-      const marksMoved = JSON.stringify((fresh.presence || {}).items || []) !==
-                         JSON.stringify((state.presence || {}).items || []);
-      state.review = fresh.review;
-      state.presence = fresh.presence;        // presence pings arrive here (doc bytes unchanged)
-      if (reviewMoved || marksMoved) renderSide();
-      else renderPresence();
-      return;
-    }
-    if (dirty) {                              // genuine external edit while we have unsaved text
-      showBanner('File changed on disk while you were editing.', [
-        { label: 'Reload (discard my edits)', fn: () => { dirty = false; applyState(fresh); } },
-        { label: 'Keep typing', fn: () => {} },
-      ]);
-      return;
-    }
-    applyState(fresh);
+    await resync();
   };
+}
+// A tab that was hidden is where the stream dies most reliably, and the browser may not have noticed
+// yet on the way back. Coming into view re-reads the document rather than trusting it survived.
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') resync(); });
+
+// Read the open document and land it. Every route into the page — an event, a reconnect, a tab
+// coming back — arrives here, so a change caught up on late is applied exactly as a live one is,
+// including the unsaved-edits banner: a gap in the stream is never a reason to throw away text
+// somebody is still typing.
+async function resync() {
+  if (!FILE || !state) return;
+  let fresh;
+  // The one case worth swallowing: the server is still on its way back up, and the next reconnect
+  // or the next event asks again.
+  try { fresh = await api('GET', '/api/state?path=' + encodeURIComponent(FILE)); } catch (e) { return; }
+  if (fresh.hash === state.hash) {          // our own save, or only the sidecar/presence moved — keep the caret
+    // A presence heartbeat fires every 15s while an agent is watching, and it
+    // arrives here with the review byte-identical. Rebuilding the rail for it
+    // threw away scroll position mid-sentence — the rail jumping under you
+    // every 15 seconds while writing a reply. Only re-render what moved.
+    const reviewMoved = JSON.stringify(fresh.review) !== JSON.stringify(state.review);
+    // The rail must also rebuild when the per-thread marks changed (a wait exit delivering item
+    // ids, or a re-arm clearing them) — but NOT on the plain 15s watching heartbeat, whose empty
+    // item list matches the previous one and would otherwise rebuild the rail under the caret.
+    const marksMoved = JSON.stringify((fresh.presence || {}).items || []) !==
+                       JSON.stringify((state.presence || {}).items || []);
+    state.review = fresh.review;
+    state.presence = fresh.presence;        // presence pings arrive here (doc bytes unchanged)
+    if (reviewMoved || marksMoved) renderSide();
+    else renderPresence();
+    return;
+  }
+  if (dirty) {                              // genuine external edit while we have unsaved text
+    showBanner('File changed on disk while you were editing.', [
+      { label: 'Reload (discard my edits)', fn: () => { dirty = false; applyState(fresh); } },
+      { label: 'Keep typing', fn: () => {} },
+    ]);
+    return;
+  }
+  applyState(fresh);
 }
 
 async function reloadFile() {

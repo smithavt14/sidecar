@@ -4520,6 +4520,72 @@ test('the watcher fires on an asset, so an agent edit reloads the frame', async 
   assert.equal(ev.rel, 'watched.html');
 });
 
+// The stream keeps itself alive, and says how to come back. An idle SSE connection is dropped by
+// every proxy sidecar is read through and by a phone suspending a backgrounded tab, and the page
+// that loses it goes stale with nothing to tell it so. Run against a server of its own so the
+// heartbeat can be turned down to something a test can wait for.
+test('an idle event stream pings, and hands the browser a reconnect interval', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-beat-'));
+  fs.writeFileSync(path.join(root, 'doc.md'), '# Doc\n');
+  const port = PORT + 4;
+  const p = spawn('node', [path.join(__dirname, 'server.js'), root],
+    { env: { ...process.env, SIDECAR_PORT: port, SIDECAR_HEARTBEAT_MS: '150' }, stdio: 'pipe' });
+  try {
+    await new Promise((res, rej) => {
+      p.stdout.on('data', (d) => { if (d.toString().includes('ready')) res(); });
+      p.on('exit', () => rej(new Error('server died')));
+      setTimeout(() => rej(new Error('never ready')), 8000);
+    });
+    const raw = await new Promise((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port, path: '/events', method: 'GET' }, (res) => {
+        assert.match(res.headers['content-type'], /text\/event-stream/);
+        let buf = '';
+        const timer = setTimeout(() => { req.destroy(); reject(new Error('no ping on an idle stream')); }, 6000);
+        res.on('data', (c) => {
+          buf += c;
+          // Two, so this is the interval running rather than one write at connect time.
+          if ((buf.match(/^: ping$/gm) || []).length >= 2) { clearTimeout(timer); req.destroy(); resolve(buf); }
+        });
+      });
+      req.on('error', () => {});
+      req.end();
+    });
+    assert.match(raw, /^retry: \d+$/m, 'the reconnect delay is this server\'s to choose, not the browser\'s default');
+    assert.ok(raw.indexOf('retry:') < raw.indexOf(': ping'), 'and it arrives before anything else');
+    // A comment is not an event: the page must never parse one as a change.
+    assert.doesNotMatch(raw, /^data: /m);
+  } finally {
+    p.kill();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// The timer belongs to the clients, not to the process. A server nobody is reading pings nothing,
+// and an unref'd interval is never what keeps node alive.
+test('the heartbeat stops with the last client, and never holds the process open', async () => {
+  const src = fs.readFileSync(path.join(__dirname, 'server.js'), 'utf8');
+  assert.match(src, /setInterval\([^\n]*': ping\\n\\n'[^\n]*\)\.unref\(\)/, 'unref\'d at the point it is started');
+  assert.match(src, /if \(!clients\.size && heartbeat\) \{ clearInterval\(heartbeat\); heartbeat = null; \}/,
+    'and cleared when the set empties, so the next client starts a fresh one');
+});
+
+// The page has to notice the stream dying, or every change made while it was down needs a manual
+// reload — which was the bug. Three routes back in, asserted on the source because there is no
+// browser in this suite.
+test('the page reconnects the stream, and re-reads the document when it comes back', () => {
+  assert.match(PAGE, /es\.onerror = \(\) => \{/, 'an errored stream is handled at all');
+  assert.match(PAGE, /if \(es\.readyState !== EventSource\.CLOSED \|\| resubscribe\) return;[\s\S]*?subscribe\(\)/,
+    'a stream the browser gave up on is rebuilt here, since nothing reopens a closed EventSource');
+  assert.match(PAGE, /es\.onopen = \(\) => \{[\s\S]*?if \(streamUp\) resync\(\);/,
+    'a RE-connect re-reads the document; the first open has nothing to catch up on');
+  assert.match(PAGE, /visibilityState === 'visible'\) resync\(\)/, 'and so does a tab coming back');
+  // One landing place for all three, so a late change is applied exactly as a live one is — banner
+  // included. A resync that called applyState directly would silently discard unsaved text.
+  assert.match(PAGE, /async function resync\(\) \{[\s\S]*?if \(dirty\) \{[\s\S]*?File changed on disk while you were editing/,
+    'resync keeps the unsaved-edits banner');
+  assert.match(PAGE, /if \(rel !== FILE\) return;\s*\n\s*await resync\(\);/, 'and the event path goes through it too');
+});
+
 test('review PUT refuses an element sel that is not a plain name (the id guard, for the other anchor)', async () => {
   const r = await put('/api/review', { path: 'poster.html', review: { items: [
     { id: 'cbad', kind: 'comment', by: 'you', status: 'open',

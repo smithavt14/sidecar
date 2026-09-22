@@ -471,6 +471,12 @@ hover title in the UI.
   `scrollRestoration` is off, since switching documents never navigates and its restore would fire
   against the outgoing document's height. Anything else belonging to one document is cleared in
   `resetDocState`, which runs on every swap.
+- The `/events` stream is assumed to break, because it does: a proxy drops it on its idle timeout
+  (sidecar is regularly read over `tailscale serve`), a phone suspends a backgrounded tab, a laptop
+  sleeps. The server writes a `: ping` comment every 20s and a `retry:` hint on connect, and the page
+  re-reads the open document through `resync()` on every reconnect and on a tab coming back into
+  view. Everything that lands a change goes through that one function, banner included, so a change
+  caught up on late can never quietly overwrite unsaved text.
 - Whether a link opens IN sidecar is `public/doclink.js` and nothing else. Three callers ask it (the
   document's click handlers, the render that marks a link, and the asset frame's `pick`), so a rule
   added there is a rule all three follow. The frame reports the href out and the page decides, because
