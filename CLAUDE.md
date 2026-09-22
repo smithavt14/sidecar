@@ -473,10 +473,12 @@ hover title in the UI.
   `resetDocState`, which runs on every swap.
 - The `/events` stream is assumed to break, because it does: a proxy drops it on its idle timeout
   (sidecar is regularly read over `tailscale serve`), a phone suspends a backgrounded tab, a laptop
-  sleeps. The server writes a `: ping` comment every 20s and a `retry:` hint on connect, and the page
-  re-reads the open document through `resync()` on every reconnect and on a tab coming back into
-  view. Everything that lands a change goes through that one function, banner included, so a change
-  caught up on late can never quietly overwrite unsaved text.
+  sleeps. The server writes a `: ping` comment every 20s and a `retry:` hint on connect. The page runs
+  `resync()` on every open of the stream (the first included, since boot's snapshot predates it) and
+  on a tab coming back into view: themes, the listed folder and the document, once each. The document
+  lands through `refreshDoc()`, the same function a live event uses, so a change caught up on late
+  gets the unsaved-edits banner like any other, and a read is dropped if the human opened another
+  document while it was in flight.
 - Whether a link opens IN sidecar is `public/doclink.js` and nothing else. Three callers ask it (the
   document's click handlers, the render that marks a link, and the asset frame's `pick`), so a rule
   added there is a rule all three follow. The frame reports the href out and the page decides, because

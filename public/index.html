@@ -1689,15 +1689,13 @@ async function boot() {
 // an idle connection (sidecar is regularly read over `tailscale serve`), a phone suspends a
 // backgrounded tab, a laptop sleeps. With no onerror at all the page never noticed, so every change
 // an agent made after the drop was invisible until somebody reloaded by hand.
-let es = null, streamUp = false, resubscribe = null;
+let es = null, resubscribe = null;
 function subscribe() {
   es = new EventSource('/events');
-  es.onopen = () => {
-    // The first open has nothing to catch up on. Every later one means there was a window where
-    // events went nowhere, and the page cannot know whether any of them were for this document.
-    if (streamUp) resync();
-    streamUp = true;
-  };
+  // Every open catches up, the first one included. Boot's snapshot was read before the stream
+  // existed, so an edit landing between the two, or while the first connects were failing, was
+  // announced to nobody. A resync with nothing to catch up on costs three reads and changes nothing.
+  es.onopen = () => resync();
   es.onerror = () => {
     // CONNECTING is the browser retrying on its own, on the interval the server's `retry:` asked
     // for, and onopen will close the gap. CLOSED is it giving up — a non-200, or the server down at
@@ -1717,23 +1715,38 @@ function subscribe() {
     if (!rel) return;
     navTouched(rel);       // a sibling moved: the folder's order may have, and a new file may exist
     if (rel !== FILE) return;
-    await resync();
+    await refreshDoc();
   };
 }
 // A tab that was hidden is where the stream dies most reliably, and the browser may not have noticed
 // yet on the way back. Coming into view re-reads the document rather than trusting it survived.
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') resync(); });
 
-// Read the open document and land it. Every route into the page — an event, a reconnect, a tab
-// coming back — arrives here, so a change caught up on late is applied exactly as a live one is,
-// including the unsaved-edits banner: a gap in the stream is never a reason to throw away text
-// somebody is still typing.
+// Everything the stream keeps current, read again once each: the themes, the folder beside the
+// document, and the document. A reconnect or a tab coming back cannot know which of them moved while
+// nothing was listening. Themes go first because loadThemes can raise a banner of its own, and the
+// document's unsaved-edits banner is the one that must be left standing.
 async function resync() {
-  if (!FILE || !state) return;
+  if (!FILE) return;
+  loadDir(navDir !== null ? navDir : dirOf(FILE));   // not awaited, as at boot: the folder is context
+  await loadThemes();
+  await refreshDoc();
+}
+
+// Read the open document and land it. A live event and a catch-up both arrive here, so a change
+// caught up on late is applied exactly as a live one is, including the unsaved-edits banner: a gap in
+// the stream is never a reason to throw away text somebody is still typing.
+async function refreshDoc() {
+  const want = FILE;
+  if (!want || !state) return;
   let fresh;
   // The one case worth swallowing: the server is still on its way back up, and the next reconnect
   // or the next event asks again.
-  try { fresh = await api('GET', '/api/state?path=' + encodeURIComponent(FILE)); } catch (e) { return; }
+  try { fresh = await api('GET', '/api/state?path=' + encodeURIComponent(want)); } catch (e) { return; }
+  // The answer belongs to the document it was asked about. Opening another one while this was in
+  // flight moved FILE on, and landing the old document's state under the new one's URL would aim
+  // the next save, accept or reply at the new file with the old file's content.
+  if (FILE !== want) return;
   if (fresh.hash === state.hash) {          // our own save, or only the sidecar/presence moved — keep the caret
     // A presence heartbeat fires every 15s while an agent is watching, and it
     // arrives here with the review byte-identical. Rebuilding the rail for it
@@ -1753,7 +1766,8 @@ async function resync() {
   }
   if (dirty) {                              // genuine external edit while we have unsaved text
     showBanner('File changed on disk while you were editing.', [
-      { label: 'Reload (discard my edits)', fn: () => { dirty = false; applyState(fresh); } },
+      // The banner outlives a document switch, so its button asks the same question the read did.
+      { label: 'Reload (discard my edits)', fn: () => { if (FILE !== want) return; dirty = false; applyState(fresh); } },
       { label: 'Keep typing', fn: () => {} },
     ]);
     return;

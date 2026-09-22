@@ -4570,20 +4570,101 @@ test('the heartbeat stops with the last client, and never holds the process open
 });
 
 // The page has to notice the stream dying, or every change made while it was down needs a manual
-// reload — which was the bug. Three routes back in, asserted on the source because there is no
-// browser in this suite.
-test('the page reconnects the stream, and re-reads the document when it comes back', () => {
-  assert.match(PAGE, /es\.onerror = \(\) => \{/, 'an errored stream is handled at all');
-  assert.match(PAGE, /if \(es\.readyState !== EventSource\.CLOSED \|\| resubscribe\) return;[\s\S]*?subscribe\(\)/,
-    'a stream the browser gave up on is rebuilt here, since nothing reopens a closed EventSource');
-  assert.match(PAGE, /es\.onopen = \(\) => \{[\s\S]*?if \(streamUp\) resync\(\);/,
-    'a RE-connect re-reads the document; the first open has nothing to catch up on');
-  assert.match(PAGE, /visibilityState === 'visible'\) resync\(\)/, 'and so does a tab coming back');
-  // One landing place for all three, so a late change is applied exactly as a live one is — banner
-  // included. A resync that called applyState directly would silently discard unsaved text.
-  assert.match(PAGE, /async function resync\(\) \{[\s\S]*?if \(dirty\) \{[\s\S]*?File changed on disk while you were editing/,
-    'resync keeps the unsaved-edits banner');
-  assert.match(PAGE, /if \(rel !== FILE\) return;\s*\n\s*await resync\(\);/, 'and the event path goes through it too');
+// reload — which was the bug. There is no browser in this suite, so the stream's functions are lifted
+// out of the page and run against a scope the test holds: a variable the page reassigns (FILE on a
+// document switch, `es` on a resubscribe) is then one the test can move mid-flight and read back.
+const STREAM_FN = (name, env) => {
+  const m = PAGE.match(new RegExp('(?:async )?function ' + name + '\\(\\) \\{[\\s\\S]*?\\n\\}'));
+  assert.ok(m, name + ' is still one function in the page');
+  return new Function('env', 'with (env) { return (' + m[0] + '); }')(env);
+};
+class FakeSource {
+  static CLOSED = 2;
+  constructor(url) { this.url = url; this.readyState = 0; FakeSource.made.push(this); }
+}
+
+test('every open of the stream catches up, the first one included', () => {
+  // Boot reads the document, THEN opens the stream. An edit landing between the two was announced to
+  // nobody, so the first open cannot assume the snapshot is still current.
+  FakeSource.made = [];
+  let resyncs = 0; const timers = [];
+  const env = { es: null, resubscribe: null, EventSource: FakeSource, resync: () => { resyncs++; },
+    setTimeout: (fn) => { timers.push(fn); return timers.length; } };
+  const subscribe = STREAM_FN('subscribe', env);
+  subscribe();
+  assert.equal(env.es.url, '/events');
+  env.es.readyState = 1; env.es.onopen();
+  assert.equal(resyncs, 1, 'the first open closes the gap since the boot snapshot');
+  env.es.readyState = 0; env.es.onerror();
+  assert.equal(timers.length, 0, 'CONNECTING is the browser retrying on its own; nothing to do');
+  env.es.readyState = 1; env.es.onopen();
+  assert.equal(resyncs, 2, 'and so does every reconnect');
+  // A stream the browser gave up on is never reopened by the browser, so the page builds a new one,
+  // once, however many errors arrive before the timer fires.
+  env.es.readyState = FakeSource.CLOSED; env.es.onerror(); env.es.onerror();
+  assert.equal(timers.length, 1, 'one rebuild scheduled, not one per error');
+  timers[0]();
+  assert.equal(FakeSource.made.length, 2, 'a fresh EventSource');
+  assert.equal(env.resubscribe, null, 'and the next give-up can schedule again');
+  env.es.onopen();
+  assert.equal(resyncs, 3, 'the rebuilt stream catches up on open too');
+});
+
+test('a catch-up re-reads the folder and the themes as well as the document, once each', async () => {
+  // A sibling created, a badge moved or a theme edited while the stream was down is as stale as the
+  // document. Themes land before the document, so the unsaved-edits banner is the one left standing.
+  const calls = [];
+  const env = { FILE: 'notes/doc.md', navDir: 'notes', dirOf: (f) => f.split('/').slice(0, -1).join('/'),
+    loadDir: (d) => calls.push('dir:' + d), loadThemes: async () => calls.push('themes'),
+    refreshDoc: async () => calls.push('doc') };
+  await STREAM_FN('resync', env)();
+  assert.deepEqual(calls, ['dir:notes', 'themes', 'doc']);
+  // The listed folder is the one to refresh, even when the panel has walked away from the document's.
+  calls.length = 0; env.navDir = '';
+  await STREAM_FN('resync', env)();
+  assert.equal(calls[0], 'dir:', 'the root, which the panel was showing');
+  calls.length = 0; env.navDir = null;
+  await STREAM_FN('resync', env)();
+  assert.equal(calls[0], 'dir:notes', 'and the document\'s own folder before the panel has loaded one');
+});
+
+test('a document read lands only on the document it was asked about', async () => {
+  const run = async ({ switchTo, dirty = false }) => {
+    let answer; const applied = [], banners = [];
+    const env = {
+      FILE: 'a.md', dirty, state: { hash: 'old', review: {}, presence: {} },
+      api: (m, url) => { env.asked = url; return new Promise((r) => { answer = r; }); },
+      applyState: (s) => applied.push(s), showBanner: (text, actions) => banners.push({ text, actions }),
+      renderSide: () => {}, renderPresence: () => {},
+    };
+    const p = STREAM_FN('refreshDoc', env)();
+    if (switchTo) env.FILE = switchTo;              // the human opens another document mid-flight
+    answer({ hash: 'new', markdown: 'A\'s text' });
+    await p;
+    return { env, applied, banners };
+  };
+  const stay = await run({});
+  assert.equal(stay.env.asked, '/api/state?path=a.md');
+  assert.equal(stay.applied.length, 1, 'control: with no switch, A\'s change lands');
+  const moved = await run({ switchTo: 'b.md' });
+  assert.equal(moved.applied.length, 0, 'A\'s state never lands under B\'s URL');
+  assert.equal(moved.banners.length, 0, 'nor raises a banner about B');
+  // The banner can outlive a switch too: its Reload asks the same question before it applies.
+  const held = await run({ dirty: true });
+  assert.match(held.banners[0].text, /File changed on disk while you were editing/, 'unsaved text gets the banner');
+  assert.equal(held.applied.length, 0, 'and is not overwritten');
+  held.env.FILE = 'b.md';
+  held.banners[0].actions[0].fn();
+  assert.equal(held.applied.length, 0, 'Reload after a switch does not put A\'s text into B');
+  held.env.FILE = 'a.md';
+  held.banners[0].actions[0].fn();
+  assert.equal(held.applied.length, 1, 'and on A it reloads as it always did');
+});
+
+test('the page wires the stream: live events read the document, a tab coming back catches up', () => {
+  assert.match(PAGE, /if \(rel !== FILE\) return;\s*\n\s*await refreshDoc\(\);/, 'a live event reads only the document');
+  assert.match(PAGE, /visibilityState === 'visible'\) resync\(\)/, 'a tab coming back catches up on everything');
+  assert.match(PAGE, /await loadDir\(dirOf\(FILE\)\)|loadDir\(dirOf\(FILE\)\);[^\n]*\n\s*subscribe\(\);/, 'boot opens the stream after its first read');
 });
 
 test('review PUT refuses an element sel that is not a plain name (the id guard, for the other anchor)', async () => {
