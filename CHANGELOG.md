@@ -3,7 +3,7 @@
 All notable changes to sidecar. Versions follow [semver](https://semver.org); dates are the day the
 version was tagged.
 
-## 1.14.1 (unreleased)
+## 1.14.1 (2026-09-22)
 
 **The page stays current when the connection drops.** The live stream went quiet between changes, and
 a quiet stream is dropped by a proxy on its idle timeout (`tailscale serve` included), by a phone
