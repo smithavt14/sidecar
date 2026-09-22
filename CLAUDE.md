@@ -477,8 +477,11 @@ hover title in the UI.
   `resync()` on every open of the stream (the first included, since boot's snapshot predates it) and
   on a tab coming back into view: themes, the listed folder and the document, once each. The document
   lands through `refreshDoc()`, the same function a live event uses, so a change caught up on late
-  gets the unsaved-edits banner like any other, and a read is dropped if the human opened another
-  document while it was in flight.
+  gets the unsaved-edits banner like any other. Reads overlap, so document reads (`refreshDoc` and
+  `reloadFile`) and folder reads (`loadDir`) are each numbered, and only the latest one issued may
+  land. A 404 from `/api/state` means the document was deleted or renamed, and says so in the banner
+  with the last copy left on screen; any other failure is a server restarting and waits for the next
+  read.
 - Whether a link opens IN sidecar is `public/doclink.js` and nothing else. Three callers ask it (the
   document's click handlers, the render that marks a link, and the asset frame's `pick`), so a rule
   added there is a rule all three follow. The frame reports the href out and the page decides, because

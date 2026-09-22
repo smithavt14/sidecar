@@ -1647,7 +1647,13 @@ function timeAgo(ms) {
 async function api(method, url, body) {
   const r = await fetch(url, { method, headers: {'Content-Type':'application/json'},
     body: body ? JSON.stringify(body) : undefined });
-  if (!r.ok) throw new Error((await r.json()).error || r.status);
+  if (!r.ok) {
+    // The status rides on the error: a document that is gone (404) is a different fact from a server
+    // that is still restarting, and the caller is the one who knows which of the two it can wait out.
+    const e = new Error((await r.json()).error || r.status);
+    e.status = r.status;
+    throw e;
+  }
   return r.json();
 }
 
@@ -1728,10 +1734,18 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 // document's unsaved-edits banner is the one that must be left standing.
 async function resync() {
   if (!FILE) return;
-  loadDir(navDir !== null ? navDir : dirOf(FILE));   // not awaited, as at boot: the folder is context
+  // The folder last ASKED for, which a navigation still in flight has already moved on from navDir.
+  loadDir(navAsked !== null ? navAsked : dirOf(FILE));   // not awaited, as at boot: the folder is context
   await loadThemes();
   await refreshDoc();
 }
+
+// Every read of the open document takes the next number, and only the latest one issued may land.
+// Reads overlap: a reconnect, a tab coming back and a live event can all be in flight at once, and a
+// document switch A → B → A can finish before A's first read does. Checking the path cannot tell the
+// two A reads apart; the number can, so an older answer arriving last never paints over a newer one,
+// and one for the wrong document never lands under the new one's URL.
+let docRead = 0;
 
 // Read the open document and land it. A live event and a catch-up both arrive here, so a change
 // caught up on late is applied exactly as a live one is, including the unsaved-edits banner: a gap in
@@ -1739,14 +1753,21 @@ async function resync() {
 async function refreshDoc() {
   const want = FILE;
   if (!want || !state) return;
+  const mine = ++docRead;
   let fresh;
-  // The one case worth swallowing: the server is still on its way back up, and the next reconnect
-  // or the next event asks again.
-  try { fresh = await api('GET', '/api/state?path=' + encodeURIComponent(want)); } catch (e) { return; }
-  // The answer belongs to the document it was asked about. Opening another one while this was in
-  // flight moved FILE on, and landing the old document's state under the new one's URL would aim
-  // the next save, accept or reply at the new file with the old file's content.
-  if (FILE !== want) return;
+  try { fresh = await api('GET', '/api/state?path=' + encodeURIComponent(want)); }
+  catch (e) {
+    if (mine !== docRead) return;
+    // Deleted or renamed while nobody was listening: no reconnect will ever bring it back, so say so
+    // and leave the text on screen, which may be the only copy of it the human still has.
+    if (e.status === 404) showBanner(want + ' is no longer on disk. This is the last copy sidecar read.',
+      [{ label: 'OK', fn: () => {} }]);
+    // Anything else is the server on its way back up, and the next reconnect or event asks again.
+    return;
+  }
+  // The path is checked as well, though every switch today issues its own read: FILE moving on with
+  // no read behind it must still never land one document's state under another's URL.
+  if (mine !== docRead || FILE !== want) return;
   if (fresh.hash === state.hash) {          // our own save, or only the sidecar/presence moved — keep the caret
     // A presence heartbeat fires every 15s while an agent is watching, and it
     // arrives here with the review byte-identical. Rebuilding the rail for it
@@ -1766,8 +1787,10 @@ async function refreshDoc() {
   }
   if (dirty) {                              // genuine external edit while we have unsaved text
     showBanner('File changed on disk while you were editing.', [
-      // The banner outlives a document switch, so its button asks the same question the read did.
-      { label: 'Reload (discard my edits)', fn: () => { if (FILE !== want) return; dirty = false; applyState(fresh); } },
+      // Reload reads the file again rather than applying `fresh`: an agent watching this document
+      // pings every 15s, so by the time the button is pressed this answer can be several reads old.
+      // The banner also outlives a document switch, and is about this document, not the one open now.
+      { label: 'Reload (discard my edits)', fn: () => { if (FILE !== want) return; dirty = false; reloadFile(); } },
       { label: 'Keep typing', fn: () => {} },
     ]);
     return;
@@ -1775,8 +1798,14 @@ async function refreshDoc() {
   applyState(fresh);
 }
 
+// The same numbering as refreshDoc, because openDoc reads through here: a switch away and back must
+// outrank a catch-up read that was issued before it.
 async function reloadFile() {
-  applyState(await api('GET', '/api/state?path=' + encodeURIComponent(FILE)));
+  const mine = ++docRead;
+  let s;
+  try { s = await api('GET', '/api/state?path=' + encodeURIComponent(FILE)); }
+  catch (e) { if (mine === docRead) throw e; return; }
+  if (mine === docRead) applyState(s);
 }
 function applyState(s) {
   hideBanner();
@@ -4891,12 +4920,24 @@ const navSortFor = (dir) => {
   const v = uiStore.get('navSort:' + (dir || ''), 'spine');
   return Nav.MODES.includes(v) ? v : 'spine';
 };
+// Folder reads are numbered the same way as document reads, for the same reason: a catch-up refresh
+// is not awaited, and the human can walk to another folder before it returns. Whichever was asked for
+// last is the one the panel shows. `navAsked` is that folder, known the moment it is asked for, while
+// navDir only moves when an answer lands.
+let dirRead = 0, navAsked = null;
 async function loadDir(dir) {
+  const mine = ++dirRead;
+  navAsked = dir || '';
   try {
     const d = await api('GET', '/api/dir?path=' + encodeURIComponent(dir || ''));
+    if (mine !== dirRead) return;
     navDir = d.dir; navData = d; navSort = navSortFor(navDir);
     renderNav();
-  } catch (e) { console.error('sidecar: could not read the folder', dir, e); }
+  } catch (e) {
+    // A folder that could not be read is not the one to refresh next time; the listed one still is.
+    if (mine === dirRead) navAsked = navDir;
+    console.error('sidecar: could not read the folder', dir, e);
+  }
 }
 // The served root's own name, for the first crumb. It is the head of the document's pwd with the
 // document's relative path taken off the end — the server already sends both, so nothing new rides
@@ -5181,7 +5222,7 @@ let navRefreshTimer = null;
 function navTouched(rel) {
   if (navDir === null || dirOf(rel) !== navDir) return;
   clearTimeout(navRefreshTimer);
-  navRefreshTimer = setTimeout(() => loadDir(navDir), 250);
+  navRefreshTimer = setTimeout(() => loadDir(navAsked !== null ? navAsked : navDir), 250);
 }
 
 // ---------- the panel: resizable, collapsible, remembered ----------
