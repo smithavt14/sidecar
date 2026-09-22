@@ -478,10 +478,13 @@ hover title in the UI.
   on a tab coming back into view: themes, the listed folder and the document, once each. The document
   lands through `refreshDoc()`, the same function a live event uses, so a change caught up on late
   gets the unsaved-edits banner like any other. Reads overlap, so document reads (`refreshDoc` and
-  `reloadFile`) and folder reads (`loadDir`) are each numbered, and only the latest one issued may
-  land. A 404 from `/api/state` means the document was deleted or renamed, and says so in the banner
-  with the last copy left on screen; any other failure is a server restarting and waits for the next
-  read.
+  `reloadFile`) and folder reads (`loadDir`) are each numbered, and an answer lands only if it is
+  newer than the last one that *landed*. Counting from the last one issued let a newer read that
+  failed hold back an older good one, which left the previous document's text under the new URL. A
+  404 from `/api/state` means the document was deleted or renamed: the banner says so and the last
+  copy stays on screen, unless that copy is another document's, in which case `docUnreadable()`
+  empties and locks the surface. A switch whose every read fails ends the same way. "Reload (discard
+  my edits)" clears `dirty` only when the fresh state lands.
 - Whether a link opens IN sidecar is `public/doclink.js` and nothing else. Three callers ask it (the
   document's click handlers, the render that marks a link, and the asset frame's `pick`), so a rule
   added there is a rule all three follow. The frame reports the href out and the page decides, because

@@ -4624,7 +4624,10 @@ test('a catch-up re-reads the folder and the themes as well as the document, onc
   calls.length = 0; env.navAsked = '';
   await STREAM_FN('resync', env)();
   assert.equal(calls[0], 'dir:', 'the root, which the panel was showing');
-  calls.length = 0; env.navAsked = null;
+  calls.length = 0; env.navAsked = null; env.navDir = 'walked';
+  await STREAM_FN('resync', env)();
+  assert.equal(calls[0], 'dir:walked', 'with nothing pending, the folder that is listed');
+  calls.length = 0; env.navDir = null;
   await STREAM_FN('resync', env)();
   assert.equal(calls[0], 'dir:notes', 'and the document\'s own folder before the panel has loaded one');
 });
@@ -4633,12 +4636,13 @@ test('a document read lands only on the document it was asked about', async () =
   const run = async ({ switchTo, dirty = false }) => {
     let answer; const applied = [], banners = [];
     const env = {
-      FILE: 'a.md', dirty, docRead: 0, state: { hash: 'old', review: {}, presence: {} },
+      FILE: 'a.md', dirty, docIssued: 0, docApplied: 0, state: { path: 'a.md', hash: 'old', review: {}, presence: {} },
       api: (m, url) => { env.asked = url; return new Promise((r) => { answer = r; }); },
       applyState: (s) => applied.push(s), showBanner: (text, actions) => banners.push({ text, actions }),
-      reloadFile: () => { env.reloads = (env.reloads || 0) + 1; },
+      reloadFile: () => { env.reloads = (env.reloads || 0) + 1; return new Promise(() => {}); },
       renderSide: () => {}, renderPresence: () => {},
     };
+    env.reloadDiscarding = STREAM_FN('reloadDiscarding', env);
     const p = STREAM_FN('refreshDoc', env)();
     if (switchTo) env.FILE = switchTo;              // the human opens another document mid-flight
     answer({ hash: 'new', markdown: 'A\'s text' });
@@ -4662,7 +4666,7 @@ test('a document read lands only on the document it was asked about', async () =
   held.env.FILE = 'a.md';
   held.banners[0].actions[0].fn();
   assert.equal(held.env.reloads, 1, 'and on A it reads the file again');
-  assert.equal(held.env.dirty, false);
+  assert.equal(held.env.dirty, true, 'the edits count as unsaved until that read has landed');
   assert.equal(held.applied.length, 0, 'never the answer the banner was raised with');
 });
 
@@ -4679,8 +4683,8 @@ test('of two reads of the same document, the older answer arriving last never la
   // is the same for every one of them. Only the order they were ISSUED in says which is current.
   const { api, calls } = parkedApi();
   const applied = [];
-  const env = { FILE: 'a.md', dirty: false, docRead: 0, state: { hash: 'h0', review: {}, presence: {} },
-    api, applyState: (s) => { applied.push(s.hash); env.state = s; },
+  const env = { FILE: 'a.md', dirty: false, docIssued: 0, docApplied: 0, state: { path: 'a.md', hash: 'h0', review: {}, presence: {} },
+    api, applyState: (s) => { applied.push(s.hash); env.state = { path: 'a.md', ...s }; },
     showBanner: () => {}, renderSide: () => {}, renderPresence: () => {} };
   const refreshDoc = STREAM_FN('refreshDoc', env);
   const first = refreshDoc(), second = refreshDoc();
@@ -4708,7 +4712,7 @@ test('a folder refresh the human has navigated past never repaints the panel', a
   // returns. Shared with navigation's own loadDir, the numbering lets the newer ask win.
   const { api, calls } = parkedApi();
   let renders = 0;
-  const env = { api, dirRead: 0, navAsked: null, navDir: 'old', navData: null, navSort: 'spine',
+  const env = { api, dirIssued: 0, dirApplied: 0, navAsked: null, navDir: 'old', navData: null, navSort: 'spine',
     navSortFor: () => 'spine', renderNav: () => { renders++; }, console: { error: () => {} } };
   const loadDir = STREAM_FN('loadDir', env);
   const refresh = loadDir('old');                 // the catch-up, for the folder that was listed
@@ -4720,18 +4724,25 @@ test('a folder refresh the human has navigated past never repaints the panel', a
   await refresh;
   assert.equal(env.navDir, 'new', 'the panel stays on the folder the human walked to');
   assert.equal(renders, 1, 'and the stale answer never renders');
-  // A folder that cannot be read is not the one the next refresh should ask for.
+  // A newer folder read that fails holds nothing back: the older one still lands when it answers, and
+  // the failed folder is not the one the next refresh asks for.
+  const older = loadDir('left');
   const bad = loadDir('gone');
-  calls[2].reject(Object.assign(new Error('no such directory'), { status: 404 }));
+  calls[3].reject(Object.assign(new Error('no such directory'), { status: 404 }));
   await bad;
-  assert.equal(env.navAsked, 'new', 'navAsked falls back to the folder still listed');
+  assert.equal(env.navAsked, null, 'the next refresh falls back to whatever is listed');
+  calls[2].resolve({ dir: 'left', docs: [] });
+  await older;
+  assert.equal(env.navDir, 'left', 'the older good answer lands');
+  assert.equal(renders, 2);
 });
 
 test('an open document deleted while nobody listened says so, and keeps its text', async () => {
   const run = async (err) => {
     const { api, calls } = parkedApi();
     const applied = [], banners = [];
-    const env = { FILE: 'notes/doc.md', dirty: false, docRead: 0, state: { hash: 'h', review: {}, presence: {} },
+    const env = { FILE: 'notes/doc.md', dirty: false, docIssued: 0, docApplied: 0,
+      state: { path: 'notes/doc.md', hash: 'h', review: {}, presence: {} },
       api, applyState: (s) => applied.push(s), showBanner: (text, actions) => banners.push({ text, actions }),
       renderSide: () => {}, renderPresence: () => {} };
     const p = STREAM_FN('refreshDoc', env)();
@@ -4748,6 +4759,102 @@ test('an open document deleted while nobody listened says so, and keeps its text
     const blip = await run(err);
     assert.equal(blip.banners.length, 0, `${err.message} is transient, and raises nothing`);
   }
+});
+
+// A stand-in for the #doc element: what docUnreadable and openDoc touch on it.
+const fakeDocEl = () => ({ innerHTML: '<p>the outgoing document</p>', contentEditable: 'true' });
+
+test('a newer read that fails never holds back an older one that succeeds', async () => {
+  // A → B: openDoc's read of B starts, then a reconnect reads B again and fails. Judged against the
+  // latest read ISSUED, the first read's good answer was dropped and A's text stayed under B's URL.
+  const { api, calls } = parkedApi();
+  const applied = [];
+  const env = { FILE: 'b.md', dirty: false, docIssued: 0, docApplied: 0,
+    state: { path: 'a.md', hash: 'a', review: {}, presence: {} },
+    api, applyState: (s) => { applied.push(s.hash); env.state = s; },
+    showBanner: () => {}, renderSide: () => {}, renderPresence: () => {} };
+  const reloadFile = STREAM_FN('reloadFile', env), refreshDoc = STREAM_FN('refreshDoc', env);
+  const opening = reloadFile();
+  const reconnect = refreshDoc();
+  calls[1].reject(Object.assign(new Error('boom'), { status: 500 }));   // the newer read fails
+  await reconnect;
+  calls[0].resolve({ path: 'b.md', hash: 'b', review: {}, presence: {} });
+  await opening;
+  assert.deepEqual(applied, ['b'], 'the good answer lands; a failure put nothing on screen to protect');
+  assert.equal(env.state.path, 'b.md', 'so what is on screen is the file in the URL');
+});
+
+test('a switch whose every read fails takes the old text down instead of leaving it editable', async () => {
+  const { api, calls } = parkedApi();
+  const el = fakeDocEl(); const banners = [];
+  const env = {
+    FILE: 'a.md', dirty: false, docIssued: 0, docApplied: 0, saveTimer: null, scrollStampTimer: null, navDir: '',
+    state: { path: 'a.md', hash: 'a', review: { items: [{ id: 'c1' }] }, presence: {}, agent: 'claude', user: 'you' },
+    api, $: () => el, document: {}, history: { pushState: () => {} },
+    closeNavDrawer: () => {}, flushSave: async () => {}, stampScroll: () => {}, resetDocState: () => {},
+    restoreScroll: () => {}, dirOf: () => '', loadDir: async () => {}, renderNav: () => {},
+    renderPwd: () => {}, renderSide: () => { env.sideItems = env.state.review.items.length; },
+    renderPresence: () => {}, applyState: () => { throw new Error('nothing should land'); },
+    showBanner: (text) => banners.push(text),
+  };
+  for (const f of ['reloadFile', 'refreshDoc', 'docUnreadable']) env[f] = STREAM_FN(f, env);
+  const opening = STREAM_FN('openDoc', env)('b.md');
+  await new Promise((r) => setImmediate(r));                // openDoc is now waiting on B's read
+  assert.equal(el.contentEditable, 'false', 'locked while the outgoing text sits under the incoming URL');
+  const reconnect = env.refreshDoc();                       // a catch-up for B, which fails too
+  calls[1].reject(Object.assign(new Error('boom'), { status: 500 }));
+  await reconnect;
+  calls[0].reject(Object.assign(new Error('no such document'), { status: 404 }));
+  await opening;
+  assert.equal(el.innerHTML, '', 'A\'s text is off the screen');
+  assert.equal(el.contentEditable, 'false', 'and nothing can be typed into B until B is read');
+  assert.equal(env.state.path, 'b.md');
+  assert.equal(env.state.hash, null, 'so the next read of B lands whatever it holds');
+  assert.equal(env.sideItems, 0, 'A\'s cards leave the rail with it');
+  assert.equal(env.state.agent, 'claude', 'while the server-wide fields the rail reads stay');
+  assert.equal(env.dirty, false);
+  assert.match(banners.at(-1), /^Could not open b\.md\./);
+});
+
+test('a catch-up that finds the open document missing takes it down if the screen still holds another', async () => {
+  // The 404 keeps the text only when the text IS that document. Mid-switch it is the previous one.
+  const { api, calls } = parkedApi();
+  const el = fakeDocEl(); const banners = [];
+  const env = { FILE: 'b.md', dirty: false, docIssued: 0, docApplied: 0, saveTimer: null,
+    state: { path: 'a.md', hash: 'a', review: { items: [] }, presence: {} }, api, $: () => el,
+    applyState: () => {}, showBanner: (text) => banners.push(text),
+    renderPwd: () => {}, renderSide: () => {}, renderPresence: () => {} };
+  env.docUnreadable = STREAM_FN('docUnreadable', env);
+  const p = STREAM_FN('refreshDoc', env)();
+  calls[0].reject(Object.assign(new Error('no such document'), { status: 404 }));
+  await p;
+  assert.equal(el.innerHTML, '');
+  assert.equal(el.contentEditable, 'false');
+  assert.match(banners[0], /^b\.md is no longer on disk\.$/);
+});
+
+test('Reload (discard my edits) keeps them unsaved until the file is actually back', async () => {
+  // Clearing `dirty` before the read left unsaved text that no longer counted as unsaved: a failed
+  // read and the edits were silently never saved.
+  const { api, calls } = parkedApi();
+  const banners = [];
+  const env = { FILE: 'a.md', dirty: true, docIssued: 0, docApplied: 0,
+    state: { path: 'a.md', hash: 'a', review: {}, presence: {} }, api,
+    applyState: (s) => { env.state = s; env.dirty = false; },   // what the page's applyState does to the flag
+    showBanner: (text) => banners.push(text) };
+  env.reloadFile = STREAM_FN('reloadFile', env);
+  const reloadDiscarding = STREAM_FN('reloadDiscarding', env);
+  reloadDiscarding('a.md');
+  assert.equal(env.dirty, true, 'still unsaved while the read is in flight');
+  calls[0].reject(Object.assign(new Error('boom'), { status: 500 }));
+  await new Promise((r) => setImmediate(r));
+  assert.equal(env.dirty, true, 'a failed read leaves the edits unsaved, and so still saveable');
+  assert.match(banners[0], /^Could not reload a\.md: boom\. Your edits are still here\.$/);
+  reloadDiscarding('a.md');
+  calls[1].resolve({ path: 'a.md', hash: 'a2', review: {}, presence: {} });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(env.dirty, false, 'and a read that lands is what discards them');
+  assert.equal(env.state.hash, 'a2');
 });
 
 test('the state route answers 404 for a document that is not there', async () => {
