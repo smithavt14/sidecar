@@ -9070,4 +9070,10 @@ test('an edit elsewhere never moves the reader to a twin of the block they were 
   assert.equal(movedBlock(twins, ['## Status', 'Pending', 'Notes', '## Status', 'Shipped'], 3), 3);
   // A block inside a rewritten stretch that survives within it is found there.
   assert.equal(movedBlock(['a', 'b', 'c', 'd'], ['a', 'X', 'c', 'Y', 'd'], 2), 2);
+  // Edits above AND below the reader, with an insert between: the second TODO is the one they were on.
+  const plan = ['# Plan', 'Old intro', 'TODO', 'Details A', 'TODO', 'Details B', 'Old ending'];
+  const replanned = ['# Plan', 'New intro', 'TODO', 'Details A', 'Added 1', 'Added 2', 'TODO', 'Details B', 'New ending'];
+  assert.equal(movedBlock(plan, replanned, 4), 6);
+  assert.equal(movedBlock(plan, replanned, 5), 7);
+  assert.equal(movedBlock(plan, replanned, 1), null);
 });

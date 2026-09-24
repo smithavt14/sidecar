@@ -1932,12 +1932,11 @@ function readingPlace() {
   }
   return place;
 }
-// Where block i of the old document is in the new one. Everything before the first changed block
-// kept its index and everything after the last one moved by the change in length, which is exact for
-// the usual edit (one paragraph rewritten, a section inserted or removed) and never looks for a
-// block's text anywhere else, so a repeated "TODO" or "## Status" screens away cannot claim the
-// reader. Only a block inside the changed stretch is looked for by its text, and only in the
-// stretch that replaced it. Null means it did not survive.
+// Where block i of the old document is in the new one, or null when it did not survive. The two block
+// lists are aligned the way a diff aligns lines: a common prefix and suffix are taken off, and what is
+// left is matched by its longest common subsequence, so every unchanged block maps to the same block
+// in order and never to a twin elsewhere (a repeated "TODO" or "## Status" screens away). A rewrite
+// too large to align at typing speed keeps the prefix and suffix and gives up on the middle.
 function movedBlock(before, after, i) {
   let a = 0;
   while (a < before.length && a < after.length && before[a] === after[a]) a++;
@@ -1945,10 +1944,22 @@ function movedBlock(before, after, i) {
   while (z < before.length - a && z < after.length - a && before[before.length - 1 - z] === after[after.length - 1 - z]) z++;
   if (i < a) return i;
   if (i >= before.length - z) return i + after.length - before.length;
-  let best = null;
-  for (let j = a; j < after.length - z; j++)
-    if (after[j] === before[i] && (best == null || Math.abs(j - i) < Math.abs(best - i))) best = j;
-  return best;
+  const n = before.length - z - a, m = after.length - z - a;
+  if (n * m > 4e6) return null;
+  // L[x][y]: the longest common run of before[a+x..] and after[a+y..], filled from the end so the walk
+  // below can go forward and stop at i.
+  const w = m + 1, L = new Uint32Array((n + 1) * w);
+  for (let x = n - 1; x >= 0; x--) for (let y = m - 1; y >= 0; y--)
+    L[x * w + y] = before[a + x] === after[a + y] ? L[(x + 1) * w + y + 1] + 1 : Math.max(L[(x + 1) * w + y], L[x * w + y + 1]);
+  let x = 0, y = 0;
+  while (x < n && y < m) {
+    if (before[a + x] === after[a + y] && L[x * w + y] === L[(x + 1) * w + y + 1] + 1) {
+      if (a + x === i) return a + y;
+      x++; y++;
+    } else if (L[(x + 1) * w + y] >= L[x * w + y + 1]) { if (a + x === i) return null; x++; }
+    else y++;
+  }
+  return null;
 }
 let placeGen = 0;   // one per restore; a later restore or a document switch retires the late check
 function keepReadingPlace(place) {
