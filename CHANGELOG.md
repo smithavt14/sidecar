@@ -3,6 +3,33 @@
 All notable changes to sidecar. Versions follow [semver](https://semver.org); dates are the day the
 version was tagged.
 
+## 1.15.0 (unreleased)
+
+**Every heading folds.** A long document had to be scrolled past section by section. A chevron in the
+left gutter of each heading now hides everything under it, up to the next heading at its level or
+above, so an h2 takes its h3s with it. Nothing starts folded.
+
+- On a desktop the chevron shows when the pointer is over the heading or its gutter. On a phone or a
+  touch screen it is always drawn, and the gutter beside a heading takes a tap across a 44px row.
+- A folded heading keeps its chevron, turned to point right, and ends in three dots on a faint
+  ground. Clicking the dots unfolds it too.
+- **Alt-click** (Option on a Mac) folds or unfolds every heading at that level at once.
+- **⌘Enter** (Ctrl+Enter) with the caret in a heading folds or unfolds it, and with Alt every heading
+  at its level, so a fold never needs a pointer.
+- Folds are remembered per document in this browser, by the heading's text, so they survive a
+  reload. An agent's edit, an accepted suggestion or a catch-up carries each fold with its heading
+  wherever the edit moved it, so a second heading of the same name inserted above does not move a
+  fold onto the wrong section. A heading whose text changes loses its fold. Nothing about a fold is written to the document: a save with sections folded writes the
+  same bytes as a save without.
+- A comment or suggestion whose text is folded away docks level with the folded heading. Clicking
+  its quote opens every fold holding it before the page scrolls there.
+- Editing cannot take text you cannot see. A delete, a paste or typed text whose selection reaches
+  into a folded section (select-all and Delete, say) is refused once and opens the sections it would
+  have touched; the next press goes through with everything on screen. Backspace at the start of the
+  heading after a folded section, and Delete at the end of a folded heading, do the same.
+- Folding a section with the caret inside it moves the caret to the end of the heading, and arrowing
+  down past a folded heading skips what it holds.
+
 ## 1.14.2 (unreleased)
 
 **The page stays where you were reading when the document changes.** Every change from outside the

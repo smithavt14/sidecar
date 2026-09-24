@@ -728,6 +728,56 @@ test('editing a paragraph beside a resized table changes only the paragraph', ()
   assert.ok(tableBlock && tableBlock.md0 && !/width/.test(tableBlock.md0));
 });
 
+// ---- a folded section never reaches the file ----
+// A fold is two classes on .block wrappers (public/collapse.js decides which): `folded` on the heading's
+// and `fold-hidden` on every block it hides. toMd serializes a wrapper's children and never the wrapper,
+// so a folded document has to write the bytes it was loaded from, down the tight path and the
+// structural one. The classes are painted here the way the page's paintFolds paints them.
+const Collapse = require('./public/collapse.js');   // the SAME file index.html loads via <script>
+function paintFoldsFor(doc, foldedTexts) {
+  const els = [...doc.children].filter(el => el.classList.contains('block'));
+  const levels = els.map(el => { const m = !el.dataset.atomic && el.firstElementChild && /^H([1-6])$/.exec(el.firstElementChild.nodeName); return m ? +m[1] : 0; });
+  const folded = els.map((el, i) => !!levels[i] && foldedTexts.includes(el.textContent.trim()));
+  const hid = Collapse.hiddenBy(levels, folded);
+  els.forEach((el, i) => {
+    el.classList.toggle('fold-head', Collapse.foldable(levels, i));
+    el.classList.toggle('folded', folded[i] && Collapse.foldable(levels, i));
+    el.classList.toggle('fold-hidden', hid[i] !== -1);
+  });
+  return { els, levels, hid };
+}
+test('a document with folded sections round-trips through serialize unchanged', () => {
+  const { doc, blocks, td } = buildDoc(RT_DOC);
+  const { hid } = paintFoldsFor(doc, ['Heading Two']);
+  assert.equal(hid.filter(h => h !== -1).length, 5, 'the h2 hides everything after it: paragraph, list, table, code block, closing line');
+  assert.ok(doc.querySelector('.block.folded'), 'the heading wears the fold');
+  const { md, tight } = Serialize.serialize(doc, blocks, td);
+  assert.equal(tight, true, 'a fold is not an edit: every block still matches its baseline');
+  assert.equal(md, RT_DOC, 'byte-identical with a section folded');
+  // Fold the h1 too, which takes everything: still the same bytes.
+  paintFoldsFor(doc, ['Heading One', 'Heading Two']);
+  assert.equal(Serialize.serialize(doc, blocks, td).md, RT_DOC, 'and with the whole document folded under its h1');
+  // The structural path: a visible paragraph goes, the block count changes, and every hidden block
+  // still emits its exact original bytes.
+  paintFoldsFor(doc, ['Heading Two']);
+  blockByText(doc, 'Intro paragraph with bold text.').remove();
+  const out = Serialize.serialize(doc, blocks, td);
+  assert.equal(out.tight, false);
+  for (const src of [TABLE_SRC, LIST_SRC, CODE_SRC]) assert.ok(out.md.includes(src), 'a hidden block is its original bytes');
+  assert.doesNotMatch(out.md, /fold/, 'nothing about a fold is in the markdown');
+});
+
+test('editing beside a folded section changes only the edit, and the re-baseline reads through the fold', () => {
+  const { doc, blocks, td, marked } = buildDoc(RT_DOC);
+  paintFoldsFor(doc, ['Heading Two']);
+  blockByText(doc, 'Intro paragraph with bold text.').innerHTML = '<p>Intro edited.</p>';
+  const { md, tight } = Serialize.serialize(doc, blocks, td);
+  assert.equal(tight, true);
+  assert.equal(md, RT_DOC.replace('Intro paragraph with **bold** text.', 'Intro edited.'));
+  const next = Serialize.reindex(doc, blocks, md, marked, td);
+  assert.equal(Serialize.serialize(doc, next, td).md, md, 'after reindex a folded document is still untouched');
+});
+
 // ---- a pending suggestion previewed IN the document never reaches the file ----
 // The proposal is drawn at its anchor now, inside the mark, which puts un-accepted text inside a
 // contenteditable that serializes to markdown. These are the tests that say it cannot escape: a document
@@ -8373,9 +8423,9 @@ test('the block-format toolbar reformats the selected line, not the first line o
   const { doc } = page;
   let dirty = false, saves = 0, hidden = 0;
   const setBlockFormat = new Function('document', 'getSelection', 'caretBlock', 'caretInner',
-    'restoreSelection', 'hideTool', 'setStatus', 'scheduleSave',
+    'restoreSelection', 'hideTool', 'setStatus', 'scheduleSave', 'editedFolds',
     'let dirty = false;\n' + m[1] + '\nreturn setBlockFormat;')(
-    doc, page.sel, page.caretBlock, page.caretInner, () => {}, () => { hidden++; }, () => {}, () => { saves++; });
+    doc, page.sel, page.caretBlock, page.caretInner, () => {}, () => { hidden++; }, () => {}, () => { saves++; }, () => {});
   page.caretToEndOf(doc.querySelector('p'));
   page.pressEnter();
   page.type('## Second');
@@ -9050,9 +9100,10 @@ test('the page re-applies the widths after every render, after the baselines, an
 });
 
 test('an edit elsewhere never moves the reader to a twin of the block they were on', () => {
-  const src = PAGE.match(/function movedBlock\([^)]*\) \{[\s\S]*?\n\}/);
+  const src = PAGE.match(/function alignBlocks\([^)]*\) \{[\s\S]*?\n\}/);
   assert.ok(src);
-  const movedBlock = new Function(src[0] + '\nreturn movedBlock;')();
+  const alignBlocks = new Function(src[0] + '\nreturn alignBlocks;')();
+  const movedBlock = (before, after, i) => alignBlocks(before, after)[i];
   // Three blocks inserted above: everything after them moves by three.
   const doc = ['# T', 'a', 'b', 'c', 'd', 'e'];
   assert.equal(movedBlock(doc, ['# T', 'x', 'y', 'z', 'a', 'b', 'c', 'd', 'e'], 3), 6);
@@ -9076,4 +9127,107 @@ test('an edit elsewhere never moves the reader to a twin of the block they were 
   assert.equal(movedBlock(plan, replanned, 4), 6);
   assert.equal(movedBlock(plan, replanned, 5), 7);
   assert.equal(movedBlock(plan, replanned, 1), null);
+  // A third "Notes" inserted above two: the second one the reader folded is now the third, which is
+  // what carries a fold across the edit rather than the store's "second Notes".
+  const notes = ['## Notes', 'a', '## Notes', 'b'];
+  assert.deepEqual(alignBlocks(notes, ['## Notes', 'new', '## Notes', 'a', '## Notes', 'b']), [0, 3, 4, 5]);
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+   FOLDED SECTIONS (public/collapse.js)
+   A view preference: a heading folds everything up to the next heading at its
+   level or above, remembered per document by heading text and occurrence, put
+   back after every render, never in the markdown.
+   ──────────────────────────────────────────────────────────────────────────── */
+test('a heading\'s section runs to the next heading at its level or above', () => {
+  //            h1 p  h2 p  h3 p  h3 p  h2 p  h1
+  const lv = [1, 0, 2, 0, 3, 0, 3, 0, 2, 0, 1];
+  assert.deepEqual(Collapse.ends(lv), [10, -1, 8, -1, 6, -1, 8, -1, 10, -1, 11]);
+  assert.equal(Collapse.foldable(lv, 2), true);
+  assert.equal(Collapse.foldable(lv, 10), false, 'the last heading has nothing under it');
+  assert.equal(Collapse.foldable([2, 2, 0], 0), false, 'a heading followed by its sibling folds nothing');
+  assert.equal(Collapse.foldable(lv, 1), false, 'a paragraph is not a heading');
+  const none = lv.map(() => false);
+  assert.deepEqual(Collapse.hiddenBy(lv, none), lv.map(() => -1), 'nothing starts folded');
+  const f = none.slice(); f[2] = true;
+  assert.deepEqual(Collapse.hiddenBy(lv, f), [-1, -1, -1, 2, 2, 2, 2, 2, -1, -1, -1],
+    'an h2 takes its h3s with it, and the next h2 ends it');
+  f[4] = true;
+  assert.deepEqual(Collapse.hiddenBy(lv, f), [-1, -1, -1, 2, 2, 2, 2, 2, -1, -1, -1],
+    'a folded h3 inside a folded h2 is hidden, and the h2 is what is on screen');
+  const g = none.slice(); g[4] = true;
+  assert.deepEqual(Collapse.hiddenBy(lv, g), [-1, -1, -1, -1, -1, 4, -1, -1, -1, -1, -1], 'an h3 alone stops at its sibling');
+  const h = none.slice(); h[10] = true;
+  assert.deepEqual(Collapse.hiddenBy(lv, h), lv.map(() => -1), 'a fold on a heading with nothing under it hides nothing');
+  assert.deepEqual(Collapse.containing(lv, 5), [0, 2, 4], 'every heading holding a block, outermost first');
+  assert.deepEqual(Collapse.containing(lv, 9), [0, 8]);
+  assert.deepEqual(Collapse.containing(lv, 0), []);
+  assert.deepEqual(Collapse.atLevel(lv, 3), [4, 6]);
+});
+
+test('a fold is keyed by heading text and occurrence, so it survives blocks moving under it', () => {
+  const lv = [2, 0, 2, 0, 2, 0];
+  const texts = ['Notes', null, 'Plan', null, ' Notes  ', null];
+  assert.deepEqual(Collapse.keys(texts, lv), [{ text: 'Notes', n: 0 }, null, { text: 'Plan', n: 0 }, null, { text: 'Notes', n: 1 }, null],
+    'the second heading reading the same is occurrence 1; whitespace is not part of the words');
+  const stored = Collapse.fromFolded(texts, lv, [false, false, true, false, true, false]);
+  assert.deepEqual(stored, { Plan: [0], Notes: [1] });
+  // An agent adds a paragraph and a heading above: indices move, the folds do not.
+  const lv2 = [0, 2, 0, 2, 0, 2, 0, 2, 0];
+  const texts2 = [null, 'Intro', null, 'Notes', null, 'Plan', null, 'Notes', null];
+  assert.deepEqual(Collapse.foldedFrom(stored, texts2, lv2), [false, false, false, false, false, true, false, true, false]);
+  // A renamed heading loses its fold; nothing else does.
+  const texts3 = [null, 'Intro', null, 'Notes', null, 'Planning', null, 'Notes', null];
+  assert.deepEqual(Collapse.foldedFrom(stored, texts3, lv2).map((x, i) => x ? i : -1).filter(i => i >= 0), [7]);
+  assert.equal(Collapse.norm('A\u200bB  c'), 'AB c', 'the editor\'s caret escape is never part of a key');
+  assert.deepEqual(Collapse.fromFolded(['Last', null], [2, 0], [true, false]), { Last: [0] });
+  assert.deepEqual(Collapse.fromFolded(['Last'], [2], [true]), {}, 'a fold that hides nothing is not stored');
+});
+
+test('the fold store parses strictly and stores sparsely', () => {
+  assert.deepEqual(Collapse.parse(''), {});
+  assert.deepEqual(Collapse.parse('nope'), {});
+  assert.deepEqual(Collapse.parse('[1]'), {});
+  assert.deepEqual(Collapse.parse('{"A":[1,0,1,"2",-1,1.5],"B":"x","C":[]}'), { A: [0, 1] },
+    'occurrences are non-negative integers, deduplicated and sorted; anything else is dropped');
+  assert.deepEqual(Collapse.parse(JSON.stringify({ ['x'.repeat(Collapse.MAX_TEXT + 1)]: [0] })), {});
+  assert.equal(Collapse.serialize({}), '', 'nothing folded stores nothing');
+  assert.equal(Collapse.serialize({ A: [0] }), '{"A":[0]}');
+  assert.equal(Collapse.key('a/b.md'), 'folds:a/b.md', 'per document');
+});
+
+test('the page puts folds back after every render, never through the save path, and guards the edit', () => {
+  assert.match(PAGE, /<script src="\/collapse\.js">/, 'the same file the tests require');
+  const render = PAGE.match(/function renderDoc\(\) \{[\s\S]*?\n\}/)[0];
+  assert.ok(render.indexOf('b.md0 = toMd(el)') > -1 && render.indexOf('b.md0 = toMd(el)') < render.indexOf('applyFolds()'),
+    'folds go on after every block has its baseline, so a fold can never read as an edit');
+  const block = PAGE.slice(PAGE.indexOf('// ---------- folded sections ----------'),
+    PAGE.indexOf('// ---------- the page width ----------'));
+  assert.ok(block.length > 0);
+  const code = block.replace(/^\s*\/\/.*$/gm, '');
+  assert.doesNotMatch(code, /dirty|scheduleSave|saveDoc|flushSave/, 'a fold is a view preference: nothing here reaches the save path');
+  assert.doesNotMatch(code, /createElement|appendChild|insertBefore/, 'and it adds no node to the contenteditable');
+  assert.match(block, /uiStore\.set\(Collapse\.key\(FILE\), json\)/, 'per document, under the sc: prefix');
+  assert.match(block, /addEventListener\('beforeinput', \(e\) => \{[\s\S]*?e\.preventDefault\(\);[\s\S]*?setFolds\(\[\.\.\.heads\], false\);/,
+    'an edit reaching hidden text is refused and the folds it reached open');
+  assert.match(block, /e\.preventDefault\(\);\s+\/\/ no caret/, 'a press on a chevron places no caret');
+  // The three readers that measure blocks: the reading place, the rail and a jump.
+  const place = PAGE.match(/function readingPlace\(\) \{[\s\S]*?\n\}/)[0];
+  assert.match(place, /if \(!b \|\| el\.classList\.contains\('fold-hidden'\)\) continue;/, 'a hidden block is never the reading place');
+  assert.match(PAGE, /blocks\[el\.dataset\.i\] && !el\.classList\.contains\('fold-hidden'\)\) els\.set/, 'nor where it is put back');
+  assert.match(PAGE, /const live = mark \? foldVisible\(mark\)\.getBoundingClientRect\(\)\.top - listTop/, 'a card inside a fold docks by its heading');
+  const locate = PAGE.match(/function locate\(id\) \{[\s\S]*?\n\}/)[0];
+  assert.ok(locate.indexOf('revealFolds(marks)') > -1 && locate.indexOf('revealFolds(marks)') < locate.indexOf('scrollIntoView'),
+    'a jump opens the fold before it scrolls');
+  assert.match(STYLE, /#doc > \.block\.fold-hidden \{ display:none; \}/, 'hidden blocks stay in the DOM, out of layout');
+  assert.match(STYLE, /#doc > \.block\.fold-head > :first-child::before \{[^}]*pointer-events:none;/, 'the chevron is a pseudo-element the page hit-tests');
+});
+
+test('a heading named like an Object property folds and stores like any other', () => {
+  const texts = ['constructor', 'a', '__proto__', 'b', 'toString', 'c'], levels = [2, 0, 2, 0, 2, 0];
+  const out = Collapse.fromFolded(texts, levels, [true, false, true, false, true, false]);
+  const back = Collapse.parse(Collapse.serialize(out));
+  assert.deepEqual(Collapse.foldedFrom(back, texts, levels), [true, false, true, false, true, false]);
+  // Nothing stored: an inherited property is never read as a fold.
+  assert.deepEqual(Collapse.foldedFrom({}, ['constructor', 'x'], [2, 0]), [false, false]);
 });
