@@ -9100,9 +9100,10 @@ test('the page re-applies the widths after every render, after the baselines, an
 });
 
 test('an edit elsewhere never moves the reader to a twin of the block they were on', () => {
-  const src = PAGE.match(/function movedBlock\([^)]*\) \{[\s\S]*?\n\}/);
+  const src = PAGE.match(/function alignBlocks\([^)]*\) \{[\s\S]*?\n\}/);
   assert.ok(src);
-  const movedBlock = new Function(src[0] + '\nreturn movedBlock;')();
+  const alignBlocks = new Function(src[0] + '\nreturn alignBlocks;')();
+  const movedBlock = (before, after, i) => alignBlocks(before, after)[i];
   // Three blocks inserted above: everything after them moves by three.
   const doc = ['# T', 'a', 'b', 'c', 'd', 'e'];
   assert.equal(movedBlock(doc, ['# T', 'x', 'y', 'z', 'a', 'b', 'c', 'd', 'e'], 3), 6);
@@ -9126,6 +9127,10 @@ test('an edit elsewhere never moves the reader to a twin of the block they were 
   assert.equal(movedBlock(plan, replanned, 4), 6);
   assert.equal(movedBlock(plan, replanned, 5), 7);
   assert.equal(movedBlock(plan, replanned, 1), null);
+  // A third "Notes" inserted above two: the second one the reader folded is now the third, which is
+  // what carries a fold across the edit rather than the store's "second Notes".
+  const notes = ['## Notes', 'a', '## Notes', 'b'];
+  assert.deepEqual(alignBlocks(notes, ['## Notes', 'new', '## Notes', 'a', '## Notes', 'b']), [0, 3, 4, 5]);
 });
 
 /* ────────────────────────────────────────────────────────────────────────────

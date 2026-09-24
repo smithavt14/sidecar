@@ -1938,17 +1938,20 @@ function applyState(s) {
   // were. Taken before renderDoc empties #doc, and put back before renderSide, whose own scroll keeper
   // would otherwise pin the page wherever the rebuild clamped it: the top.
   const place = state && state.path === s.path && state.kind !== 'unreadable' ? readingPlace() : null;
+  const foldedWas = place && !isAsset() ? { at: [...folds].map(el => +el.dataset.i),
+    names: new Set(foldModel(true).texts.filter(Boolean).map(Collapse.norm)) } : null;
   state = s; dirty = false;
   // An asset never saves, so "saved" would be a claim about nothing.
   setStatus(s.kind === 'asset' ? '' : 'saved');
   setHoverHint('');
   if (s.code) { const b = document.querySelector('.brand'); if (b) b.title = 'server code ' + s.code; }   // §6b: staleness visible on hover
   renderPwd(); renderDoc();
+  if (foldedWas && !isAsset()) carryFolds(place.raws, foldedWas.at, foldedWas.names);   // before the place: a fold moves heights
   if (place) keepReadingPlace(place);
   renderSide();
 }
 // Where the reader is, as the first few blocks in view and how far each sits from the top of the
-// window, plus every block's markdown so movedBlock can find each one after the edit. An edit above
+// window, plus every block's markdown so alignBlocks can find each one after the edit. An edit above
 // the reading position (a paragraph added, a suggestion accepted) moves the page with the text instead
 // of leaving the reader on whatever slid into the old pixel offset. Several are kept because the block
 // in view is the one most likely to be the one that changed. An asset has no blocks, so it keeps the
@@ -1970,34 +1973,34 @@ function readingPlace() {
   }
   return place;
 }
-// Where block i of the old document is in the new one, or null when it did not survive. The two block
-// lists are aligned the way a diff aligns lines: a common prefix and suffix are taken off, and what is
-// left is matched by its longest common subsequence, so every unchanged block maps to the same block
-// in order and never to a twin elsewhere (a repeated "TODO" or "## Status" screens away). A rewrite
-// too large to align at typing speed keeps the prefix and suffix and gives up on the middle.
-function movedBlock(before, after, i) {
+// Where each block of the old document is in the new one, as an array old index → new index, or null
+// for a block that did not survive. The two block lists are aligned the way a diff aligns lines: a
+// common prefix and suffix are taken off, and what is left is matched by its longest common
+// subsequence, so every unchanged block maps to the same block in order and never to a twin elsewhere
+// (a repeated "TODO" or "## Status" screens away). A rewrite too large to align at typing speed keeps
+// the prefix and suffix and gives up on the middle. The reading position and the folds both ride it.
+function alignBlocks(before, after) {
+  const map = new Array(before.length).fill(null);
   let a = 0;
-  while (a < before.length && a < after.length && before[a] === after[a]) a++;
+  while (a < before.length && a < after.length && before[a] === after[a]) { map[a] = a; a++; }
   let z = 0;
-  while (z < before.length - a && z < after.length - a && before[before.length - 1 - z] === after[after.length - 1 - z]) z++;
-  if (i < a) return i;
-  if (i >= before.length - z) return i + after.length - before.length;
+  while (z < before.length - a && z < after.length - a && before[before.length - 1 - z] === after[after.length - 1 - z]) {
+    map[before.length - 1 - z] = after.length - 1 - z; z++;
+  }
   const n = before.length - z - a, m = after.length - z - a;
-  if (n * m > 4e6) return null;
+  if (!n || !m || n * m > 4e6) return map;
   // L[x][y]: the longest common run of before[a+x..] and after[a+y..], filled from the end so the walk
-  // below can go forward and stop at i.
+  // below can go forward.
   const w = m + 1, L = new Uint32Array((n + 1) * w);
   for (let x = n - 1; x >= 0; x--) for (let y = m - 1; y >= 0; y--)
     L[x * w + y] = before[a + x] === after[a + y] ? L[(x + 1) * w + y + 1] + 1 : Math.max(L[(x + 1) * w + y], L[x * w + y + 1]);
   let x = 0, y = 0;
   while (x < n && y < m) {
-    if (before[a + x] === after[a + y] && L[x * w + y] === L[(x + 1) * w + y + 1] + 1) {
-      if (a + x === i) return a + y;
-      x++; y++;
-    } else if (L[(x + 1) * w + y] >= L[x * w + y + 1]) { if (a + x === i) return null; x++; }
+    if (before[a + x] === after[a + y]) { map[a + x] = a + y; x++; y++; }
+    else if (L[(x + 1) * w + y] >= L[x * w + y + 1]) x++;
     else y++;
   }
-  return null;
+  return map;
 }
 let placeGen = 0;   // one per restore; a later restore or a document switch retires the late check
 function keepReadingPlace(place) {
@@ -2006,12 +2009,12 @@ function keepReadingPlace(place) {
   if (!place.blocks.length) { restoreScroll(place.y); return; }
   const gen = ++placeGen;
   const target = () => {
-    const now = blocks.map(b => b.token.raw);
+    const map = alignBlocks(place.raws, blocks.map(b => b.token.raw));
     const els = new Map();
     // Only blocks on screen can hold the place: a hidden one's rect is zero and would scroll to the top.
     for (const el of $('doc').children) if (blocks[el.dataset.i] && !el.classList.contains('fold-hidden')) els.set(+el.dataset.i, el);
     for (const p of place.blocks) {
-      const j = movedBlock(place.raws, now, p.i);
+      const j = map[p.i];
       if (j != null && els.has(j)) return Math.max(0, Math.round(window.scrollY + els.get(j).getBoundingClientRect().top - p.top));
     }
     return place.y;
@@ -4857,6 +4860,32 @@ function applyFolds() {
   Collapse.foldedFrom(Collapse.parse(foldsStored), m.texts, m.levels).forEach((f, i) => { if (f) folds.add(m.els[i]); });
   paintFolds(m);
 }
+// The same document read again (an agent's edit, an accept): the folds follow the headings rather
+// than the store's names for them. The store says "the second Notes", and a Notes inserted above makes
+// that a different section, so a folded heading that survived the edit stays folded wherever it moved.
+// A heading that did not survive takes the store's word only when its name is one the document did not
+// have a moment ago: that is a name an agent changed and changed back, getting its fold back. A name the
+// document already had is the case the store gets wrong (a third Notes), so there the carry decides.
+// The store is rewritten from the result, keeping the entries for names no heading carries right now
+// for the same reason.
+function carryFolds(raws, foldedWas, namesWas) {
+  const map = alignBlocks(raws, blocks.map(b => b.token.raw));
+  const survivors = new Set(map.filter(j => j != null));
+  const byIndex = new Map(docBlocks().map(el => [+el.dataset.i, el]));
+  const carried = new Set();
+  for (const i of foldedWas) { const el = byIndex.get(map[i]); if (el) carried.add(el); }
+  for (const el of folds)
+    if (!survivors.has(+el.dataset.i) && !namesWas.has(Collapse.norm(headingText(el)))) carried.add(el);
+  folds = carried;
+  const m = foldModel(true);
+  paintFolds(m);
+  const now = Collapse.fromFolded(m.texts, m.levels, m.els.map(el => folds.has(el)));
+  const named = new Set(m.texts.filter(Boolean).map(Collapse.norm));
+  const was = Collapse.parse(foldsStored);
+  for (const t of Object.keys(was)) if (!named.has(t) && !(t in now)) now[t] = was[t];
+  const json = Collapse.serialize(now);
+  if (json !== (foldsStored || '')) { uiStore.set(Collapse.key(FILE), json); foldsStored = json; }
+}
 // The top-level block holding a node, and that block when it is folded away.
 function foldBlock(node) {
   const el = node && (node.nodeType === 1 ? node : node.parentElement);
@@ -4970,6 +4999,17 @@ function editedFolds() {
   if (m.texts) storeFolds(m);
 }
 $('doc').addEventListener('input', editedFolds);
+// The keyboard's way to the same toggle, since the chevron is a pseudo-element no key can reach:
+// ⌘Enter (Ctrl+Enter) with the caret in a heading folds or unfolds it, and with Alt every heading at
+// its level, as Alt-click does. The caret is always somewhere visible, and a folded heading is.
+$('doc').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || !(e.metaKey || e.ctrlKey) || e.shiftKey || e.isComposing || isAsset()) return;
+  const s = getSelection();
+  const b = s.rangeCount ? foldBlock(s.focusNode) : null;
+  if (!b || !b.classList.contains('fold-head')) return;
+  e.preventDefault();
+  toggleFold(b, e.altKey);
+});
 document.addEventListener('selectionchange', () => {
   if (!folds.size) return;
   const s = getSelection();
