@@ -2931,6 +2931,7 @@ function setBlockFormat(tag) {
   const r = document.createRange(); r.selectNodeContents(el);         // keep the text selected so it reads as "changed"
   const s = getSelection(); s.removeAllRanges(); s.addRange(r);
   hideTool();
+  editedFolds();                            // a heading made or unmade here: its fold follows
   dirty = true; setStatus('editing…'); scheduleSave();
 }
 
@@ -4960,13 +4961,15 @@ $('doc').addEventListener('beforeinput', (e) => {
 });
 // Typing can make a heading, unmake one, rename a folded one or empty its section. Repainted on every
 // input and stored only when the stored answer changed, so a folded heading typed into keeps its fold
-// by its new text.
-$('doc').addEventListener('input', () => {
+// by its new text. An edit made in code fires no input (the toolbar turning a heading into a
+// paragraph), so it calls this itself.
+function editedFolds() {
   if (isAsset()) return;
   const m = foldModel(folds.size > 0 || !!foldsStored);
   paintFolds(m);
   if (m.texts) storeFolds(m);
-});
+}
+$('doc').addEventListener('input', editedFolds);
 document.addEventListener('selectionchange', () => {
   if (!folds.size) return;
   const s = getSelection();
