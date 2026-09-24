@@ -5355,6 +5355,9 @@ function applyPendingScroll() {
   if (pendingScrollY == null) return;
   const max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
   window.scrollTo({ top: Math.min(pendingScrollY, max) });
+  // An asset's frame is a placeholder until it reports its canvas, and the height that made the offset
+  // reachable meanwhile may be the rail's, which the next render can shorten. Kept until sizeFrame.
+  if (isAsset() && !frameNatural) return;
   if (max >= pendingScrollY - 2) pendingScrollY = null;
 }
 function restoreScroll(y) {
