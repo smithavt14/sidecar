@@ -5,7 +5,7 @@ For *driving* sidecar as an agent (reviewing a document with a human), see
 
 ## Shape
 
-No build step. Twenty-seven files carry the whole tool:
+No build step. Twenty-eight files carry the whole tool:
 
 | File | What it is |
 |---|---|
@@ -35,6 +35,7 @@ No build step. Twenty-seven files carry the whole tool:
 | `public/assetframe.js` | An asset's HTML → the sandboxed frame's srcdoc: the sanitize profile, the `/assets` rewriting, the picker inlining. |
 | `public/measure.js` | The reading measure as a number in em: the migration from the three old names, the floor, and the arithmetic the edge drag and the slider run. Loaded in `<head>` ahead of the pre-paint stamp, like `themes.js`. |
 | `public/tablecols.js` | A table's column widths as a view preference: the per-document store, the apply onto header cells, and the hit test for a boundary. Pure; never touches the markdown. |
+| `public/collapse.js` | Folded sections as a view preference: which blocks each heading hides, which folds hold a block, and the per-document store keyed by heading text and occurrence. Pure; never touches the markdown. |
 | `public/picker.js` | The ONE script that runs inside an asset frame. Picks, cues, geometry, and the postMessage protocol. |
 
 ## Two document kinds, two anchor kinds
@@ -454,7 +455,7 @@ hover title in the UI.
   Keep that when you change the surrounding code; delete them when the reason stops being true.
 - Layout preferences (each panel's width, whether it is collapsed, whether the review rail's width was
   set by hand rather than filled, how dense the rail draws its cards, an asset's zoom, the directory
-  panel's sort one key per folder, typewriter scrolling, a table's column widths one key per document,
+  panel's sort one key per folder, typewriter scrolling, a table's column widths one key per document, which sections are folded one key per document,
   and the theme, which is a mode plus one theme per scheme) persist in `localStorage`
   under an `sc:` prefix, through the wrapped `uiStore`. Safari in private mode throws
   on `setItem`, and nothing about a preference is worth an exception on the path that renders the
@@ -755,6 +756,38 @@ would be a control that does nothing.
 
 Desktop only, like the review rail's own bare state: below 781px the panel is a drawer with no track
 to shrink.
+
+## A fold is a view, and the file never hears about it
+
+Every heading with something under it folds (`public/collapse.js`): the section runs to the next
+heading at its level or above, and the outermost fold wins, so a card anchored inside a folded h3
+inside a folded h2 docks beside the h2. A heading with nothing under it gets no chevron, for the
+reason the collapsed panel hides a zero count: a control that does nothing.
+
+The state is two classes on `.block` WRAPPERS, `folded` on the heading's and `fold-hidden` on each
+block it hides, and the set of folded wrappers lives in `folds` on the page. toMd serializes a
+wrapper's children and never the wrapper, so a folded document writes the bytes it was loaded from; a
+test pins that on both serialize paths. The hidden blocks stay in the DOM under `display:none`, which
+takes them out of layout, caret navigation and find, and leaves the save path alone. Anything that
+measures blocks has to skip them, because a hidden block's rect is zero at the top of the window:
+`readingPlace` and `keepReadingPlace` do, and `dockCards` measures a hidden mark through
+`foldVisible`, which answers with the heading on screen in its place.
+
+The chevron is the heading's `::before` with pointer events off, and `foldHit` hit-tests the gutter
+against the heading rows, the same idiom as a table's column grip. A node inside `#doc` would be a
+thing the caret lands in and turndown has to skip; one outside it would have to be re-placed beside
+every heading on every reflow.
+
+Folds are keyed by heading text plus occurrence under `sc:folds:<path>`, read on every `renderDoc` and
+written from the live DOM whenever a fold or a heading's text changes. A render never writes, so a
+heading an agent renames for a moment gets its fold back when the name returns.
+
+Three guards keep editing honest with text off screen. `beforeinput` refuses an input whose range
+touches a hidden block or crosses a folded heading's edge, and opens those folds instead (`foldRisk`),
+so select-all and Delete shows the reader everything first. A caret left inside a section as it folds
+moves to the end of the heading. A collapsed caret that lands in a hidden block anyway (an undo, a key
+handler) opens the fold around it. Every jump to an anchor goes through `revealFolds` before it
+scrolls.
 
 ## Attached images
 

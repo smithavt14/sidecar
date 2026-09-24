@@ -63,6 +63,7 @@
 <script src="/listkeys.js"></script>   <!-- Enter / Backspace / Tab inside a list item; pure elements in/out, Node tests require the same file -->
 <script src="/assetframe.js"></script>   <!-- an .html asset → the sandboxed frame's srcdoc; Node tests require the same file -->
 <script src="/tablecols.js"></script>   <!-- a table's column widths as a view preference: store, apply, hit-test; Node tests require the same file -->
+<script src="/collapse.js"></script>   <!-- folded sections as a view preference: which blocks a heading hides, the per-document store; Node tests require the same file -->
 <script src="/lib/marked/marked.min.js"></script>
 <script src="/lib/dompurify/dist/purify.min.js"></script>   <!-- marked v12 has no sanitizer; scrub its HTML before it hits innerHTML (XSS) -->
 <script src="/lib/diff/dist/diff.min.js"></script>
@@ -770,6 +771,37 @@
      drawn, and a colour change does not reflow. */
   #doc th.col-grip { cursor:col-resize; border-right-color:var(--ink); }
   body.col-dragging #doc, body.col-dragging #doc th { cursor:col-resize; }
+  /* A folded section is a VIEW preference (collapse.js): the heading's wrapper wears `folded`, every
+     block under it `fold-hidden`, and none of it reaches the file. The blocks stay in the DOM so the
+     save path serializes exactly what it always did; display:none takes them out of layout, out of
+     caret navigation and out of the browser's find. */
+  #doc > .block.fold-hidden { display:none; }
+  /* The chevron is the heading's ::before, in the left gutter: not an element, so the caret cannot
+     enter it and turndown never sees it, and pointer-events are off because the page hit-tests the
+     gutter itself (foldHit). A rotated corner of two borders in the chrome's grey, pointing down while
+     the section is open and right while it is folded. Positioned against the .block wrapper, whose
+     top is the heading's own top (its margin collapses through), and centred on the first line. */
+  #doc > .block.fold-head > :first-child::before { content:''; position:absolute; left:-23px;
+    top:calc(.5lh - 5px); width:6px; height:6px; border:solid var(--muted); border-width:0 1.5px 1.5px 0;
+    transform:rotate(45deg); opacity:0; pointer-events:none; transition:opacity .12s, transform .16s, border-color .12s; }
+  #doc > .block.fold-head:hover > :first-child::before, #doc > .block.fold-hot > :first-child::before { opacity:1; }
+  #doc > .block.fold-hot > :first-child::before { border-color:var(--ink); }
+  /* A fold is never invisible: the chevron stays drawn on a folded heading, turned to point at the
+     text it is holding back, and the heading ends in three quiet dots on the fill, the same weight as
+     an inline code span. The dots are a toggle too. */
+  #doc > .block.folded > :first-child::before { opacity:1; transform:translate(-2px, 2px) rotate(-45deg); }
+  #doc > .block.folded > :first-child::after { content:'\00B7\00B7\00B7'; display:inline-block; margin-left:.4em;
+    padding:0 .4em; vertical-align:.16em; font-size:.66em; line-height:1.4; font-weight:600;
+    letter-spacing:.08em; color:var(--muted); background:var(--fill); border-radius:var(--r-1); }
+  #doc > .block.folded.fold-hot > :first-child::after { color:var(--ink); }
+  #doc.fold-pointer { cursor:pointer; }
+  @media (prefers-reduced-motion: reduce) { #doc > .block.fold-head > :first-child::before { transition:none; } }
+  /* A finger has no hover to find a chevron with, so on a touch screen every one is drawn, in the faint
+     grey while its section is open. The gutter's hit area grows to a 44px row (foldHit). */
+  @media (pointer: coarse) {
+    #doc > .block.fold-head > :first-child::before { opacity:1; border-color:var(--faint); }
+    #doc > .block.folded > :first-child::before { border-color:var(--muted); }
+  }
   /* a document blockquote is CONTENT, not the agent — keep it monochrome (yellow is reserved) */
   #doc blockquote { border-left:2px solid var(--line-2); margin:0 0 var(--doc-space-2);
     padding-left:var(--doc-space-1); color:var(--muted); }
@@ -1339,6 +1371,10 @@
     /* The headings close up a little on a phone, so they keep ratios of their own: 25 / 19 / 16.5 over
        the 16 the column reads there. Still ratios, so all four steps scale. */
     #doc h1 { font-size:1.5625em; } #doc h2 { font-size:1.1875em; } #doc h3 { font-size:1.0313em; }
+    /* The gutter is 18px here, so the chevron sits in its middle, and it is always drawn for the reason
+       the touch rule above gives: a narrow window is usually a phone. */
+    #doc > .block.fold-head > :first-child::before { left:-13px; opacity:1; border-color:var(--faint); }
+    #doc > .block.folded > :first-child::before { border-color:var(--muted); }
     /* The control stays while the three widths still differ. Below 540px the window is narrower than
        the narrowest measure plus its gutters, all three draw the same column, and the button would do
        nothing visible; a tablet at 768px still gets 500, 564 and 660px columns. */
@@ -1923,7 +1959,9 @@ function readingPlace() {
   const headerBottom = document.querySelector('header').getBoundingClientRect().bottom;
   for (const el of $('doc').children) {
     const b = blocks[el.dataset.i];
-    if (!b) continue;
+    // A folded-away block measures as a zero rect at the top of the window, which would read as a block
+    // the reader is looking at. It is not on screen, so it cannot be the place.
+    if (!b || el.classList.contains('fold-hidden')) continue;
     const r = el.getBoundingClientRect();
     if (r.bottom <= headerBottom) continue;
     if (r.top >= window.innerHeight) break;
@@ -1970,7 +2008,8 @@ function keepReadingPlace(place) {
   const target = () => {
     const now = blocks.map(b => b.token.raw);
     const els = new Map();
-    for (const el of $('doc').children) if (blocks[el.dataset.i]) els.set(+el.dataset.i, el);
+    // Only blocks on screen can hold the place: a hidden one's rect is zero and would scroll to the top.
+    for (const el of $('doc').children) if (blocks[el.dataset.i] && !el.classList.contains('fold-hidden')) els.set(+el.dataset.i, el);
     for (const p of place.blocks) {
       const j = movedBlock(place.raws, now, p.i);
       if (j != null && els.has(j)) return Math.max(0, Math.round(window.scrollY + els.get(j).getBoundingClientRect().top - p.top));
@@ -2097,6 +2136,9 @@ function renderDoc() {
   // and this order keeps that true by construction rather than by trust. Every re-render comes through
   // here (an accepted suggestion, a file changed on disk, a document swap), so this is the one place.
   applyTableCols();
+  // Folds go back on here too, for the same reason and in the same order: a fold is a class on the
+  // .block wrapper, which toMd never reads, and a render is the one place every document passes through.
+  applyFolds();
   layoutDocGrip();
 }
 
@@ -3426,7 +3468,9 @@ function dockCards() {
         || doc.querySelector('.fl-node.anchored[data-item-id="' + cssId(id) + '"]'));
     const inFrame = isAsset() ? frameRectFor(id) : null;
     // Where the DOCUMENT puts it right now, or null when its anchor matches nothing.
-    const live = mark ? mark.getBoundingClientRect().top - listTop
+    // A mark inside a folded section has no box. It measures level with the heading that folded it,
+    // which is where its text is on screen; a zero rect would dock the card at the top of the rail.
+    const live = mark ? foldVisible(mark).getBoundingClientRect().top - listTop
       : inFrame ? inFrame.top - listTop : null;
     // …and where it actually goes. A pinned card (a reply is being typed into it) sits exactly where it
     // was pinned and the cursor steps around it rather than over it: a card that moves under the caret
@@ -4719,6 +4763,268 @@ function colHit(e) {
   doc.addEventListener('pointercancel', endDrag);
 })();
 
+// ---------- folded sections ----------
+// Every heading with something under it folds: a chevron in the left gutter hides every block after it
+// up to the next heading at its level or above, and a second click brings them back. Alt-click folds or
+// unfolds every heading at that level. Nothing starts folded. Which headings are folded is a VIEW
+// preference, remembered per document under `sc:folds:<path>` and put back at the end of every
+// renderDoc, so an agent's edit, an accepted suggestion or a catch-up leaves a fold folded. The key is
+// the heading's text and its occurrence among headings reading the same (collapse.js, which the Node
+// tests read too), never its block index, which moves the moment a paragraph lands above it.
+//
+// The markdown never hears about any of it. A fold is two classes on the .block WRAPPERS (`folded` on
+// the heading's, `fold-hidden` on each hidden one), and toMd serializes a wrapper's children, never
+// the wrapper, so every block's markdown matches its baseline and the tight diff emits the original
+// bytes; a test round-trips a folded document and asserts as much. The hidden blocks stay in the DOM
+// under display:none rather than being taken out, which is what keeps the save path the save path.
+//
+// The chevron is not an element either, for the reason the table's grab zone is not: #doc is
+// contenteditable, so a node inside it is a thing the caret can land in, Backspace can delete and
+// turndown has to be taught to skip, and a node outside it (the page-width grip's idiom) would have
+// to be re-placed beside every heading on every reflow. So it is the heading's ::before, drawn in the
+// gutter with pointer-events off, and the pointer is hit-tested against the heading rows on the way
+// past (foldHit): the gutter beside a heading is the chevron, and the dots after a folded heading's
+// text is the same toggle. A press there is cancelled, so it places no caret and starts no selection.
+//
+// Three things keep editing safe with text off screen. A caret left inside a section as it folds moves
+// to the end of the heading. A caret that lands in a hidden block anyway (an undo, a key handler
+// placing it) opens the fold around it instead of sitting somewhere unseen. And an edit whose range
+// reaches hidden text, or crosses a folded heading's own edge, is refused once and the folds it would
+// have reached open instead (foldRisk): select-all and Delete over a folded section shows the reader
+// everything it was about to take, and the second Delete takes it.
+let folds = new Set();       // the heading .block elements folded right now
+let foldsStored = null;      // what the store holds, so a keystroke that changed no fold writes nothing
+const FOLD_TAG = /^H([1-6])$/;
+const docBlocks = () => [...$('doc').children].filter(el => el.classList.contains('block'));
+// A block is a heading when its first line is one. Enter inside a heading opens a line in the same
+// wrapper, and that line belongs to the heading's own block, so it stays visible with it. An atomic
+// island is never a heading, whatever HTML it holds.
+function blockLevel(el) {
+  if (el.dataset.atomic) return 0;
+  const m = el.firstElementChild && FOLD_TAG.exec(el.firstElementChild.nodeName);
+  return m ? +m[1] : 0;
+}
+// The heading's own words. A pending suggestion's preview is skipped for the reason docText skips it:
+// those words are not in the file, and a fold keyed on them would be lost when the proposal went.
+function headingText(el) {
+  const w = document.createTreeWalker(el.firstElementChild, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (n.parentElement && n.parentElement.closest('[sugview="new"]'))
+      ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+  });
+  let t = '';
+  while (w.nextNode()) t += w.currentNode.textContent;
+  return t;
+}
+// The document as collapse.js reads it, off the live DOM so it answers mid-edit too. Texts only when
+// asked: painting needs levels, storing needs words.
+function foldModel(withTexts) {
+  const els = docBlocks(), levels = els.map(blockLevel);
+  return { els, levels, texts: withTexts ? els.map((el, i) => (levels[i] ? headingText(el) : null)) : null };
+}
+// Classes from the set. A fold whose heading is gone, is no longer a heading, or has nothing left
+// under it is dropped here, so its section can never stay hidden with no control beside it.
+function paintFolds(m) {
+  const ends = Collapse.ends(m.levels);
+  for (const el of [...folds]) {
+    const i = m.els.indexOf(el);
+    if (i === -1 || !Collapse.foldable(m.levels, i, ends)) folds.delete(el);
+  }
+  const hid = Collapse.hiddenBy(m.levels, m.els.map(el => folds.has(el)));
+  m.els.forEach((el, i) => {
+    const can = Collapse.foldable(m.levels, i, ends);
+    el.classList.toggle('fold-head', can);
+    el.classList.toggle('folded', can && folds.has(el));
+    el.classList.toggle('fold-hidden', hid[i] !== -1);
+  });
+}
+function storeFolds(m) {
+  const json = Collapse.serialize(Collapse.fromFolded(m.texts, m.levels, m.els.map(el => folds.has(el))));
+  if (json === (foldsStored || '')) return;
+  uiStore.set(Collapse.key(FILE), json);
+  foldsStored = json;
+}
+// Read per document, so a swap loads the incoming document's folds. A render never writes the store:
+// a heading an agent has renamed for a moment keeps its fold for when the name comes back.
+function applyFolds() {
+  folds = new Set();
+  foldsStored = uiStore.get(Collapse.key(FILE), '');
+  const m = foldModel(true);
+  Collapse.foldedFrom(Collapse.parse(foldsStored), m.texts, m.levels).forEach((f, i) => { if (f) folds.add(m.els[i]); });
+  paintFolds(m);
+}
+// The top-level block holding a node, and that block when it is folded away.
+function foldBlock(node) {
+  const el = node && (node.nodeType === 1 ? node : node.parentElement);
+  return el && el.closest ? el.closest('#doc > .block') : null;
+}
+function foldedAway(node) {
+  const b = foldBlock(node);
+  return b && b.classList.contains('fold-hidden') ? b : null;
+}
+// What is on screen in place of a node: the node itself, or the heading of the fold hiding it. Every
+// block between a folded heading and the end of its section is hidden, so the nearest block above
+// that is not is that heading.
+function foldVisible(node) {
+  const b = foldedAway(node);
+  if (!b) return node;
+  let p = b.previousElementSibling;
+  while (p && p.classList.contains('fold-hidden')) p = p.previousElementSibling;
+  return (p && p.firstElementChild) || node;
+}
+// A fold changed: repaint, remember, get the caret out of anything now hidden, and re-dock the rail,
+// whose cards inside a fold now sit level with its heading.
+function foldsChanged() {
+  const m = foldModel(true);
+  paintFolds(m);
+  storeFolds(m);
+  const s = getSelection();
+  const hidden = s.rangeCount && (foldedAway(s.anchorNode) || foldedAway(s.focusNode));
+  if (hidden) {
+    const head = foldVisible(hidden);
+    const r = document.createRange(); r.selectNodeContents(head); r.collapse(false);
+    s.removeAllRanges(); s.addRange(r);
+  }
+  scheduleDock();
+  syncSugbar();
+}
+function setFolds(els, on) {
+  for (const el of els) { if (on) folds.add(el); else folds.delete(el); }
+  foldsChanged();
+}
+// One heading, or with Alt every heading at its level, all going the way the clicked one goes.
+function toggleFold(el, all) {
+  const on = !folds.has(el);
+  if (!all) return setFolds([el], on);
+  const m = foldModel(false);
+  setFolds(Collapse.atLevel(m.levels, m.levels[m.els.indexOf(el)]).map(i => m.els[i]), on);
+}
+// Open every fold that holds any of these nodes, nested ones included, so the node is on screen.
+// True when anything opened. Every jump to an anchor goes through here before it scrolls.
+function revealFolds(nodes) {
+  if (!folds.size) return false;
+  const m = foldModel(false);
+  let opened = false;
+  for (const n of nodes) {
+    const i = m.els.indexOf(foldBlock(n));
+    if (i === -1) continue;
+    for (const h of Collapse.containing(m.levels, i)) if (folds.delete(m.els[h])) opened = true;
+  }
+  if (opened) foldsChanged();
+  return opened;
+}
+// The folds an edit would reach, or an empty set. A range reaches a fold when it touches a hidden
+// block, or when it touches a folded heading without staying inside it: deleting from the paragraph
+// above into the heading merges the heading away and leaves its section with no heading. A collapsed
+// caret reaches one too when a delete at a block's edge would merge it into the hidden block beside.
+function foldRisk(e) {
+  const heads = new Set();
+  const m = foldModel(false);
+  const holding = (i) => Collapse.containing(m.levels, i).forEach(h => { if (folds.has(m.els[h])) heads.add(m.els[h]); });
+  const ranges = [];
+  for (const sr of (e.getTargetRanges ? e.getTargetRanges() : [])) {
+    try { const r = document.createRange(); r.setStart(sr.startContainer, sr.startOffset); r.setEnd(sr.endContainer, sr.endOffset); ranges.push(r); } catch {}
+  }
+  const s = getSelection();
+  if (s.rangeCount) ranges.push(s.getRangeAt(0));
+  for (const r of ranges) {
+    m.els.forEach((el, i) => {
+      if (!r.intersectsNode(el)) return;
+      if (el.classList.contains('fold-hidden')) holding(i);
+      else if (folds.has(el) && !(el.contains(r.startContainer) && el.contains(r.endContainer))) heads.add(el);
+    });
+  }
+  const t = e.inputType || '';
+  const back = /^delete.*Backward$/.test(t), fwd = /^delete.*Forward$/.test(t);
+  const b = s.rangeCount && s.isCollapsed && (back || fwd) ? foldBlock(s.anchorNode) : null;
+  const beside = b && (back ? b.previousElementSibling : b.nextElementSibling);
+  if (beside && beside.classList.contains('fold-hidden')) {
+    // At the edge when nothing but whitespace and the caret escape lies between the caret and the
+    // block's start (or end); a picture counts as something.
+    const r = document.createRange();
+    if (back) { r.setStart(b, 0); r.setEnd(s.anchorNode, s.anchorOffset); }
+    else { r.setStart(s.anchorNode, s.anchorOffset); r.setEnd(b, b.childNodes.length); }
+    if (!r.toString().replace(/[\u200b\s]/g, '') && !r.cloneContents().querySelector('img')) holding(m.els.indexOf(beside));
+  }
+  return heads;
+}
+$('doc').addEventListener('beforeinput', (e) => {
+  if (!folds.size || isAsset()) return;
+  const heads = foldRisk(e);
+  if (!heads.size) return;
+  e.preventDefault();          // nothing is changed that the reader cannot see; the next press can
+  setFolds([...heads], false);
+});
+// Typing can make a heading, unmake one, rename a folded one or empty its section. Repainted on every
+// input and stored only when the stored answer changed, so a folded heading typed into keeps its fold
+// by its new text.
+$('doc').addEventListener('input', () => {
+  if (isAsset()) return;
+  const m = foldModel(folds.size > 0 || !!foldsStored);
+  paintFolds(m);
+  if (m.texts) storeFolds(m);
+});
+document.addEventListener('selectionchange', () => {
+  if (!folds.size) return;
+  const s = getSelection();
+  if (!s.rangeCount || !s.isCollapsed) return;
+  const b = foldedAway(s.focusNode);
+  if (b) revealFolds([b]);
+});
+// A phone, or any narrow window: the chevron is always drawn and the gutter's hit area grows to a
+// thumb, since there is no hover to find it with and the phone's gutter is 18px.
+const foldWide = () => window.matchMedia('(pointer: coarse), (max-width: 780px)').matches;
+// Which heading's toggle is under the pointer, or null.
+function foldHit(e) {
+  if (!state || isAsset() || !e.target || !e.target.closest) return null;
+  const doc = $('doc');
+  if (!doc.contains(e.target)) return null;
+  const left = doc.getBoundingClientRect().left + (parseFloat(getComputedStyle(doc).paddingLeft) || 0);
+  if (e.clientX < left) {
+    const wide = foldWide();
+    for (const el of doc.querySelectorAll(':scope > .block.fold-head:not(.fold-hidden)')) {
+      const r = el.firstElementChild.getBoundingClientRect();
+      const slack = wide ? Math.max(0, (44 - r.height) / 2) : 0;   // a 44px row at the least
+      if (e.clientY >= r.top - slack && e.clientY <= r.bottom + slack) return el;
+    }
+    return null;
+  }
+  // The dots after a folded heading's text. They are the heading's ::after, so the pointer is on the
+  // heading; what says it is on them is being past the last line's text and within their width.
+  const h = e.target.closest('#doc > .block.folded > :first-child');
+  if (!h) return null;
+  const r = document.createRange(); r.selectNodeContents(h);
+  const lines = r.getClientRects(), last = lines[lines.length - 1];
+  const em = parseFloat(getComputedStyle(h).fontSize) || 16;
+  if (last && e.clientX > last.right && e.clientX < last.right + em * 1.7
+    && e.clientY >= last.top && e.clientY <= last.bottom) return h.parentElement;
+  return null;
+}
+(function foldPointer() {
+  const doc = $('doc');
+  let hot = null;
+  const paintHot = (el) => {
+    if (hot === el) return;
+    if (hot) hot.classList.remove('fold-hot');
+    hot = el;
+    doc.classList.toggle('fold-pointer', !!hot);
+    if (hot) { hot.classList.add('fold-hot'); doc.title = folds.has(hot) ? 'Unfold section' : 'Fold section'; }
+    else doc.removeAttribute('title');
+  };
+  doc.addEventListener('pointermove', (e) => { if (e.pointerType !== 'touch') paintHot(foldHit(e)); });
+  doc.addEventListener('pointerleave', () => paintHot(null));
+  doc.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || !foldHit(e)) return;
+    e.preventDefault();          // no caret, no selection: the toggle is the target, the heading is not
+  });
+  doc.addEventListener('click', (e) => {
+    const el = foldHit(e);
+    if (!el) return;
+    e.preventDefault();
+    toggleFold(el, e.altKey);
+    hot = null; paintHot(e.pointerType === 'touch' ? null : el);   // the label follows the new state
+  });
+})();
+
 // ---------- the page width ----------
 // A number in em, from 26 up with no ceiling, set three ways that all land in applyMeasure: the
 // document's own right edge dragged (docDrag, below the rail's), the slider behind the header icon,
@@ -5945,6 +6251,9 @@ function locate(id) {
   }
   const marks = anchorEls(id);
   if (!marks.length) return;
+  // A jump lands on text the reader can see: any fold holding the anchor opens first, and the scroll is
+  // measured after it, against the page as it now lays out.
+  revealFolds(marks);
   marks[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
   pulse(marks);
 }
@@ -5993,6 +6302,10 @@ function showSugbar(sugId) {
   const els = sugEls(sugId);
   const sug = state.review.items.find(i => i.id === sugId);
   if (!els.length || !sug) return hideSugbar();
+  // Hovering a card whose span is folded away asks for a bar over text that has no box, which would
+  // put it at the corner of the window. A hover is not a jump, so the fold stays and the bar does not
+  // come up; clicking the card's quote is what opens the fold.
+  if (els.every(el => foldedAway(el))) return hideSugbar();
   const bar = $('sugbar');
   if (sugbarId !== sugId) {
     const kind = els[0].dataset.sugKind;
