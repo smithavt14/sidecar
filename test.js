@@ -8835,7 +8835,7 @@ test('Back restores a final asset fragment below the header on a fresh document 
       assert.ok(match); return match[0];
     }).join('\n');
     const restore = new Function('document', 'window', 'requestAnimationFrame', 'setTimeout',
-      'let pendingScrollY = null;\n' + funcs + '\nreturn restoreScroll;')(
+      'let pendingScrollY = null, placeGen = 0;\n' + funcs + '\nreturn restoreScroll;')(
       doc, { innerHeight: viewportHeight, scrollTo: options => calls.push(Math.min(options.top, incoming.maxScroll())) },
       fn => deferred.push(fn), fn => deferred.push(fn));
     restore(savedY); deferred.forEach(fn => fn());

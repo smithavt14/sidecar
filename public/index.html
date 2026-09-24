@@ -1937,17 +1937,25 @@ function keepReadingPlace(place) {
   // pendingScrollY for sizeFrame, the same as coming Back to one.
   if (!place.blocks.length) { restoreScroll(place.y); return; }
   const gen = ++placeGen;
+  // A block's text can repeat ("---", "TODO", an empty table cell), and the block in view is the one
+  // most likely to have changed, so its old text may now only exist as a twin screens away. A match
+  // counts first when another remembered block sits at the same shift beside it; failing that, the
+  // match that moved least.
+  const rawAt = (j) => blocks[j] && blocks[j].token.raw;
   const target = () => {
+    const els = new Map();
+    for (const el of $('doc').children) if (blocks[el.dataset.i]) els.set(+el.dataset.i, el);
+    let fallback = null;
     for (const p of place.blocks) {
-      // The nearest block with the same markdown: a repeated line ("---", an empty table cell) must
-      // not pull the reader to its twin at the other end of the document.
-      let best = null;
-      for (const el of $('doc').children) {
-        const b = blocks[el.dataset.i];
-        if (b && b.token.raw === p.raw && (!best || Math.abs(el.dataset.i - p.i) < Math.abs(best.dataset.i - p.i))) best = el;
+      const found = [...els.keys()].filter(j => rawAt(j) === p.raw).sort((a, b) => Math.abs(a - p.i) - Math.abs(b - p.i));
+      for (const j of found) {
+        const shift = j - p.i;
+        const seconded = place.blocks.some(q => q !== p && rawAt(q.i + shift) === q.raw);
+        if (seconded) return Math.max(0, Math.round(window.scrollY + els.get(j).getBoundingClientRect().top - p.top));
+        if (!fallback || Math.abs(shift) < Math.abs(fallback.shift)) fallback = { j, p, shift };
       }
-      if (best) return Math.max(0, Math.round(window.scrollY + best.getBoundingClientRect().top - p.top));
     }
+    if (fallback) return Math.max(0, Math.round(window.scrollY + els.get(fallback.j).getBoundingClientRect().top - fallback.p.top));
     return place.y;
   };
   // Where the page actually came to rest, which is what "the reader moved" is measured against. The
