@@ -1931,7 +1931,12 @@ function readingPlace() {
   }
   return place;
 }
+let placeGen = 0;   // one per restore; a later restore or a document switch retires the late check
 function keepReadingPlace(place) {
+  // An asset's frame has its default height until it reports its canvas size, so the offset waits in
+  // pendingScrollY for sizeFrame, the same as coming Back to one.
+  if (!place.blocks.length) { restoreScroll(place.y); return; }
+  const gen = ++placeGen;
   const target = () => {
     for (const p of place.blocks) {
       // The nearest block with the same markdown: a repeated line ("---", an empty table cell) must
@@ -1950,7 +1955,7 @@ function keepReadingPlace(place) {
   // An image above the reading position can take its height after this, and Safari has no scroll
   // anchoring to absorb it. Measured again once it has had time to load, unless the reader has moved.
   setTimeout(() => {
-    if (Math.abs(window.scrollY - set) > 2) return;
+    if (gen !== placeGen || Math.abs(window.scrollY - set) > 2) return;
     set = target();
     if (Math.abs(window.scrollY - set) > 2) window.scrollTo(0, set);
   }, 400);
@@ -5324,6 +5329,7 @@ function applyPendingScroll() {
   if (max >= pendingScrollY - 2) pendingScrollY = null;
 }
 function restoreScroll(y) {
+  placeGen++;   // a switch or a Back decides the position now, not a late check from the last document
   pendingScrollY = y > 0 ? Math.round(y) : null;
   if (pendingScrollY == null) { window.scrollTo({ top: 0 }); return; }
   applyPendingScroll();
