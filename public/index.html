@@ -5015,6 +5015,9 @@ function editedFolds() {
   if (m.texts) storeFolds(m);
 }
 $('doc').addEventListener('input', editedFolds);
+// iOS can turn `## ` into a heading on compositionend (runBlockRule, registered earlier, so it has run)
+// with no input after it.
+$('doc').addEventListener('compositionend', editedFolds);
 // The keyboard's way to the same toggle, since the chevron is a pseudo-element no key can reach:
 // ⌘Enter (Ctrl+Enter) with the caret in a heading folds or unfolds it, and with Alt every heading at
 // its level, as Alt-click does. The caret is always somewhere visible, and a folded heading is.
