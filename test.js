@@ -9048,3 +9048,26 @@ test('the page re-applies the widths after every render, after the baselines, an
   assert.match(STYLE, /#doc table \{ display:block; width:max-content; max-width:100%; overflow-x:auto;/,
     'a table wider than the column still scrolls in its own box');
 });
+
+test('an edit elsewhere never moves the reader to a twin of the block they were on', () => {
+  const src = PAGE.match(/function movedBlock\([^)]*\) \{[\s\S]*?\n\}/);
+  assert.ok(src);
+  const movedBlock = new Function(src[0] + '\nreturn movedBlock;')();
+  // Three blocks inserted above: everything after them moves by three.
+  const doc = ['# T', 'a', 'b', 'c', 'd', 'e'];
+  assert.equal(movedBlock(doc, ['# T', 'x', 'y', 'z', 'a', 'b', 'c', 'd', 'e'], 3), 6);
+  // An edit below the reader leaves it where it was.
+  assert.equal(movedBlock(doc, ['# T', 'a', 'b', 'c', 'D!', 'e'], 2), 2);
+  // The block in view changed and its old text survives only screens away: it did not survive,
+  // and the block after it is still found in place.
+  const todo = ['## 1', 'TODO', 'Details 1', '## 2', 'Details 2', '## 3', 'TODO', 'Details 3'];
+  const done = ['## 1', 'DONE', 'Details 1', '## 2', 'Details 2', '## 3', 'TODO', 'Details 3'];
+  assert.equal(movedBlock(todo, done, 1), null);
+  assert.equal(movedBlock(todo, done, 2), 2);
+  // Two sections with the same heading and body; only the later body changes. Its heading stays put
+  // rather than jumping to the earlier, still-matching pair.
+  const twins = ['## Status', 'Pending', 'Notes', '## Status', 'Pending'];
+  assert.equal(movedBlock(twins, ['## Status', 'Pending', 'Notes', '## Status', 'Shipped'], 3), 3);
+  // A block inside a rewritten stretch that survives within it is found there.
+  assert.equal(movedBlock(['a', 'b', 'c', 'd'], ['a', 'X', 'c', 'Y', 'd'], 2), 2);
+});

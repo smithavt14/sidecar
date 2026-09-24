@@ -1912,12 +1912,13 @@ function applyState(s) {
   renderSide();
 }
 // Where the reader is, as the first few blocks in view and how far each sits from the top of the
-// window. A block is identified by its markdown, so an edit above the reading position (a paragraph
-// added, a suggestion accepted) moves the page with the text instead of leaving the reader on
-// whatever slid into the old pixel offset. Several are kept because the block in view is the one most
-// likely to be the one that changed. An asset has no blocks, so it keeps the plain offset.
+// window, plus every block's markdown so movedBlock can find each one after the edit. An edit above
+// the reading position (a paragraph added, a suggestion accepted) moves the page with the text instead
+// of leaving the reader on whatever slid into the old pixel offset. Several are kept because the block
+// in view is the one most likely to be the one that changed. An asset has no blocks, so it keeps the
+// plain offset.
 function readingPlace() {
-  const place = { y: window.scrollY, blocks: [] };
+  const place = { y: window.scrollY, blocks: [], raws: blocks.map(b => b.token.raw) };
   if (isAsset()) return place;
   const headerBottom = document.querySelector('header').getBoundingClientRect().bottom;
   for (const el of $('doc').children) {
@@ -1931,31 +1932,38 @@ function readingPlace() {
   }
   return place;
 }
+// Where block i of the old document is in the new one. Everything before the first changed block
+// kept its index and everything after the last one moved by the change in length, which is exact for
+// the usual edit (one paragraph rewritten, a section inserted or removed) and never looks for a
+// block's text anywhere else, so a repeated "TODO" or "## Status" screens away cannot claim the
+// reader. Only a block inside the changed stretch is looked for by its text, and only in the
+// stretch that replaced it. Null means it did not survive.
+function movedBlock(before, after, i) {
+  let a = 0;
+  while (a < before.length && a < after.length && before[a] === after[a]) a++;
+  let z = 0;
+  while (z < before.length - a && z < after.length - a && before[before.length - 1 - z] === after[after.length - 1 - z]) z++;
+  if (i < a) return i;
+  if (i >= before.length - z) return i + after.length - before.length;
+  let best = null;
+  for (let j = a; j < after.length - z; j++)
+    if (after[j] === before[i] && (best == null || Math.abs(j - i) < Math.abs(best - i))) best = j;
+  return best;
+}
 let placeGen = 0;   // one per restore; a later restore or a document switch retires the late check
 function keepReadingPlace(place) {
   // An asset's frame has its default height until it reports its canvas size, so the offset waits in
   // pendingScrollY for sizeFrame, the same as coming Back to one.
   if (!place.blocks.length) { restoreScroll(place.y); return; }
   const gen = ++placeGen;
-  // A block's text can repeat ("---", "TODO", an empty table cell), and the block in view is the one
-  // most likely to have changed, so its old text may now only exist as a twin screens away. A match
-  // counts first when another remembered block sits at the same shift beside it; failing that, the
-  // match that moved least.
-  const rawAt = (j) => blocks[j] && blocks[j].token.raw;
   const target = () => {
+    const now = blocks.map(b => b.token.raw);
     const els = new Map();
     for (const el of $('doc').children) if (blocks[el.dataset.i]) els.set(+el.dataset.i, el);
-    let fallback = null;
     for (const p of place.blocks) {
-      const found = [...els.keys()].filter(j => rawAt(j) === p.raw).sort((a, b) => Math.abs(a - p.i) - Math.abs(b - p.i));
-      for (const j of found) {
-        const shift = j - p.i;
-        const seconded = place.blocks.some(q => q !== p && rawAt(q.i + shift) === q.raw);
-        if (seconded) return Math.max(0, Math.round(window.scrollY + els.get(j).getBoundingClientRect().top - p.top));
-        if (!fallback || Math.abs(shift) < Math.abs(fallback.shift)) fallback = { j, p, shift };
-      }
+      const j = movedBlock(place.raws, now, p.i);
+      if (j != null && els.has(j)) return Math.max(0, Math.round(window.scrollY + els.get(j).getBoundingClientRect().top - p.top));
     }
-    if (fallback) return Math.max(0, Math.round(window.scrollY + els.get(fallback.j).getBoundingClientRect().top - fallback.p.top));
     return place.y;
   };
   // Where the page actually came to rest, which is what "the reader moved" is measured against. The
