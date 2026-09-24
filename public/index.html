@@ -1950,15 +1950,17 @@ function keepReadingPlace(place) {
     }
     return place.y;
   };
-  let set = target();
-  window.scrollTo(0, set);
-  // An image above the reading position can take its height after this, and Safari has no scroll
-  // anchoring to absorb it. Measured again once it has had time to load, unless the reader has moved.
-  setTimeout(() => {
-    if (gen !== placeGen || Math.abs(window.scrollY - set) > 2) return;
-    set = target();
-    if (Math.abs(window.scrollY - set) > 2) window.scrollTo(0, set);
-  }, 400);
+  // Where the page actually came to rest, which is what "the reader moved" is measured against. The
+  // target can be out of reach for now: an image still loading below the reading position leaves the
+  // page too short and the browser clamps, which is not the reader scrolling.
+  const go = () => { window.scrollTo(0, target()); return window.scrollY; };
+  let landed = go();
+  // An image can take its height after this, and Safari has no scroll anchoring to absorb it. Measured
+  // again as images land, unless the reader has moved or a later restore has taken over.
+  for (const ms of [120, 400, 1200]) setTimeout(() => {
+    if (gen !== placeGen || Math.abs(window.scrollY - landed) > 2) return;
+    landed = go();
+  }, ms);
 }
 // pwd line above the doc — the document's path, terminal-style (dir muted, filename inked). It is the
 // whole of the title group: the extension already says which kind of document is open.
