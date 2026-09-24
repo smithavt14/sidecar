@@ -1898,12 +1898,96 @@ async function reloadFile() {
 }
 function applyState(s) {
   hideBanner();
+  // The same document read again (an agent's edit, an accept, a catch-up) keeps the reader where they
+  // were. Taken before renderDoc empties #doc, and put back before renderSide, whose own scroll keeper
+  // would otherwise pin the page wherever the rebuild clamped it: the top.
+  const place = state && state.path === s.path && state.kind !== 'unreadable' ? readingPlace() : null;
   state = s; dirty = false;
   // An asset never saves, so "saved" would be a claim about nothing.
   setStatus(s.kind === 'asset' ? '' : 'saved');
   setHoverHint('');
   if (s.code) { const b = document.querySelector('.brand'); if (b) b.title = 'server code ' + s.code; }   // §6b: staleness visible on hover
-  renderPwd(); renderDoc(); renderSide();
+  renderPwd(); renderDoc();
+  if (place) keepReadingPlace(place);
+  renderSide();
+}
+// Where the reader is, as the first few blocks in view and how far each sits from the top of the
+// window, plus every block's markdown so movedBlock can find each one after the edit. An edit above
+// the reading position (a paragraph added, a suggestion accepted) moves the page with the text instead
+// of leaving the reader on whatever slid into the old pixel offset. Several are kept because the block
+// in view is the one most likely to be the one that changed. An asset has no blocks, so it keeps the
+// plain offset.
+function readingPlace() {
+  const place = { y: window.scrollY, blocks: [], raws: blocks.map(b => b.token.raw) };
+  if (isAsset()) return place;
+  const headerBottom = document.querySelector('header').getBoundingClientRect().bottom;
+  for (const el of $('doc').children) {
+    const b = blocks[el.dataset.i];
+    if (!b) continue;
+    const r = el.getBoundingClientRect();
+    if (r.bottom <= headerBottom) continue;
+    if (r.top >= window.innerHeight) break;
+    place.blocks.push({ raw: b.token.raw, i: +el.dataset.i, top: r.top });
+    if (place.blocks.length === 5) break;
+  }
+  return place;
+}
+// Where block i of the old document is in the new one, or null when it did not survive. The two block
+// lists are aligned the way a diff aligns lines: a common prefix and suffix are taken off, and what is
+// left is matched by its longest common subsequence, so every unchanged block maps to the same block
+// in order and never to a twin elsewhere (a repeated "TODO" or "## Status" screens away). A rewrite
+// too large to align at typing speed keeps the prefix and suffix and gives up on the middle.
+function movedBlock(before, after, i) {
+  let a = 0;
+  while (a < before.length && a < after.length && before[a] === after[a]) a++;
+  let z = 0;
+  while (z < before.length - a && z < after.length - a && before[before.length - 1 - z] === after[after.length - 1 - z]) z++;
+  if (i < a) return i;
+  if (i >= before.length - z) return i + after.length - before.length;
+  const n = before.length - z - a, m = after.length - z - a;
+  if (n * m > 4e6) return null;
+  // L[x][y]: the longest common run of before[a+x..] and after[a+y..], filled from the end so the walk
+  // below can go forward and stop at i.
+  const w = m + 1, L = new Uint32Array((n + 1) * w);
+  for (let x = n - 1; x >= 0; x--) for (let y = m - 1; y >= 0; y--)
+    L[x * w + y] = before[a + x] === after[a + y] ? L[(x + 1) * w + y + 1] + 1 : Math.max(L[(x + 1) * w + y], L[x * w + y + 1]);
+  let x = 0, y = 0;
+  while (x < n && y < m) {
+    if (before[a + x] === after[a + y] && L[x * w + y] === L[(x + 1) * w + y + 1] + 1) {
+      if (a + x === i) return a + y;
+      x++; y++;
+    } else if (L[(x + 1) * w + y] >= L[x * w + y + 1]) { if (a + x === i) return null; x++; }
+    else y++;
+  }
+  return null;
+}
+let placeGen = 0;   // one per restore; a later restore or a document switch retires the late check
+function keepReadingPlace(place) {
+  // An asset's frame has its default height until it reports its canvas size, so the offset waits in
+  // pendingScrollY for sizeFrame, the same as coming Back to one.
+  if (!place.blocks.length) { restoreScroll(place.y); return; }
+  const gen = ++placeGen;
+  const target = () => {
+    const now = blocks.map(b => b.token.raw);
+    const els = new Map();
+    for (const el of $('doc').children) if (blocks[el.dataset.i]) els.set(+el.dataset.i, el);
+    for (const p of place.blocks) {
+      const j = movedBlock(place.raws, now, p.i);
+      if (j != null && els.has(j)) return Math.max(0, Math.round(window.scrollY + els.get(j).getBoundingClientRect().top - p.top));
+    }
+    return place.y;
+  };
+  // Where the page actually came to rest, which is what "the reader moved" is measured against. The
+  // target can be out of reach for now: an image still loading below the reading position leaves the
+  // page too short and the browser clamps, which is not the reader scrolling.
+  const go = () => { window.scrollTo(0, target()); return window.scrollY; };
+  let landed = go();
+  // An image can take its height after this, and Safari has no scroll anchoring to absorb it. Measured
+  // again as images land, unless the reader has moved or a later restore has taken over.
+  for (const ms of [120, 400, 1200]) setTimeout(() => {
+    if (gen !== placeGen || Math.abs(window.scrollY - landed) > 2) return;
+    landed = go();
+  }, ms);
 }
 // pwd line above the doc — the document's path, terminal-style (dir muted, filename inked). It is the
 // whole of the title group: the extension already says which kind of document is open.
@@ -5271,9 +5355,13 @@ function applyPendingScroll() {
   if (pendingScrollY == null) return;
   const max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
   window.scrollTo({ top: Math.min(pendingScrollY, max) });
+  // An asset's frame is a placeholder until it reports its canvas, and the height that made the offset
+  // reachable meanwhile may be the rail's, which the next render can shorten. Kept until sizeFrame.
+  if (isAsset() && !frameNatural) return;
   if (max >= pendingScrollY - 2) pendingScrollY = null;
 }
 function restoreScroll(y) {
+  placeGen++;   // a switch or a Back decides the position now, not a late check from the last document
   pendingScrollY = y > 0 ? Math.round(y) : null;
   if (pendingScrollY == null) { window.scrollTo({ top: 0 }); return; }
   applyPendingScroll();
