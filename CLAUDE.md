@@ -776,11 +776,17 @@ measures blocks has to skip them, because a hidden block's rect is zero at the t
 The chevron is the heading's `::before` with pointer events off, and `foldHit` hit-tests the gutter
 against the heading rows, the same idiom as a table's column grip. A node inside `#doc` would be a
 thing the caret lands in and turndown has to skip; one outside it would have to be re-placed beside
-every heading on every reflow.
+every heading on every reflow. Being unreachable by key, it has a keyboard twin: ⌘Enter (Ctrl+Enter)
+in a heading toggles its fold, with Alt every heading at its level.
 
 Folds are keyed by heading text plus occurrence under `sc:folds:<path>`, read on every `renderDoc` and
-written from the live DOM whenever a fold or a heading's text changes. A render never writes, so a
-heading an agent renames for a moment gets its fold back when the name returns.
+written from the live DOM whenever a fold or a heading's text changes. The key is only right on a
+fresh load: a third "Notes" inserted above makes "the second Notes" a different section. So a re-read
+of the same document (`applyState`) hands the folds across by `carryFolds`, which maps every folded
+heading through `alignBlocks`, the diff the reading position uses. A heading that did not survive takes
+the store's word only when its name is new to the document, which is how a heading an agent renames
+for a moment gets its fold back when the name returns; the store keeps entries for names no heading
+carries for the same reason.
 
 Three guards keep editing honest with text off screen. `beforeinput` refuses an input whose range
 touches a hidden block or crosses a folded heading's edge, and opens those folds instead (`foldRisk`),
