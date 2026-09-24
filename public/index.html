@@ -1938,7 +1938,7 @@ function applyState(s) {
   // were. Taken before renderDoc empties #doc, and put back before renderSide, whose own scroll keeper
   // would otherwise pin the page wherever the rebuild clamped it: the top.
   const place = state && state.path === s.path && state.kind !== 'unreadable' ? readingPlace() : null;
-  const foldedWas = place && !isAsset() ? { at: [...folds].map(el => +el.dataset.i),
+  const foldedWas = place && !isAsset() ? { at: [...folds].map(el => ({ i: +el.dataset.i, text: Collapse.norm(headingText(el)) })),
     names: new Set(foldModel(true).texts.filter(Boolean).map(Collapse.norm)) } : null;
   state = s; dirty = false;
   // An asset never saves, so "saved" would be a claim about nothing.
@@ -4863,17 +4863,24 @@ function applyFolds() {
 // The same document read again (an agent's edit, an accept): the folds follow the headings rather
 // than the store's names for them. The store says "the second Notes", and a Notes inserted above makes
 // that a different section, so a folded heading that survived the edit stays folded wherever it moved.
-// A heading that did not survive takes the store's word only when its name is one the document did not
-// have a moment ago: that is a name an agent changed and changed back, getting its fold back. A name the
-// document already had is the case the store gets wrong (a third Notes), so there the carry decides.
-// The store is rewritten from the result, keeping the entries for names no heading carries right now
-// for the same reason.
+// A folded heading whose markdown changed but whose words did not (`## Notes` made `### Notes`, a link
+// added) did not survive the diff, so it hands its fold to the first changed heading with the same
+// words. Any other heading that did not survive takes the store's word only when its name is one the
+// document did not have a moment ago: that is a name an agent changed and changed back, getting its
+// fold back. A name the document already had is the case the store gets wrong (a third Notes), so
+// there the carry decides. The store is rewritten from the result, keeping the entries for names no
+// heading carries right now for the same reason.
 function carryFolds(raws, foldedWas, namesWas) {
   const map = alignBlocks(raws, blocks.map(b => b.token.raw));
   const survivors = new Set(map.filter(j => j != null));
-  const byIndex = new Map(docBlocks().map(el => [+el.dataset.i, el]));
-  const carried = new Set();
-  for (const i of foldedWas) { const el = byIndex.get(map[i]); if (el) carried.add(el); }
+  const els = docBlocks(), byIndex = new Map(els.map(el => [+el.dataset.i, el]));
+  const changedHeads = els.filter(el => blockLevel(el) && !survivors.has(+el.dataset.i));
+  const carried = new Set(), taken = new Set();
+  for (const f of foldedWas) {
+    let el = byIndex.get(map[f.i]);
+    if (!el && f.text) el = changedHeads.find(h => !taken.has(h) && Collapse.norm(headingText(h)) === f.text);
+    if (el) { carried.add(el); taken.add(el); }
+  }
   for (const el of folds)
     if (!survivors.has(+el.dataset.i) && !namesWas.has(Collapse.norm(headingText(el)))) carried.add(el);
   folds = carried;
