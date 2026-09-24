@@ -3,6 +3,18 @@
 All notable changes to sidecar. Versions follow [semver](https://semver.org); dates are the day the
 version was tagged.
 
+## 1.14.2 (unreleased)
+
+**The page stays where you were reading when the document changes.** Every change from outside the
+browser (an agent's edit, an accepted suggestion, a catch-up after a dropped connection) redrew the
+document and left the page at the top.
+
+- The first blocks in view are remembered by their text and put back at the same height on screen, so
+  a paragraph added or removed above the reading position moves the page with the text.
+- If the block in view is the one that changed, the next one down holds the place. If none of them
+  survive, the page keeps its old offset.
+- Opening another document still starts at its top, and Back still returns to where it was left.
+
 ## 1.14.1 (2026-09-22)
 
 **The page stays current when the connection drops.** The live stream went quiet between changes, and

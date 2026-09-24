@@ -1898,12 +1898,62 @@ async function reloadFile() {
 }
 function applyState(s) {
   hideBanner();
+  // The same document read again (an agent's edit, an accept, a catch-up) keeps the reader where they
+  // were. Taken before renderDoc empties #doc, and put back before renderSide, whose own scroll keeper
+  // would otherwise pin the page wherever the rebuild clamped it: the top.
+  const place = state && state.path === s.path && state.kind !== 'unreadable' ? readingPlace() : null;
   state = s; dirty = false;
   // An asset never saves, so "saved" would be a claim about nothing.
   setStatus(s.kind === 'asset' ? '' : 'saved');
   setHoverHint('');
   if (s.code) { const b = document.querySelector('.brand'); if (b) b.title = 'server code ' + s.code; }   // §6b: staleness visible on hover
-  renderPwd(); renderDoc(); renderSide();
+  renderPwd(); renderDoc();
+  if (place) keepReadingPlace(place);
+  renderSide();
+}
+// Where the reader is, as the first few blocks in view and how far each sits from the top of the
+// window. A block is identified by its markdown, so an edit above the reading position (a paragraph
+// added, a suggestion accepted) moves the page with the text instead of leaving the reader on
+// whatever slid into the old pixel offset. Several are kept because the block in view is the one most
+// likely to be the one that changed. An asset has no blocks, so it keeps the plain offset.
+function readingPlace() {
+  const place = { y: window.scrollY, blocks: [] };
+  if (isAsset()) return place;
+  const headerBottom = document.querySelector('header').getBoundingClientRect().bottom;
+  for (const el of $('doc').children) {
+    const b = blocks[el.dataset.i];
+    if (!b) continue;
+    const r = el.getBoundingClientRect();
+    if (r.bottom <= headerBottom) continue;
+    if (r.top >= window.innerHeight) break;
+    place.blocks.push({ raw: b.token.raw, i: +el.dataset.i, top: r.top });
+    if (place.blocks.length === 5) break;
+  }
+  return place;
+}
+function keepReadingPlace(place) {
+  const target = () => {
+    for (const p of place.blocks) {
+      // The nearest block with the same markdown: a repeated line ("---", an empty table cell) must
+      // not pull the reader to its twin at the other end of the document.
+      let best = null;
+      for (const el of $('doc').children) {
+        const b = blocks[el.dataset.i];
+        if (b && b.token.raw === p.raw && (!best || Math.abs(el.dataset.i - p.i) < Math.abs(best.dataset.i - p.i))) best = el;
+      }
+      if (best) return Math.max(0, Math.round(window.scrollY + best.getBoundingClientRect().top - p.top));
+    }
+    return place.y;
+  };
+  let set = target();
+  window.scrollTo(0, set);
+  // An image above the reading position can take its height after this, and Safari has no scroll
+  // anchoring to absorb it. Measured again once it has had time to load, unless the reader has moved.
+  setTimeout(() => {
+    if (Math.abs(window.scrollY - set) > 2) return;
+    set = target();
+    if (Math.abs(window.scrollY - set) > 2) window.scrollTo(0, set);
+  }, 400);
 }
 // pwd line above the doc — the document's path, terminal-style (dir muted, filename inked). It is the
 // whole of the title group: the extension already says which kind of document is open.
