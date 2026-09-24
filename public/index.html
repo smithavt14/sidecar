@@ -4813,6 +4813,10 @@ function headingText(el) {
   });
   let t = '';
   while (w.nextNode()) t += w.currentNode.textContent;
+  // A heading that is only an image has no text to be known by, so its images' alt text (or source)
+  // keys it instead, or its fold would open again on every reload.
+  if (!t.trim()) t = [...el.firstElementChild.querySelectorAll('img')]
+    .map(i => i.getAttribute('alt') || i.getAttribute('src') || '').join(' ');
   return t;
 }
 // The document as collapse.js reads it, off the live DOM so it answers mid-edit too. Texts only when

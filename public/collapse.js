@@ -35,7 +35,9 @@
     let v;
     try { v = JSON.parse(json); } catch (e) { return {}; }
     if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
-    const out = {};
+    // No prototype, here and in fromFolded: a heading is free text, and "constructor" or "__proto__"
+    // would otherwise land on an inherited property instead of a list.
+    const out = Object.create(null);
     for (const t of Object.keys(v)) {
       if (!t || t.length > MAX_TEXT || !Array.isArray(v[t])) continue;
       const ns = [...new Set(v[t].filter(n => Number.isInteger(n) && n >= 0))].sort((a, b) => a - b);
@@ -105,12 +107,13 @@
   // The stored folds → a flag per block.
   function foldedFrom(folds, texts, levels) {
     const f = folds || {};
-    return keys(texts, levels).map(k => !!(k && k.text && Array.isArray(f[k.text]) && f[k.text].includes(k.n)));
+    return keys(texts, levels).map(k => !!(k && k.text && Object.prototype.hasOwnProperty.call(f, k.text) &&
+      Array.isArray(f[k.text]) && f[k.text].includes(k.n)));
   }
   // A flag per block → the stored folds. Written from the live document every time, so a heading typed
   // into while folded is re-keyed by its new text, and a heading that is gone takes its fold with it.
   function fromFolded(texts, levels, folded) {
-    const e = ends(levels), out = {};
+    const e = ends(levels), out = Object.create(null);
     keys(texts, levels).forEach((k, i) => {
       if (!k || !k.text || !folded[i] || !foldable(levels, i, e)) return;
       (out[k.text] = out[k.text] || []).push(k.n);

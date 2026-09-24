@@ -9217,3 +9217,12 @@ test('the page puts folds back after every render, never through the save path, 
   assert.match(STYLE, /#doc > \.block\.fold-hidden \{ display:none; \}/, 'hidden blocks stay in the DOM, out of layout');
   assert.match(STYLE, /#doc > \.block\.fold-head > :first-child::before \{[^}]*pointer-events:none;/, 'the chevron is a pseudo-element the page hit-tests');
 });
+
+test('a heading named like an Object property folds and stores like any other', () => {
+  const texts = ['constructor', 'a', '__proto__', 'b', 'toString', 'c'], levels = [2, 0, 2, 0, 2, 0];
+  const out = Collapse.fromFolded(texts, levels, [true, false, true, false, true, false]);
+  const back = Collapse.parse(Collapse.serialize(out));
+  assert.deepEqual(Collapse.foldedFrom(back, texts, levels), [true, false, true, false, true, false]);
+  // Nothing stored: an inherited property is never read as a fold.
+  assert.deepEqual(Collapse.foldedFrom({}, ['constructor', 'x'], [2, 0]), [false, false]);
+});
