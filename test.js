@@ -8423,9 +8423,9 @@ test('the block-format toolbar reformats the selected line, not the first line o
   const { doc } = page;
   let dirty = false, saves = 0, hidden = 0;
   const setBlockFormat = new Function('document', 'getSelection', 'caretBlock', 'caretInner',
-    'restoreSelection', 'hideTool', 'setStatus', 'scheduleSave',
+    'restoreSelection', 'hideTool', 'setStatus', 'scheduleSave', 'editedFolds',
     'let dirty = false;\n' + m[1] + '\nreturn setBlockFormat;')(
-    doc, page.sel, page.caretBlock, page.caretInner, () => {}, () => { hidden++; }, () => {}, () => { saves++; });
+    doc, page.sel, page.caretBlock, page.caretInner, () => {}, () => { hidden++; }, () => {}, () => { saves++; }, () => {});
   page.caretToEndOf(doc.querySelector('p'));
   page.pressEnter();
   page.type('## Second');
