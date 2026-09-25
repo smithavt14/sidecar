@@ -3,7 +3,7 @@
 All notable changes to sidecar. Versions follow [semver](https://semver.org); dates are the day the
 version was tagged.
 
-## 1.15.0 (unreleased)
+## 1.15.0 (2026-09-25)
 
 **Every heading folds.** A long document had to be scrolled past section by section. A chevron in the
 left gutter of each heading now hides everything under it, up to the next heading at its level or
@@ -12,15 +12,17 @@ above, so an h2 takes its h3s with it. Nothing starts folded.
 - On a desktop the chevron shows when the pointer is over the heading or its gutter. On a phone or a
   touch screen it is always drawn, and the gutter beside a heading takes a tap across a 44px row.
 - A folded heading keeps its chevron, turned to point right, and ends in three dots on a faint
-  ground. Clicking the dots unfolds it too.
+  ground. Clicking the dots unfolds it too. A heading with nothing under it has its chevron and folds
+  like any other, without the dots, since nothing is held back yet.
 - **Alt-click** (Option on a Mac) folds or unfolds every heading at that level at once.
 - **⌘Enter** (Ctrl+Enter) with the caret in a heading folds or unfolds it, and with Alt every heading
   at its level, so a fold never needs a pointer.
 - Folds are remembered per document in this browser, by the heading's text, so they survive a
   reload. An agent's edit, an accepted suggestion or a catch-up carries each fold with its heading
   wherever the edit moved it, so a second heading of the same name inserted above does not move a
-  fold onto the wrong section. A heading whose text changes loses its fold. Nothing about a fold is written to the document: a save with sections folded writes the
-  same bytes as a save without.
+  fold onto the wrong section, and a heading whose level changes (`##` made `###`) stays folded. A
+  heading whose words change loses its fold. Nothing about a fold is written to the document: a save
+  with sections folded writes the same bytes as a save without.
 - A comment or suggestion whose text is folded away docks level with the folded heading. Clicking
   its quote opens every fold holding it before the page scrolls there.
 - Editing cannot take text you cannot see. A delete, a paste or typed text whose selection reaches
@@ -29,18 +31,25 @@ above, so an h2 takes its h3s with it. Nothing starts folded.
   heading after a folded section, and Delete at the end of a folded heading, do the same.
 - Folding a section with the caret inside it moves the caret to the end of the heading, and arrowing
   down past a folded heading skips what it holds.
-
-## 1.14.2 (unreleased)
+- Known limit: a line added with Enter stays part of the block it was typed in until the document is
+  next drawn (a reload or an agent's edit). Until then, a paragraph typed under a heading stays
+  visible when the heading folds, and a heading typed on a second line cannot fold.
 
 **The page stays where you were reading when the document changes.** Every change from outside the
 browser (an agent's edit, an accepted suggestion, a catch-up after a dropped connection) redrew the
 document and left the page at the top.
 
-- The first blocks in view are remembered by their text and put back at the same height on screen, so
-  a paragraph added or removed above the reading position moves the page with the text.
-- If the block in view is the one that changed, the next one down holds the place. If none of them
-  survive, the page keeps its old offset.
+- The first blocks in view are remembered with their distance from the top of the window, and put
+  back at the same height after the redraw. A paragraph added or removed above the reading position
+  moves the page with the text.
+- The old and new document are lined up the way a diff lines up lines, so a repeated block (a second
+  `TODO`, another `## Status`) screens away never pulls the page to itself. If the block in view is
+  the one that changed, the next one down holds the place.
+- An HTML asset keeps its offset until its frame reports its height, and an image still loading
+  below the reading position gets three more tries over 1.2 seconds.
 - Opening another document still starts at its top, and Back still returns to where it was left.
+- Known limits: a list is one block, so an edit high in a long list keeps the page's offset instead
+  of following the item; an image that takes longer than 1.2 seconds can leave the page short.
 
 ## 1.14.1 (2026-09-22)
 

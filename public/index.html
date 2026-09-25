@@ -794,6 +794,7 @@
     padding:0 .4em; vertical-align:.16em; font-size:.66em; line-height:1.4; font-weight:600;
     letter-spacing:.08em; color:var(--muted); background:var(--fill); border-radius:var(--r-1); }
   #doc > .block.folded.fold-hot > :first-child::after { color:var(--ink); }
+  #doc > .block.folded.fold-bare > :first-child::after { content:none; }
   #doc.fold-pointer { cursor:pointer; }
   @media (prefers-reduced-motion: reduce) { #doc > .block.fold-head > :first-child::before { transition:none; } }
   /* A finger has no hover to find a chevron with, so on a touch screen every one is drawn, in the faint
@@ -4768,7 +4769,7 @@ function colHit(e) {
 })();
 
 // ---------- folded sections ----------
-// Every heading with something under it folds: a chevron in the left gutter hides every block after it
+// Every heading folds: a chevron in the left gutter hides every block after it
 // up to the next heading at its level or above, and a second click brings them back. Alt-click folds or
 // unfolds every heading at that level. Nothing starts folded. Which headings are folded is a VIEW
 // preference, remembered per document under `sc:folds:<path>` and put back at the end of every
@@ -4835,13 +4836,16 @@ function paintFolds(m) {
   const ends = Collapse.ends(m.levels);
   for (const el of [...folds]) {
     const i = m.els.indexOf(el);
-    if (i === -1 || !Collapse.foldable(m.levels, i, ends)) folds.delete(el);
+    if (i === -1 || !m.levels[i]) folds.delete(el);
   }
   const hid = Collapse.hiddenBy(m.levels, m.els.map(el => folds.has(el)));
   m.els.forEach((el, i) => {
-    const can = Collapse.foldable(m.levels, i, ends);
-    el.classList.toggle('fold-head', can);
-    el.classList.toggle('folded', can && folds.has(el));
+    const head = !!m.levels[i], on = head && folds.has(el);
+    el.classList.toggle('fold-head', head);
+    el.classList.toggle('folded', on);
+    // Folded with nothing under it (yet): the chevron still says folded, and the dots, which claim
+    // something is held back, stay off until there is.
+    el.classList.toggle('fold-bare', on && !Collapse.foldable(m.levels, i, ends));
     el.classList.toggle('fold-hidden', hid[i] !== -1);
   });
 }
@@ -5056,7 +5060,7 @@ function foldHit(e) {
   }
   // The dots after a folded heading's text. They are the heading's ::after, so the pointer is on the
   // heading; what says it is on them is being past the last line's text and within their width.
-  const h = e.target.closest('#doc > .block.folded > :first-child');
+  const h = e.target.closest('#doc > .block.folded:not(.fold-bare) > :first-child');
   if (!h) return null;
   const r = document.createRange(); r.selectNodeContents(h);
   const lines = r.getClientRects(), last = lines[lines.length - 1];
