@@ -759,10 +759,12 @@ to shrink.
 
 ## A fold is a view, and the file never hears about it
 
-Every heading with something under it folds (`public/collapse.js`): the section runs to the next
-heading at its level or above, and the outermost fold wins, so a card anchored inside a folded h3
-inside a folded h2 docks beside the h2. A heading with nothing under it gets no chevron, for the
-reason the collapsed panel hides a zero count: a control that does nothing.
+Every heading folds (`public/collapse.js`): the section runs to the next heading at its level or
+above, and the outermost fold wins, so a card anchored inside a folded h3 inside a folded h2 docks
+beside the h2. A heading with nothing under it still has its chevron and can be folded (Alex asked for
+a control on every heading, 2026-09-25), but `foldable` says it hides nothing, so a fold there is
+drawn `fold-bare`: the chevron turns and the dots, which claim something is held back, stay off until
+something is.
 
 The state is two classes on `.block` WRAPPERS, `folded` on the heading's and `fold-hidden` on each
 block it hides, and the set of folded wrappers lives in `folds` on the page. toMd serializes a

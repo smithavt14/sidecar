@@ -39,7 +39,9 @@
     // would otherwise land on an inherited property instead of a list.
     const out = Object.create(null);
     for (const t of Object.keys(v)) {
-      if (!t || t.length > MAX_TEXT || !Array.isArray(v[t])) continue;
+      // The empty name is a key too: a blank `##` has a chevron like any heading, and its fold is
+      // counted by occurrence among the blank ones.
+      if (t.length > MAX_TEXT || !Array.isArray(v[t])) continue;
       const ns = [...new Set(v[t].filter(n => Number.isInteger(n) && n >= 0))].sort((a, b) => a - b);
       if (ns.length) out[t] = ns;
     }
@@ -61,8 +63,9 @@
     while (open.length) out[open.pop()] = levels.length;
     return out;
   }
-  // Whether heading `h` has anything to fold. A heading followed directly by its next sibling (or by
-  // the end of the document) would offer a control that hides nothing and a cue claiming it had.
+  // Whether heading `h` has anything to fold. Every heading carries a chevron and can be folded; one
+  // followed directly by its next sibling (or by the end of the document) hides nothing, so the page
+  // draws no dots after it, which would claim something was held back.
   function foldable(levels, h, end) {
     const e = end || ends(levels);
     return !!levels[h] && e[h] > h + 1;
@@ -107,15 +110,15 @@
   // The stored folds → a flag per block.
   function foldedFrom(folds, texts, levels) {
     const f = folds || {};
-    return keys(texts, levels).map(k => !!(k && k.text && Object.prototype.hasOwnProperty.call(f, k.text) &&
+    return keys(texts, levels).map(k => !!(k && Object.prototype.hasOwnProperty.call(f, k.text) &&
       Array.isArray(f[k.text]) && f[k.text].includes(k.n)));
   }
   // A flag per block → the stored folds. Written from the live document every time, so a heading typed
   // into while folded is re-keyed by its new text, and a heading that is gone takes its fold with it.
   function fromFolded(texts, levels, folded) {
-    const e = ends(levels), out = Object.create(null);
+    const out = Object.create(null);
     keys(texts, levels).forEach((k, i) => {
-      if (!k || !k.text || !folded[i] || !foldable(levels, i, e)) return;
+      if (!k || !folded[i]) return;
       (out[k.text] = out[k.text] || []).push(k.n);
     });
     return out;

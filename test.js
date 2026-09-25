@@ -9181,7 +9181,12 @@ test('a fold is keyed by heading text and occurrence, so it survives blocks movi
   assert.deepEqual(Collapse.foldedFrom(stored, texts3, lv2).map((x, i) => x ? i : -1).filter(i => i >= 0), [7]);
   assert.equal(Collapse.norm('A\u200bB  c'), 'AB c', 'the editor\'s caret escape is never part of a key');
   assert.deepEqual(Collapse.fromFolded(['Last', null], [2, 0], [true, false]), { Last: [0] });
-  assert.deepEqual(Collapse.fromFolded(['Last'], [2], [true]), {}, 'a fold that hides nothing is not stored');
+  // Every heading folds, one with nothing under it too, and that fold is stored like any other.
+  assert.deepEqual(Collapse.fromFolded(['Last'], [2], [true]), { Last: [0] }, 'a fold on an empty heading is stored');
+  assert.deepEqual(Collapse.fromFolded(['Body'], [0], [true]), {}, 'a paragraph is never a fold');
+  // A blank `##` has no words, and its fold still survives the store: the empty name is a key.
+  const blank = Collapse.parse(Collapse.serialize(Collapse.fromFolded(['', null, ''], [2, 0, 2], [false, false, true])));
+  assert.deepEqual(Collapse.foldedFrom(blank, ['', null, ''], [2, 0, 2]), [false, false, true]);
 });
 
 test('the fold store parses strictly and stores sparsely', () => {
