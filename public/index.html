@@ -795,6 +795,9 @@
     letter-spacing:.08em; color:var(--muted); background:var(--fill); border-radius:var(--r-1); }
   #doc > .block.folded.fold-hot > :first-child::after { color:var(--ink); }
   #doc > .block.folded.fold-bare > :first-child::after { content:none; }
+  /* A blank `##` renders as an empty heading with no height, which leaves its chevron drawn over a row
+     the gutter hit test cannot find. One line of its own type gives it the row. */
+  #doc > .block > :is(h1,h2,h3,h4,h5,h6):first-child:empty { min-height:1lh; }
   #doc.fold-pointer { cursor:pointer; }
   @media (prefers-reduced-motion: reduce) { #doc > .block.fold-head > :first-child::before { transition:none; } }
   /* A finger has no hover to find a chevron with, so on a touch screen every one is drawn, in the faint
@@ -4879,10 +4882,10 @@ function carryFolds(raws, headsWas) {
   const map = alignBlocks(raws, blocks.map(b => b.token.raw));
   const survivors = new Set(map.filter(j => j != null));
   const els = docBlocks(), byIndex = new Map(els.map(el => [+el.dataset.i, el]));
-  const namesWas = new Set(headsWas.map(h => h.text).filter(Boolean));
+  const namesWas = new Set(headsWas.map(h => h.text));   // the empty name too: a blank ## is a name
   const byText = (list, textOf) => {
     const g = new Map();
-    for (const x of list) { const t = textOf(x); if (!t) continue; if (!g.has(t)) g.set(t, []); g.get(t).push(x); }
+    for (const x of list) { const t = textOf(x); if (t == null) continue; if (!g.has(t)) g.set(t, []); g.get(t).push(x); }
     return g;
   };
   const lostWas = byText(headsWas.filter(h => map[h.i] == null), h => h.text);
@@ -4891,7 +4894,7 @@ function carryFolds(raws, headsWas) {
   for (const h of headsWas) {
     if (!h.folded) continue;
     let el = byIndex.get(map[h.i]);
-    if (!el && h.text) el = (changedNow.get(h.text) || [])[(lostWas.get(h.text) || []).indexOf(h)];
+    if (!el) el = (changedNow.get(h.text) || [])[(lostWas.get(h.text) || []).indexOf(h)];
     if (el) carried.add(el);
   }
   for (const el of folds)
@@ -4900,7 +4903,7 @@ function carryFolds(raws, headsWas) {
   const m = foldModel(true);
   paintFolds(m);
   const now = Collapse.fromFolded(m.texts, m.levels, m.els.map(el => folds.has(el)));
-  const named = new Set(m.texts.filter(Boolean).map(Collapse.norm));
+  const named = new Set(m.texts.filter(t => t != null).map(Collapse.norm));
   const was = Collapse.parse(foldsStored);
   for (const t of Object.keys(was)) if (!named.has(t) && !(t in now)) now[t] = was[t];
   const json = Collapse.serialize(now);
