@@ -2723,7 +2723,10 @@ async function writeDoc() {
     // not in `md`, and clearing dirty over it would send the caller waiting in saveDoc home with nothing
     // to do: "saved" on screen, the edit nowhere on disk.
     state.hash = r.hash; dirty = serialize().md !== md; setStatus(dirty ? 'editing…' : 'saved');
-    if (tight) reindex();            // refresh baselines/offsets so the next edit stays tight
+    // Refresh baselines/offsets so the next edit stays tight, but only against a page that still says
+    // `md`: reindex takes each block's baseline from the live DOM, so run over a mid-flight edit it
+    // would record the new text as saved and the next save would send the old bytes again.
+    if (tight && !dirty) reindex();
     // An open comment box waits for this to paint its wash: before it, the markdown and block offsets
     // predate the edit, and a second "foo" typed and commented on at once was washed at the first.
     paintPending();
@@ -2936,7 +2939,8 @@ function paintPending() {
   // now would be washed at the wrong copy. openComment flushes, and saveDoc repaints when it lands.
   if (dirty) return;
   const { nodes, full } = docText();
-  const hit = Anchor.findNth(full, pendingSel, occurrenceFor(pendingSel, pendingSelBlock, pendingSelOffset));
+  const hit = Anchor.findNth(full, pendingSel,
+    renderedOccurrence(pendingSel, occurrenceFor(pendingSel, pendingSelBlock, pendingSelOffset)));
   if (!hit) return;
   const at = (off, end) => {
     const n = nodes.find(({ node, start }) => end ? off > start && off <= start + node.textContent.length
@@ -3430,7 +3434,7 @@ function docRank(items) {
   const { full } = docText();
   for (const it of items) {
     let hit = null;
-    try { hit = it.anchor && Anchor.findNth(full, it.anchor.quote, it.anchor.occurrence || 0); }
+    try { hit = it.anchor && Anchor.findNth(full, it.anchor.quote, renderedOccurrence(it.anchor.quote, it.anchor.occurrence || 0)); }
     catch (e) { console.error('sidecar: failed to rank', it.id, e); }
     rank.set(it.id, hit ? hit.start : -1);
   }
@@ -6054,6 +6058,21 @@ function docText() {
   while (walker.nextNode()) { nodes.push({ node: walker.currentNode, start: full.length }); full += walker.currentNode.textContent; }
   return { nodes, full };
 }
+// An anchor's occurrence counts matches in the MARKDOWN, and docText() leaves the atomic blocks out
+// (raw HTML, a diagram fence), so a match inside one is a copy the rendered text never sees. Every such
+// copy ahead of the target shifts it down by one; without this, a phrase that also sits in an HTML block
+// above resolved to the wrong copy in the prose, or to none at all, and the highlight vanished.
+function renderedOccurrence(quote, occurrence) {
+  const hits = Anchor.findAll(state.markdown, quote);
+  if (!hits[occurrence]) return occurrence;
+  let skip = 0;
+  for (let i = 0; i < occurrence; i++) {
+    const bi = blocks.findIndex(b => hits[i].start >= b.start && hits[i].start < b.end);
+    const el = bi >= 0 && $('doc').querySelector('.block[data-i="' + bi + '"]');
+    if (el && el.dataset.atomic) skip++;
+  }
+  return occurrence - skip;
+}
 function wrapAnchor(quote, occurrence, id, mine) {
   const { nodes, full } = docText();
   // Same matcher the server + occurrenceFor use, run over the concatenated rendered text; the returned
@@ -6119,7 +6138,7 @@ const previewFailed = new Set();
 // summary line, since an orphan has nowhere else to show it and must keep the diffbox.
 function sugHasSpan(sug) {
   if (!sug || isAsset() || !drivesPreview(sug) || previewFailed.has(sug.id)) return false;
-  try { return !!Anchor.findNth(docText().full, sug.anchor.quote, sug.anchor.occurrence || 0); }
+  try { return !!Anchor.findNth(docText().full, sug.anchor.quote, renderedOccurrence(sug.anchor.quote, sug.anchor.occurrence || 0)); }
   catch { return false; }
 }
 // The replacement as inline markdown, through the SAME marked→DOMPurify path the document and the
@@ -6236,7 +6255,8 @@ function markAnchors() {
     // Whose span this is, so the wash matches the dot on the card. Same whoCls the card head uses, so
     // a custom SIDECAR_USER or SIDECAR_AGENT colours both ends identically.
     try {
-      const marks = wrapAnchor(it.anchor.quote, it.anchor.occurrence || 0, it.id, whoCls(it.by) === 'human');
+      const marks = wrapAnchor(it.anchor.quote, renderedOccurrence(it.anchor.quote, it.anchor.occurrence || 0),
+        it.id, whoCls(it.by) === 'human');
       // …and if a pending suggestion owns this span, the proposal is drawn beside it. Built from the
       // marks that actually landed, so a quote that resolved to nothing gets no preview and keeps the
       // rail's diff, which is the only place left to read it.
