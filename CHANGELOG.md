@@ -3,6 +3,14 @@
 All notable changes to sidecar. Versions follow [semver](https://semver.org); dates are the day the
 version was tagged.
 
+## Unreleased
+
+- **The text you are commenting on stays marked while you write.** Opening the comment box moved focus
+  into it, which took the browser's selection away, so a long comment left no sign of what it was
+  about. The span now keeps a yellow wash until the comment is sent or cancelled. It is the exact span
+  the comment will anchor to (the same duplicate, when a phrase appears twice), and it holds through a
+  re-render while the box is open.
+
 ## 1.15.0 (2026-09-25)
 
 **Every heading folds.** A long document had to be scrolled past section by section. A chevron in the

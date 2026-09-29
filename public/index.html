@@ -844,6 +844,9 @@
   mark.anchor:hover, mark.anchor.lit { border-bottom-color:var(--yellow); }
   mark.anchor.mine:hover, mark.anchor.mine.lit { border-bottom-color:var(--ink); }
   mark.anchor.flash { background:var(--flash-fill); box-shadow:0 0 0 3px var(--flash-ring); }
+  /* The text a comment being written is about. Focus moves to the compose box, which takes the browser's
+     own selection away, so this paints the span the comment will anchor to until it is sent or dropped. */
+  ::highlight(sc-pending) { background-color:var(--flash-fill); }
   /* ---------- a pending suggestion, drawn where it would land ----------
      The rail could only ever show a word diff in a 300px mono column, so a full rewrite arrived as
      alternating struck and highlighted words and neither version could be read. The proposal renders
@@ -2901,7 +2904,31 @@ function showTool() {
   st.style.top = Math.max(scrollY + 4, selRect.top + scrollY - st.offsetHeight - 8) + 'px';
 }
 function hideTool() { $('seltool').style.display = 'none'; }
-function hidePopover() { $('popover').style.display = 'none'; $('popover').innerHTML = ''; pendingNode = null; pendingElement = null; }
+function hidePopover() { $('popover').style.display = 'none'; $('popover').innerHTML = ''; pendingNode = null; pendingElement = null; paintPending(); }
+// Keep the commented-on text visibly marked while its compose box is open. The box takes focus, and with
+// it the browser's selection, so without this the reader loses track of what the comment is about.
+// Resolved from the quote and occurrence submitComment will write, through the same docText + findNth
+// the saved highlights use, so the wash lands on exactly the span the comment will anchor to. Recomputed
+// rather than kept as the selection's Range: markAnchors unwraps and normalizes the text nodes under it.
+// Painted with the Custom Highlight API, which never touches the DOM, so the save path cannot see it.
+function paintPending() {
+  if (!window.Highlight || !CSS.highlights) return;
+  CSS.highlights.delete('sc-pending');
+  const open = $('popover').style.display === 'block' && $('pobody');
+  if (!open || !pendingSel || pendingNode || pendingElement || isAsset()) return;
+  const { nodes, full } = docText();
+  const hit = Anchor.findNth(full, pendingSel, occurrenceFor(pendingSel, pendingSelBlock, pendingSelOffset));
+  if (!hit) return;
+  const at = (off, end) => {
+    const n = nodes.find(({ node, start }) => end ? off > start && off <= start + node.textContent.length
+      : off >= start && off < start + node.textContent.length);
+    return n && { node: n.node, offset: off - n.start };
+  };
+  const a = at(hit.start, false), b = at(hit.end, true);
+  if (!a || !b) return;
+  const r = document.createRange(); r.setStart(a.node, a.offset); r.setEnd(b.node, b.offset);
+  CSS.highlights.set('sc-pending', new Highlight(r));
+}
 
 $('seltool').addEventListener('mousedown', (e) => e.preventDefault()); // keep the text selection alive
 $('seltool').addEventListener('click', (e) => {
@@ -3138,6 +3165,7 @@ function openComment() {
   popoverAt();
   makeDraggable(po, $('poHead'));   // drag the header to move it off the text you're commenting on
   const ta = $('pobody'); ta.focus();
+  paintPending();
   $('poCancel').onclick = hidePopover;
   $('poSubmit').onclick = submitComment;
   $('poImage').onclick = () => pickImage(ta);
@@ -6184,6 +6212,7 @@ function markAnchors() {
   }
   syncMarkEditing();
   syncSugbar();
+  paintPending();   // the unwrap and normalize above moved the text nodes a pending comment's wash sat on
   // A preview that could not be built is a card that has to go back to showing its diff, and the cards
   // were drawn before this ran. One re-render, only when the set actually grew, so it cannot loop.
   if (previewFailed.size !== failedBefore) requestAnimationFrame(renderSide);
