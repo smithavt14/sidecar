@@ -4214,13 +4214,18 @@ function setThemeMode(m) {
   uiStore.set('theme', themeMode);
   applyTheme();
 }
+// A click on a theme puts that theme on the page, now. Choosing a dark theme in daylight used to only
+// record tonight's choice and leave the page as it was, which read as a menu that did nothing (Alex,
+// 2026-09-29). So a theme from the other scheme takes the mode with it; one from the scheme already on
+// screen leaves the mode alone, which keeps `system` following the room when it still can.
 function setTheme(id) {
   const t = Themes.BUILTIN[id] || userThemes[id];
   if (!t) return;
   themeFor[t.scheme] = id;
   uiStore.set(t.scheme === 'dark' ? 'themeDark' : 'themeLight', id);
   cacheTheme(t.scheme);
-  applyTheme();
+  if (t.scheme !== activeScheme()) setThemeMode(t.scheme);
+  else applyTheme();
 }
 function paintTheme() {
   const btn = $('themeToggle');
@@ -4256,6 +4261,13 @@ function themeSwatch(t) {
 }
 function renderThemeMenu() {
   const m = $('themeMenu');
+  // A pick re-renders the menu under the focused row. Put focus back on the same row, or a keyboard
+  // reader who chose with Enter lands on the page body with the menu still open.
+  // Compared by dataset rather than through a selector: a user theme's id is its filename, and a quote
+  // in one would make the selector throw.
+  const had = m.contains(document.activeElement) ? document.activeElement : null;
+  const same = had && (had.dataset.theme ? (x) => x.dataset.theme === had.dataset.theme
+    : had.dataset.mode ? (x) => x.dataset.mode === had.dataset.mode : null);
   m.innerHTML = '';
   const row = document.createElement('div');
   row.className = 'mode';
@@ -4284,9 +4296,8 @@ function renderThemeMenu() {
       b.type = 'button';
       b.setAttribute('role', 'menuitemradio');
       b.dataset.theme = id;
-      // Checked is "this is the theme for its own scheme", which is true whether or not that scheme is
-      // the one on screen: choosing a dark theme in daylight is choosing tonight's.
-      b.setAttribute('aria-checked', themeFor[s] === id ? 'true' : 'false');
+      // Checked is the theme on screen, and only that one: one list, one answer.
+      b.setAttribute('aria-checked', s === activeScheme() && themeFor[s] === id ? 'true' : 'false');
       b.appendChild(themeSwatch(t));
       b.appendChild(document.createTextNode(t.name));
       m.appendChild(b);
@@ -4302,6 +4313,7 @@ function renderThemeMenu() {
   cz.textContent = 'customize';
   cz.title = 'Copy ' + activeTheme().name + ' to a theme file and open it';
   m.appendChild(cz);
+  if (same) { const b = [...m.querySelectorAll('button')].find(same); if (b) b.focus(); }
 }
 function toggleThemeMenu(force) {
   const m = $('themeMenu');
@@ -4318,9 +4330,13 @@ $('themeMenu').addEventListener('click', (e) => {
   if (b.dataset.act === 'customize') { toggleThemeMenu(false); customizeTheme(); }
 });
 // Anything outside the control shuts it, the same way the folder's sort menu closes. The button's own
-// handler runs first, so opening it does not immediately close it on the way back up.
+// handler runs first, so opening it does not immediately close it on the way back up. Inside is read
+// from composedPath, which is fixed when the event is dispatched: a click in the menu re-renders it and
+// detaches the clicked button before the event gets here, and asking the detached node for its
+// ancestors found no #themeCtl, so every pick shut the menu and trying three themes meant opening it
+// three times.
 document.addEventListener('click', (e) => {
-  if (!$('themeMenu').hidden && !(e.target.closest && e.target.closest('#themeCtl'))) toggleThemeMenu(false);
+  if (!$('themeMenu').hidden && !e.composedPath().includes($('themeCtl'))) toggleThemeMenu(false);
 });
 paintTheme();
 

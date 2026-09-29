@@ -7650,25 +7650,31 @@ test('the mode says which way round the page is and the theme says what it wears
 
   page.setTheme('sepia');
   assert.equal(page.bg(), Themes.BUILTIN.sepia.tokens['--bg'], 'a light theme lands on a light page');
+  assert.equal(page.mode(), 'system', 'a theme from the scheme already showing leaves system alone');
   page.setTheme('slate-dark');
-  assert.equal(page.bg(), Themes.BUILTIN.sepia.tokens['--bg'],
-    'choosing a dark theme by daylight sets tonight, and changes nothing on screen now');
-  page.setThemeMode('dark');
-  assert.equal(page.bg(), Themes.BUILTIN['slate-dark'].tokens['--bg'], 'and there it is');
+  assert.equal(page.bg(), Themes.BUILTIN['slate-dark'].tokens['--bg'],
+    'choosing a dark theme by daylight puts it on screen now');
+  assert.equal(page.mode(), 'dark', 'by taking the mode with it');
   assert.equal(page.scheme(), 'dark');
   assert.equal(page.title(), 'Theme: slate dark');
   assert.deepEqual(page.written, [['sc:themeLight', 'sepia'], ['sc:themeDark', 'slate-dark'],
     ['sc:theme', 'dark']], 'three keys, each written when the thing it holds moved');
+  page.setThemeMode('light');
+  assert.equal(page.bg(), Themes.BUILTIN.sepia.tokens['--bg'], 'and each scheme still remembers its own');
 });
 
 test('system follows the room, and the room decides which of the two choices is on screen', () => {
   const night = themePage({ system: 'dark' });
   assert.equal(night.scheme(), 'dark');
   assert.equal(night.bg(), Themes.BUILTIN.ink.tokens['--bg'], 'ink is what dark defaults to');
+  night.setTheme('slate-dark');
+  assert.equal(night.mode(), 'system', 'a dark theme at night keeps following the room');
+  assert.equal(night.bg(), Themes.BUILTIN['slate-dark'].tokens['--bg']);
   night.setTheme('sepia');
-  assert.equal(night.bg(), Themes.BUILTIN.ink.tokens['--bg'], 'a light theme chosen at night waits for morning');
-  night.setThemeMode('light');
-  assert.equal(night.bg(), Themes.BUILTIN.sepia.tokens['--bg'], 'an explicit light beats a dark system');
+  assert.equal(night.bg(), Themes.BUILTIN.sepia.tokens['--bg'], 'a light theme chosen at night lands now');
+  assert.equal(night.mode(), 'light', 'an explicit light, which beats a dark system');
+  night.setThemeMode('system');
+  assert.equal(night.bg(), Themes.BUILTIN['slate-dark'].tokens['--bg'], 'back on system, the room picks again');
 });
 
 test('a storage that refuses every write still applies every choice', () => {
@@ -7694,8 +7700,8 @@ test('the menu lists the built-ins by scheme, the user themes with them, and one
     ['paper', 'sepia', 'slate', 'contrast', 'ink', 'sepia-dark', 'slate-dark', 'contrast-dark', 'user:mine.json'],
     'the light four, then the dark four, and a reader\'s own theme in its own group');
   assert.equal(items.filter(i => i.act === 'customize').length, 1, 'one action, at the foot');
-  assert.deepEqual(items.filter(i => i.on).map(i => i.mode || i.theme), ['system', 'paper', 'ink'],
-    'the mode, and the theme each scheme is wearing — including the one not on screen');
+  assert.deepEqual(items.filter(i => i.on).map(i => i.mode || i.theme), ['system', 'paper'],
+    'the mode, and the one theme on screen');
   // A swatch is the theme's own ground and ink, which is the only way a menu of names says anything.
   const sw = page.doc.querySelector('#themeMenu button[data-theme="user:mine.json"] .sw');
   assert.ok(sw, 'every row carries one');
@@ -7704,8 +7710,52 @@ test('the menu lists the built-ins by scheme, the user themes with them, and one
   page.setTheme('user:mine.json');
   assert.deepEqual(page.written, [['sc:themeDark', 'user:mine.json'],
     ['sc:themeCache:dark', JSON.stringify({ id: 'user:mine.json',
-      theme: Themes.expand({ name: 'mine', scheme: 'dark', tokens: { '--bg': '#101018' } }) })]],
-    'a user theme is chosen like any other, and cached so the next load does not flash');
+      theme: Themes.expand({ name: 'mine', scheme: 'dark', tokens: { '--bg': '#101018' } }) })],
+    ['sc:theme', 'dark']],
+    'a user theme is chosen like any other, cached so the next load does not flash, and put on screen');
+});
+
+test('a pick in the theme menu applies it and leaves the menu open', () => {
+  const page = themePage();
+  page.toggleThemeMenu(true);
+  page.doc.querySelector('#themeMenu button[data-theme="sepia-dark"]').click();
+  assert.equal(page.bg(), Themes.BUILTIN['sepia-dark'].tokens['--bg'], 'the click is the change');
+  assert.equal(page.doc.getElementById('themeMenu').hidden, false,
+    'the re-render detached the clicked row, and that is not a click outside');
+  assert.deepEqual(page.items().filter(i => i.on).map(i => i.mode || i.theme), ['dark', 'sepia-dark']);
+  page.doc.querySelector('#themeMenu button[data-mode="system"]').click();
+  assert.equal(page.doc.getElementById('themeMenu').hidden, false, 'a mode button keeps it open too');
+  page.doc.body.click();
+  assert.equal(page.doc.getElementById('themeMenu').hidden, true, 'and a click outside still shuts it');
+  // Outside is where the click happened, not where the node is afterwards: a rail tab that re-renders
+  // itself is detached by the time the event reaches the document, and it is still outside.
+  page.toggleThemeMenu(true);
+  const tab = page.doc.createElement('button');
+  page.doc.body.appendChild(tab);
+  tab.addEventListener('click', () => tab.remove());
+  tab.click();
+  assert.equal(page.doc.getElementById('themeMenu').hidden, true, 'a detached target outside still shuts it');
+});
+
+test('a keyboard pick in the theme menu keeps focus on the row it chose', () => {
+  const page = themePage();
+  page.toggleThemeMenu(true);
+  const row = page.doc.querySelector('#themeMenu button[data-theme="slate-dark"]');
+  row.focus();
+  row.click();   // Enter and Space on a button dispatch this same click
+  const now = page.doc.activeElement;
+  assert.equal(now.dataset.theme, 'slate-dark', 'focus is on the re-rendered row');
+  assert.ok(now.isConnected && now !== row, 'the new one, not the detached original');
+  page.doc.querySelector('#themeMenu button[data-mode="light"]').focus();
+  page.doc.activeElement.click();
+  assert.equal(page.doc.activeElement.dataset.mode, 'light', 'and on a mode button the same');
+  // A user theme's id is its filename, and a filename can carry a quote.
+  page.users({ 'user:my"theme.json': { name: 'my"theme', scheme: 'dark', tokens: { '--bg': '#101018' } } });
+  page.renderThemeMenu();
+  const odd = [...page.doc.querySelectorAll('#themeMenu button')].find(b => b.dataset.theme === 'user:my"theme.json');
+  odd.focus();
+  assert.doesNotThrow(() => odd.click());
+  assert.equal(page.doc.activeElement.dataset.theme, 'user:my"theme.json', 'focus follows it too');
 });
 
 test('the theme control is an icon and a menu in the header, and writes through the one store', () => {

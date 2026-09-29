@@ -3,6 +3,15 @@
 All notable changes to sidecar. Versions follow [semver](https://semver.org); dates are the day the
 version was tagged.
 
+## Unreleased
+
+- **A click in the theme menu changes the theme.** Picking a dark theme while the page was light only
+  saved it for later, and the page stayed as it was. Now any theme in the list applies at once, and one
+  from the other group switches the mode to match. A theme from the group already showing keeps the
+  mode, so `system` goes on following the room. Only the theme on screen is checked.
+- The theme menu stays open after a pick, so several themes can be tried in a row. Every click inside
+  it used to close it, the mode buttons included.
+
 ## 1.15.0 (2026-09-25)
 
 **Every heading folds.** A long document had to be scrolled past section by section. A chevron in the
