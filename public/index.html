@@ -4214,13 +4214,18 @@ function setThemeMode(m) {
   uiStore.set('theme', themeMode);
   applyTheme();
 }
+// A click on a theme puts that theme on the page, now. Choosing a dark theme in daylight used to only
+// record tonight's choice and leave the page as it was, which read as a menu that did nothing (Alex,
+// 2026-09-29). So a theme from the other scheme takes the mode with it; one from the scheme already on
+// screen leaves the mode alone, which keeps `system` following the room when it still can.
 function setTheme(id) {
   const t = Themes.BUILTIN[id] || userThemes[id];
   if (!t) return;
   themeFor[t.scheme] = id;
   uiStore.set(t.scheme === 'dark' ? 'themeDark' : 'themeLight', id);
   cacheTheme(t.scheme);
-  applyTheme();
+  if (t.scheme !== activeScheme()) setThemeMode(t.scheme);
+  else applyTheme();
 }
 function paintTheme() {
   const btn = $('themeToggle');
@@ -4284,9 +4289,8 @@ function renderThemeMenu() {
       b.type = 'button';
       b.setAttribute('role', 'menuitemradio');
       b.dataset.theme = id;
-      // Checked is "this is the theme for its own scheme", which is true whether or not that scheme is
-      // the one on screen: choosing a dark theme in daylight is choosing tonight's.
-      b.setAttribute('aria-checked', themeFor[s] === id ? 'true' : 'false');
+      // Checked is the theme on screen, and only that one: one list, one answer.
+      b.setAttribute('aria-checked', s === activeScheme() && themeFor[s] === id ? 'true' : 'false');
       b.appendChild(themeSwatch(t));
       b.appendChild(document.createTextNode(t.name));
       m.appendChild(b);
@@ -4318,8 +4322,12 @@ $('themeMenu').addEventListener('click', (e) => {
   if (b.dataset.act === 'customize') { toggleThemeMenu(false); customizeTheme(); }
 });
 // Anything outside the control shuts it, the same way the folder's sort menu closes. The button's own
-// handler runs first, so opening it does not immediately close it on the way back up.
+// handler runs first, so opening it does not immediately close it on the way back up. A click in the
+// menu re-renders it, which detaches the button that was clicked before the event gets here, and a
+// detached node has no #themeCtl above it; without the isConnected test every pick shut the menu, so
+// trying three themes meant opening it three times.
 document.addEventListener('click', (e) => {
+  if (!e.target.isConnected) return;
   if (!$('themeMenu').hidden && !(e.target.closest && e.target.closest('#themeCtl'))) toggleThemeMenu(false);
 });
 paintTheme();
