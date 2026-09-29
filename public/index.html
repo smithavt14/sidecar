@@ -844,6 +844,9 @@
   mark.anchor:hover, mark.anchor.lit { border-bottom-color:var(--yellow); }
   mark.anchor.mine:hover, mark.anchor.mine.lit { border-bottom-color:var(--ink); }
   mark.anchor.flash { background:var(--flash-fill); box-shadow:0 0 0 3px var(--flash-ring); }
+  /* The text a comment being written is about. Focus moves to the compose box, which takes the browser's
+     own selection away, so this paints the span the comment will anchor to until it is sent or dropped. */
+  ::highlight(sc-pending) { background-color:var(--flash-fill); }
   /* ---------- a pending suggestion, drawn where it would land ----------
      The rail could only ever show a word diff in a 300px mono column, so a full rewrite arrived as
      alternating struck and highlighted words and neither version could be read. The proposal renders
@@ -2698,16 +2701,35 @@ $('doc').addEventListener('keydown', (e) => {
   dirty = true; setStatus('editing…'); scheduleSave(); scheduleDock();
 });
 
+// One save at a time. Three callers can ask inside the same moment (the document's blur, the comment
+// box opening, a comment being submitted), and dirty stays true until the first PUT answers, so a second
+// one went out on the same baseHash and the server refused it as "changed on disk": a conflict banner
+// for the reader's own edit. A caller that arrives mid-save waits for it, then saves only what is left.
+let saving = null;
 async function saveDoc() {
   clearTimeout(saveTimer);
+  while (saving) await saving;
   if (!dirty) return;
+  saving = writeDoc();
+  try { await saving; } finally { saving = null; }
+}
+async function writeDoc() {
   const { md, tight } = serialize();
   state.markdown = md;               // keep anchors/occurrence in sync with what's on screen
   setStatus('saving…');
   try {
     const r = await api('PUT', '/api/save', { path: FILE, content: md, baseHash: state.hash });
-    state.hash = r.hash; dirty = false; setStatus('saved');
-    if (tight) reindex();            // refresh baselines/offsets so the next edit stays tight
+    // Clean only if the page still says what was just written. An edit typed while the PUT was out is
+    // not in `md`, and clearing dirty over it would send the caller waiting in saveDoc home with nothing
+    // to do: "saved" on screen, the edit nowhere on disk.
+    state.hash = r.hash; dirty = serialize().md !== md; setStatus(dirty ? 'editing…' : 'saved');
+    // Refresh baselines/offsets so the next edit stays tight, but only against a page that still says
+    // `md`: reindex takes each block's baseline from the live DOM, so run over a mid-flight edit it
+    // would record the new text as saved and the next save would send the old bytes again.
+    if (tight && !dirty) reindex();
+    // An open comment box waits for this to paint its wash: before it, the markdown and block offsets
+    // predate the edit, and a second "foo" typed and commented on at once was washed at the first.
+    paintPending();
   } catch (e) {
     if (String(e.message).includes('changed on disk')) {
       setStatus('conflict');
@@ -2901,7 +2923,41 @@ function showTool() {
   st.style.top = Math.max(scrollY + 4, selRect.top + scrollY - st.offsetHeight - 8) + 'px';
 }
 function hideTool() { $('seltool').style.display = 'none'; }
-function hidePopover() { $('popover').style.display = 'none'; $('popover').innerHTML = ''; pendingNode = null; pendingElement = null; }
+function hidePopover() { $('popover').style.display = 'none'; $('popover').innerHTML = ''; pendingNode = null; pendingElement = null; paintPending(); }
+// Keep the commented-on text visibly marked while its compose box is open. The box takes focus, and with
+// it the browser's selection, so without this the reader loses track of what the comment is about.
+// Resolved from the quote and occurrence submitComment will write, through the same docText + findNth
+// the saved highlights use, so the wash lands on exactly the span the comment will anchor to. Recomputed
+// rather than kept as the selection's Range: markAnchors unwraps and normalizes the text nodes under it.
+// Painted with the Custom Highlight API, which never touches the DOM, so the save path cannot see it.
+function paintPending() {
+  if (!window.Highlight || !CSS.highlights) return;
+  CSS.highlights.delete('sc-pending');
+  const open = $('popover').style.display === 'block' && $('pobody');
+  if (!open || !pendingSel || pendingNode || pendingElement || isAsset()) return;
+  // Unsaved edits mean the offsets occurrenceFor reads are from before them, and a duplicate typed just
+  // now would be washed at the wrong copy. Until the save lands (openComment flushes it, saveDoc
+  // repaints), wash the selection itself, which is the right copy by definition, while it still holds
+  // the selected text. A save that is slow or fails then still leaves the text marked.
+  if (dirty) {
+    if (savedRange && savedRange.startContainer.isConnected && savedRange.toString().trim() === pendingSel)
+      CSS.highlights.set('sc-pending', new Highlight(savedRange.cloneRange()));
+    return;
+  }
+  const { nodes, full } = docText();
+  const hit = Anchor.findNth(full, pendingSel,
+    renderedOccurrence(pendingSel, occurrenceFor(pendingSel, pendingSelBlock, pendingSelOffset)));
+  if (!hit) return;
+  const at = (off, end) => {
+    const n = nodes.find(({ node, start }) => end ? off > start && off <= start + node.textContent.length
+      : off >= start && off < start + node.textContent.length);
+    return n && { node: n.node, offset: off - n.start };
+  };
+  const a = at(hit.start, false), b = at(hit.end, true);
+  if (!a || !b) return;
+  const r = document.createRange(); r.setStart(a.node, a.offset); r.setEnd(b.node, b.offset);
+  CSS.highlights.set('sc-pending', new Highlight(r));
+}
 
 $('seltool').addEventListener('mousedown', (e) => e.preventDefault()); // keep the text selection alive
 $('seltool').addEventListener('click', (e) => {
@@ -3138,6 +3194,8 @@ function openComment() {
   popoverAt();
   makeDraggable(po, $('poHead'));   // drag the header to move it off the text you're commenting on
   const ta = $('pobody'); ta.focus();
+  paintPending();
+  if (dirty) flushSave();   // paints the selection now, and the anchored span once this lands
   $('poCancel').onclick = hidePopover;
   $('poSubmit').onclick = submitComment;
   $('poImage').onclick = () => pickImage(ta);
@@ -3383,7 +3441,7 @@ function docRank(items) {
   const { full } = docText();
   for (const it of items) {
     let hit = null;
-    try { hit = it.anchor && Anchor.findNth(full, it.anchor.quote, it.anchor.occurrence || 0); }
+    try { hit = it.anchor && Anchor.findNth(full, it.anchor.quote, renderedOccurrence(it.anchor.quote, it.anchor.occurrence || 0)); }
     catch (e) { console.error('sidecar: failed to rank', it.id, e); }
     rank.set(it.id, hit ? hit.start : -1);
   }
@@ -6007,6 +6065,35 @@ function docText() {
   while (walker.nextNode()) { nodes.push({ node: walker.currentNode, start: full.length }); full += walker.currentNode.textContent; }
   return { nodes, full };
 }
+// An anchor's occurrence counts matches in the MARKDOWN, and docText() leaves the atomic blocks out
+// (raw HTML, a diagram fence), so a match inside one is a copy the rendered text never sees. Every such
+// copy ahead of the target shifts it down by one; without this, a phrase that also sits in an HTML block
+// above resolved to the wrong copy in the prose, or to none at all, and the highlight vanished.
+// Where the atomic blocks sit in the CURRENT markdown, from the same lexer renderDoc builds the page
+// with, so a block here is exactly a block there. Neither blocks[].start (stale after a fallback save,
+// which does not reindex) nor a search for the block's source (an inline code span can quote it) can
+// promise that. Cached per markdown string: markAnchors asks once per item.
+let atomicCache = { md: null, spans: [] };
+function atomicSpans() {
+  if (atomicCache.md === state.markdown) return atomicCache.spans;
+  const spans = [];
+  let off = 0;
+  for (const t of marked.lexer(state.markdown)) {
+    const isFlow = t.type === 'code' && (t.lang || '').trim().toLowerCase() === 'flow';
+    if (isFlow || t.type === 'html') spans.push([off, off + t.raw.length]);
+    off += t.raw.length;
+  }
+  atomicCache = { md: state.markdown, spans };
+  return spans;
+}
+function renderedOccurrence(quote, occurrence) {
+  const hits = Anchor.findAll(state.markdown, quote);
+  if (!hits[occurrence]) return occurrence;
+  const spans = atomicSpans();
+  let skip = 0;
+  for (let i = 0; i < occurrence; i++) if (spans.some(([a, b]) => hits[i].start >= a && hits[i].start < b)) skip++;
+  return occurrence - skip;
+}
 function wrapAnchor(quote, occurrence, id, mine) {
   const { nodes, full } = docText();
   // Same matcher the server + occurrenceFor use, run over the concatenated rendered text; the returned
@@ -6072,7 +6159,7 @@ const previewFailed = new Set();
 // summary line, since an orphan has nowhere else to show it and must keep the diffbox.
 function sugHasSpan(sug) {
   if (!sug || isAsset() || !drivesPreview(sug) || previewFailed.has(sug.id)) return false;
-  try { return !!Anchor.findNth(docText().full, sug.anchor.quote, sug.anchor.occurrence || 0); }
+  try { return !!Anchor.findNth(docText().full, sug.anchor.quote, renderedOccurrence(sug.anchor.quote, sug.anchor.occurrence || 0)); }
   catch { return false; }
 }
 // The replacement as inline markdown, through the SAME marked→DOMPurify path the document and the
@@ -6189,7 +6276,8 @@ function markAnchors() {
     // Whose span this is, so the wash matches the dot on the card. Same whoCls the card head uses, so
     // a custom SIDECAR_USER or SIDECAR_AGENT colours both ends identically.
     try {
-      const marks = wrapAnchor(it.anchor.quote, it.anchor.occurrence || 0, it.id, whoCls(it.by) === 'human');
+      const marks = wrapAnchor(it.anchor.quote, renderedOccurrence(it.anchor.quote, it.anchor.occurrence || 0),
+        it.id, whoCls(it.by) === 'human');
       // …and if a pending suggestion owns this span, the proposal is drawn beside it. Built from the
       // marks that actually landed, so a quote that resolved to nothing gets no preview and keeps the
       // rail's diff, which is the only place left to read it.
@@ -6200,6 +6288,7 @@ function markAnchors() {
   }
   syncMarkEditing();
   syncSugbar();
+  paintPending();   // the unwrap and normalize above moved the text nodes a pending comment's wash sat on
   // A preview that could not be built is a card that has to go back to showing its diff, and the cards
   // were drawn before this ran. One re-render, only when the set actually grew, so it cannot loop.
   if (previewFailed.size !== failedBefore) requestAnimationFrame(renderSide);

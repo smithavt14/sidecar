@@ -9286,3 +9286,140 @@ test('a heading named like an Object property folds and stores like any other', 
   // Nothing stored: an inherited property is never read as a fold.
   assert.deepEqual(Collapse.foldedFrom({}, ['constructor', 'x'], [2, 0]), [false, false]);
 });
+
+// ---- one save at a time ----
+// The document's blur, the comment box opening and a comment being submitted can all ask for a save
+// inside the same moment, and dirty stays true until the first PUT answers. Two PUTs on one baseHash
+// made the server refuse the second as "changed on disk", a conflict banner for the reader's own edit.
+test('saves run one at a time, and a save asked for mid-flight waits for it', async () => {
+  const src = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+  const m = src.match(/(let saving = null;\nasync function saveDoc\(\) \{[\s\S]*?\n\}\nasync function writeDoc\(\) \{[\s\S]*?\n\}\n)/);
+  assert.ok(m, 'saveDoc and writeDoc are still one run of source');
+  const puts = [];
+  let hash = 'h0', inFlight = 0, most = 0;
+  const env = {
+    dirty: true, state: { markdown: '', hash: 'h0' },
+    text: 'text', sent: [],
+    serialize: () => ({ md: env.text, tight: false }),
+    api: async (verb, url, body) => {
+      inFlight++; most = Math.max(most, inFlight); puts.push(body.baseHash); env.sent.push(body.content);
+      await new Promise(r => setTimeout(r, 20));
+      inFlight--;
+      if (body.baseHash !== hash) throw new Error('changed on disk');
+      hash = 'h' + puts.length; return { hash };
+    },
+  };
+  const run = new Function('env', `let { dirty, state, serialize, api } = env;  // serialize reads env.text live
+    let saveTimer = null; const clearTimeout = () => {};
+    const setStatus = () => {}, reindex = () => {}, paintPending = () => {}, showBanner = () => { env.banner = true; };
+    const reloadDiscarding = () => {}, FILE = 'a.md';
+    ${m[1]}
+    return { saveDoc, setDirty: (v) => { dirty = v; }, dirty: () => dirty };`);
+  const page = run(env);
+  await Promise.all([page.saveDoc(), page.saveDoc(), page.saveDoc()]);
+  assert.equal(most, 1, 'never two PUTs at once');
+  assert.deepEqual(puts, ['h0'], 'one edit, one save: the callers behind it found nothing left to write');
+  assert.ok(!env.banner, 'and no conflict banner');
+  page.setDirty(true);
+  await page.saveDoc();
+  assert.deepEqual(puts, ['h0', 'h1'], 'the next edit saves on the hash the last save returned');
+
+  // An edit typed while a PUT is out is not in what that PUT carried, so it must not be cleared with it.
+  env.text = 'A';
+  page.setDirty(true);
+  const first = page.saveDoc();
+  await new Promise(r => setTimeout(r, 5));
+  env.text = 'B'; page.setDirty(true);
+  const second = page.saveDoc();
+  await Promise.all([first, second]);
+  assert.deepEqual(env.sent.slice(-2), ['A', 'B'], 'the waiting save sends the edit made mid-flight');
+  assert.equal(page.dirty(), false, 'and only then is the page clean');
+});
+
+// The same race through the REAL serializer and reindex. reindex takes each block's baseline from the
+// live DOM, so running it over an edit typed while the PUT was out recorded that edit as already saved.
+test('an edit typed while a save is out reaches the file, through the real serialize and reindex', async () => {
+  const src = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+  const code = src.match(/(let saving = null;\nasync function saveDoc\(\) \{[\s\S]*?\n\}\nasync function writeDoc\(\) \{[\s\S]*?\n\}\n)/)[1];
+  const { doc, blocks, td, marked } = buildDoc('# T\n\nFirst.\n');
+  const para = () => [...doc.querySelectorAll('.block p')][0];
+  let hash = 'h0', release;
+  const sent = [];
+  const env = {
+    state: { markdown: '# T\n\nFirst.\n', hash: 'h0' }, blocks,
+    Serialize, doc, td, marked,
+    api: async (verb, url, body) => {
+      sent.push(body.content);
+      if (sent.length === 1) await new Promise(r => { release = r; });
+      if (body.baseHash !== hash) throw new Error('changed on disk');
+      hash = 'h' + sent.length; return { hash };
+    },
+  };
+  const page = new Function('env', `let { state, api } = env; let dirty = false, blocks = env.blocks;
+    let saveTimer = null; const clearTimeout = () => {};
+    const serialize = () => env.Serialize.serialize(env.doc, blocks, env.td);
+    const reindex = () => { blocks = env.Serialize.reindex(env.doc, blocks, state.markdown, env.marked, env.td); };
+    const setStatus = () => {}, paintPending = () => {}, showBanner = () => { env.banner = true; };
+    const reloadDiscarding = () => {}, FILE = 'a.md';
+    ${code}
+    return { saveDoc, edit: () => { dirty = true; }, dirty: () => dirty };`)(env);
+
+  para().textContent = 'Second.'; page.edit();
+  const first = page.saveDoc();
+  await new Promise(r => setTimeout(r, 5));
+  para().textContent = 'Third.'; page.edit();       // typed while the first PUT is out
+  const second = page.saveDoc();
+  release();
+  await Promise.all([first, second]);
+  assert.deepEqual(sent, ['# T\n\nSecond.\n', '# T\n\nThird.\n'], 'the waiting save writes the mid-flight edit');
+  assert.equal(page.dirty(), false);
+  assert.ok(!env.banner, 'with no conflict');
+});
+
+// An anchor's occurrence counts copies in the markdown; the highlighter's text leaves atomic blocks out.
+test('a copy of the quote inside an HTML block does not push the highlight off its target', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+  const code = src.match(/(let atomicCache = [\s\S]*?\nfunction renderedOccurrence\(quote, occurrence\) \{[\s\S]*?\n\})/)[1];
+  const md = '# t\n\n<div>the foo box</div>\n\nSome foo here, and foo again.\n';
+  const { doc, blocks } = buildDoc(md);
+  const fn = new Function('Anchor', 'state', 'marked', code + '\nreturn renderedOccurrence;')(
+    Anchor, { markdown: md }, require('marked').marked);
+  assert.equal(fn('foo', 1), 0, 'the first prose copy is the first the rendered text has');
+  assert.equal(fn('foo', 2), 1, 'and the second is the second');
+  assert.equal(fn('foo', 0), 0, 'a target inside the block itself is left as it is');
+  assert.equal(fn('Some', 0), 0, 'a quote with no copy in an atomic block is unchanged');
+});
+
+test('the atomic spans are found in the current markdown, not at stale block offsets', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+  const code = src.match(/(let atomicCache = [\s\S]*?\nfunction renderedOccurrence\(quote, occurrence\) \{[\s\S]*?\n\})/)[1];
+  const before = 'A foo line.\n\n<div>no match</div>\n\nEnd foo.\n';
+  const { doc, blocks } = buildDoc(before);
+  // A paragraph inserted at the top and saved on the fallback path, which does not reindex: blocks[]
+  // still says the HTML block starts where "A foo line." now sits.
+  const after = 'Inserted.\n\n' + before;   // moves the first foo to offset 13, inside the block's old range
+  const fn = new Function('Anchor', 'state', 'marked', code + '\nreturn renderedOccurrence;')(
+    Anchor, { markdown: after }, require('marked').marked);
+  assert.equal(fn('foo', 1), 1, 'no copy of foo is in the HTML block, so the second stays the second');
+});
+
+test('an inline code span quoting an HTML block below is not mistaken for the block', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+  const code = src.match(/(let atomicCache = [\s\S]*?\nfunction renderedOccurrence\(quote, occurrence\) \{[\s\S]*?\n\})/)[1];
+  const md = '`<div>foo</div>` foo\n\n<div>foo</div>\n\nfoo\n';
+  const { doc, blocks } = buildDoc(md);
+  const fn = new Function('Anchor', 'state', 'marked', code + '\nreturn renderedOccurrence;')(
+    Anchor, { markdown: md }, require('marked').marked);
+  assert.equal(fn('foo', 1), 1, 'the prose foo after the code span is the second copy the page shows');
+  assert.equal(fn('foo', 3), 2, 'and the last foo is the third, past the one inside the block');
+});
+
+test('an inline code span quoting an HTML block stays prose after a paragraph is inserted above', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+  const code = src.match(/(let atomicCache = [\s\S]*?\nfunction renderedOccurrence\(quote, occurrence\) \{[\s\S]*?\n\})/)[1];
+  const md = 'Inserted above, which stales every recorded offset.\n\n`<div>foo</div>` foo\n\n<div>foo</div>\n\nfoo\n';
+  const fn = new Function('Anchor', 'state', 'marked', code + '\nreturn renderedOccurrence;')(
+    Anchor, { markdown: md }, require('marked').marked);
+  assert.equal(fn('foo', 1), 1, 'the prose foo is the second copy the page shows');
+  assert.equal(fn('foo', 3), 2);
+});

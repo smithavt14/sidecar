@@ -5,6 +5,16 @@ version was tagged.
 
 ## Unreleased
 
+- **The text you are commenting on stays marked while you write.** Opening the comment box moved focus
+  into it, which took the browser's selection away, so a long comment left no sign of what it was
+  about. The span now keeps a yellow wash until the comment is sent or cancelled. It is the exact span
+  the comment will anchor to (the same duplicate, when a phrase appears twice), and it holds through a
+  re-render while the box is open.
+- Saves run one at a time. Commenting right after an edit could send two saves of the same text at
+  once, and the second came back as a "changed on disk" conflict for the reader's own edit. An edit
+  typed while a save is out now stays unsaved until the next save writes it.
+- A comment on a phrase that also appears inside an HTML block or a diagram higher up now highlights
+  the copy it was made on. The highlight used to land on a later copy, or on none.
 - **A click in the theme menu changes the theme.** Picking a dark theme while the page was light only
   saved it for later, and the page stayed as it was. Now any theme in the list applies at once, and one
   from the other group switches the mode to match. A theme from the group already showing keeps the
