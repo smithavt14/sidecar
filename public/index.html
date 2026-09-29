@@ -2711,6 +2711,9 @@ async function saveDoc() {
     const r = await api('PUT', '/api/save', { path: FILE, content: md, baseHash: state.hash });
     state.hash = r.hash; dirty = false; setStatus('saved');
     if (tight) reindex();            // refresh baselines/offsets so the next edit stays tight
+    // An open comment box waits for this to paint its wash: before it, the markdown and block offsets
+    // predate the edit, and a second "foo" typed and commented on at once was washed at the first.
+    paintPending();
   } catch (e) {
     if (String(e.message).includes('changed on disk')) {
       setStatus('conflict');
@@ -2916,6 +2919,9 @@ function paintPending() {
   CSS.highlights.delete('sc-pending');
   const open = $('popover').style.display === 'block' && $('pobody');
   if (!open || !pendingSel || pendingNode || pendingElement || isAsset()) return;
+  // Unsaved edits mean the offsets occurrenceFor reads are from before them, and a duplicate typed just
+  // now would be washed at the wrong copy. openComment flushes, and saveDoc repaints when it lands.
+  if (dirty) return;
   const { nodes, full } = docText();
   const hit = Anchor.findNth(full, pendingSel, occurrenceFor(pendingSel, pendingSelBlock, pendingSelOffset));
   if (!hit) return;
@@ -3165,7 +3171,7 @@ function openComment() {
   popoverAt();
   makeDraggable(po, $('poHead'));   // drag the header to move it off the text you're commenting on
   const ta = $('pobody'); ta.focus();
-  paintPending();
+  if (dirty) flushSave(); else paintPending();
   $('poCancel').onclick = hidePopover;
   $('poSubmit').onclick = submitComment;
   $('poImage').onclick = () => pickImage(ta);
