@@ -4263,9 +4263,11 @@ function renderThemeMenu() {
   const m = $('themeMenu');
   // A pick re-renders the menu under the focused row. Put focus back on the same row, or a keyboard
   // reader who chose with Enter lands on the page body with the menu still open.
+  // Compared by dataset rather than through a selector: a user theme's id is its filename, and a quote
+  // in one would make the selector throw.
   const had = m.contains(document.activeElement) ? document.activeElement : null;
-  const back = had && (had.dataset.theme ? '[data-theme="' + had.dataset.theme + '"]'
-    : had.dataset.mode ? '[data-mode="' + had.dataset.mode + '"]' : null);
+  const same = had && (had.dataset.theme ? (x) => x.dataset.theme === had.dataset.theme
+    : had.dataset.mode ? (x) => x.dataset.mode === had.dataset.mode : null);
   m.innerHTML = '';
   const row = document.createElement('div');
   row.className = 'mode';
@@ -4311,7 +4313,7 @@ function renderThemeMenu() {
   cz.textContent = 'customize';
   cz.title = 'Copy ' + activeTheme().name + ' to a theme file and open it';
   m.appendChild(cz);
-  if (back) { const b = [...m.querySelectorAll('button')].find(x => x.matches(back)); if (b) b.focus(); }
+  if (same) { const b = [...m.querySelectorAll('button')].find(same); if (b) b.focus(); }
 }
 function toggleThemeMenu(force) {
   const m = $('themeMenu');

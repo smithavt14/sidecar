@@ -7749,6 +7749,13 @@ test('a keyboard pick in the theme menu keeps focus on the row it chose', () => 
   page.doc.querySelector('#themeMenu button[data-mode="light"]').focus();
   page.doc.activeElement.click();
   assert.equal(page.doc.activeElement.dataset.mode, 'light', 'and on a mode button the same');
+  // A user theme's id is its filename, and a filename can carry a quote.
+  page.users({ 'user:my"theme.json': { name: 'my"theme', scheme: 'dark', tokens: { '--bg': '#101018' } } });
+  page.renderThemeMenu();
+  const odd = [...page.doc.querySelectorAll('#themeMenu button')].find(b => b.dataset.theme === 'user:my"theme.json');
+  odd.focus();
+  assert.doesNotThrow(() => odd.click());
+  assert.equal(page.doc.activeElement.dataset.theme, 'user:my"theme.json', 'focus follows it too');
 });
 
 test('the theme control is an icon and a menu in the header, and writes through the one store', () => {
