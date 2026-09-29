@@ -7727,6 +7727,28 @@ test('a pick in the theme menu applies it and leaves the menu open', () => {
   assert.equal(page.doc.getElementById('themeMenu').hidden, false, 'a mode button keeps it open too');
   page.doc.body.click();
   assert.equal(page.doc.getElementById('themeMenu').hidden, true, 'and a click outside still shuts it');
+  // Outside is where the click happened, not where the node is afterwards: a rail tab that re-renders
+  // itself is detached by the time the event reaches the document, and it is still outside.
+  page.toggleThemeMenu(true);
+  const tab = page.doc.createElement('button');
+  page.doc.body.appendChild(tab);
+  tab.addEventListener('click', () => tab.remove());
+  tab.click();
+  assert.equal(page.doc.getElementById('themeMenu').hidden, true, 'a detached target outside still shuts it');
+});
+
+test('a keyboard pick in the theme menu keeps focus on the row it chose', () => {
+  const page = themePage();
+  page.toggleThemeMenu(true);
+  const row = page.doc.querySelector('#themeMenu button[data-theme="slate-dark"]');
+  row.focus();
+  row.click();   // Enter and Space on a button dispatch this same click
+  const now = page.doc.activeElement;
+  assert.equal(now.dataset.theme, 'slate-dark', 'focus is on the re-rendered row');
+  assert.ok(now.isConnected && now !== row, 'the new one, not the detached original');
+  page.doc.querySelector('#themeMenu button[data-mode="light"]').focus();
+  page.doc.activeElement.click();
+  assert.equal(page.doc.activeElement.dataset.mode, 'light', 'and on a mode button the same');
 });
 
 test('the theme control is an icon and a menu in the header, and writes through the one store', () => {

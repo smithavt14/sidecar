@@ -4261,6 +4261,11 @@ function themeSwatch(t) {
 }
 function renderThemeMenu() {
   const m = $('themeMenu');
+  // A pick re-renders the menu under the focused row. Put focus back on the same row, or a keyboard
+  // reader who chose with Enter lands on the page body with the menu still open.
+  const had = m.contains(document.activeElement) ? document.activeElement : null;
+  const back = had && (had.dataset.theme ? '[data-theme="' + had.dataset.theme + '"]'
+    : had.dataset.mode ? '[data-mode="' + had.dataset.mode + '"]' : null);
   m.innerHTML = '';
   const row = document.createElement('div');
   row.className = 'mode';
@@ -4306,6 +4311,7 @@ function renderThemeMenu() {
   cz.textContent = 'customize';
   cz.title = 'Copy ' + activeTheme().name + ' to a theme file and open it';
   m.appendChild(cz);
+  if (back) { const b = [...m.querySelectorAll('button')].find(x => x.matches(back)); if (b) b.focus(); }
 }
 function toggleThemeMenu(force) {
   const m = $('themeMenu');
@@ -4322,13 +4328,13 @@ $('themeMenu').addEventListener('click', (e) => {
   if (b.dataset.act === 'customize') { toggleThemeMenu(false); customizeTheme(); }
 });
 // Anything outside the control shuts it, the same way the folder's sort menu closes. The button's own
-// handler runs first, so opening it does not immediately close it on the way back up. A click in the
-// menu re-renders it, which detaches the button that was clicked before the event gets here, and a
-// detached node has no #themeCtl above it; without the isConnected test every pick shut the menu, so
-// trying three themes meant opening it three times.
+// handler runs first, so opening it does not immediately close it on the way back up. Inside is read
+// from composedPath, which is fixed when the event is dispatched: a click in the menu re-renders it and
+// detaches the clicked button before the event gets here, and asking the detached node for its
+// ancestors found no #themeCtl, so every pick shut the menu and trying three themes meant opening it
+// three times.
 document.addEventListener('click', (e) => {
-  if (!e.target.isConnected) return;
-  if (!$('themeMenu').hidden && !(e.target.closest && e.target.closest('#themeCtl'))) toggleThemeMenu(false);
+  if (!$('themeMenu').hidden && !e.composedPath().includes($('themeCtl'))) toggleThemeMenu(false);
 });
 paintTheme();
 
