@@ -6072,13 +6072,19 @@ function docText() {
 // The atomic spans are found in the CURRENT markdown by their own source text, walked in document
 // order, rather than read off blocks[].start: those offsets go stale after a structural edit (a
 // fallback save does not reindex), and a stale range can swallow a prose copy that moved into it.
+// The recorded start still breaks a tie, the way fenceBase uses it: when the source text also appears
+// earlier as prose (an inline code span quoting the block), the copy nearest the block wins.
 function renderedOccurrence(quote, occurrence) {
   const hits = Anchor.findAll(state.markdown, quote);
   if (!hits[occurrence]) return occurrence;
   const spans = [];
   let from = 0;
   for (const el of $('doc').querySelectorAll('.block[data-atomic]')) {
-    const at = el.__md ? state.markdown.indexOf(el.__md, from) : -1;
+    if (!el.__md) continue;
+    const b = blocks[Number(el.dataset.i)];
+    let at = -1;
+    for (let k = state.markdown.indexOf(el.__md, from); k !== -1; k = state.markdown.indexOf(el.__md, k + 1))
+      if (at === -1 || (b && Math.abs(k - b.start) < Math.abs(at - b.start))) at = k;
     if (at === -1) continue;
     spans.push([at, at + el.__md.length]);
     from = at + el.__md.length;

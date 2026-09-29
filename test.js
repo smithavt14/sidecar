@@ -9402,3 +9402,14 @@ test('the atomic spans are found in the current markdown, not at stale block off
     Anchor, { markdown: after }, blocks, () => doc);
   assert.equal(fn('foo', 1), 1, 'no copy of foo is in the HTML block, so the second stays the second');
 });
+
+test('an inline code span quoting an HTML block below is not mistaken for the block', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+  const code = src.match(/(function renderedOccurrence\(quote, occurrence\) \{[\s\S]*?\n\})/)[1];
+  const md = '`<div>foo</div>` foo\n\n<div>foo</div>\n\nfoo\n';
+  const { doc, blocks } = buildDoc(md);
+  const fn = new Function('Anchor', 'state', 'blocks', '$', code + '\nreturn renderedOccurrence;')(
+    Anchor, { markdown: md }, blocks, () => doc);
+  assert.equal(fn('foo', 1), 1, 'the prose foo after the code span is the second copy the page shows');
+  assert.equal(fn('foo', 3), 2, 'and the last foo is the third, past the one inside the block');
+});
