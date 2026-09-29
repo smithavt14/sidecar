@@ -623,6 +623,12 @@ and slate by night gets both, and the room decides which — the page listens to
 `prefers-color-scheme` itself now, since the media query that used to answer for free is gone with the CSS
 palette.
 
+The menu reads as one list of themes, grouped light and dark, and a click puts that theme on screen. A theme
+from the other scheme switches the mode to that scheme, so picking slate dark in daylight on `system` leaves
+`system` for `dark`. One from the scheme already showing keeps the mode, `system` included. Only the theme on
+screen is checked. It used to check each scheme's pick whether or not it was showing, and a click on the
+other scheme only recorded tonight's choice, which read as a menu that did nothing.
+
 `data-theme` carries the RESOLVED scheme in every case rather than only an explicit choice, which is what
 lets the two rules that need to know which way round the page is (the wordmark's inversion filter, and
 `color-scheme` for scrollbars and native controls) read one attribute and be right in a user's own theme

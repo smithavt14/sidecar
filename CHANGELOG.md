@@ -10,6 +10,15 @@ version was tagged.
   about. The span now keeps a yellow wash until the comment is sent or cancelled. It is the exact span
   the comment will anchor to (the same duplicate, when a phrase appears twice), and it holds through a
   re-render while the box is open.
+- Saves run one at a time. Commenting right after an edit could send two saves of the same text at
+  once, and the second came back as a "changed on disk" conflict for the reader's own edit. An edit
+  typed while a save is out now stays unsaved until the next save writes it.
+- **A click in the theme menu changes the theme.** Picking a dark theme while the page was light only
+  saved it for later, and the page stayed as it was. Now any theme in the list applies at once, and one
+  from the other group switches the mode to match. A theme from the group already showing keeps the
+  mode, so `system` goes on following the room. Only the theme on screen is checked.
+- The theme menu stays open after a pick, so several themes can be tried in a row. Every click inside
+  it used to close it, the mode buttons included.
 
 ## 1.15.0 (2026-09-25)
 
