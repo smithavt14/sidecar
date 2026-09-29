@@ -2719,7 +2719,10 @@ async function writeDoc() {
   setStatus('saving…');
   try {
     const r = await api('PUT', '/api/save', { path: FILE, content: md, baseHash: state.hash });
-    state.hash = r.hash; dirty = false; setStatus('saved');
+    // Clean only if the page still says what was just written. An edit typed while the PUT was out is
+    // not in `md`, and clearing dirty over it would send the caller waiting in saveDoc home with nothing
+    // to do: "saved" on screen, the edit nowhere on disk.
+    state.hash = r.hash; dirty = serialize().md !== md; setStatus(dirty ? 'editing…' : 'saved');
     if (tight) reindex();            // refresh baselines/offsets so the next edit stays tight
     // An open comment box waits for this to paint its wash: before it, the markdown and block offsets
     // predate the edit, and a second "foo" typed and commented on at once was washed at the first.

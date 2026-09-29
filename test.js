@@ -9249,16 +9249,17 @@ test('saves run one at a time, and a save asked for mid-flight waits for it', as
   let hash = 'h0', inFlight = 0, most = 0;
   const env = {
     dirty: true, state: { markdown: '', hash: 'h0' },
-    serialize: () => ({ md: 'text', tight: false }),
+    text: 'text', sent: [],
+    serialize: () => ({ md: env.text, tight: false }),
     api: async (verb, url, body) => {
-      inFlight++; most = Math.max(most, inFlight); puts.push(body.baseHash);
+      inFlight++; most = Math.max(most, inFlight); puts.push(body.baseHash); env.sent.push(body.content);
       await new Promise(r => setTimeout(r, 20));
       inFlight--;
       if (body.baseHash !== hash) throw new Error('changed on disk');
       hash = 'h' + puts.length; return { hash };
     },
   };
-  const run = new Function('env', `let { dirty, state, serialize, api } = env;
+  const run = new Function('env', `let { dirty, state, serialize, api } = env;  // serialize reads env.text live
     let saveTimer = null; const clearTimeout = () => {};
     const setStatus = () => {}, reindex = () => {}, paintPending = () => {}, showBanner = () => { env.banner = true; };
     const reloadDiscarding = () => {}, FILE = 'a.md';
@@ -9272,4 +9273,15 @@ test('saves run one at a time, and a save asked for mid-flight waits for it', as
   page.setDirty(true);
   await page.saveDoc();
   assert.deepEqual(puts, ['h0', 'h1'], 'the next edit saves on the hash the last save returned');
+
+  // An edit typed while a PUT is out is not in what that PUT carried, so it must not be cleared with it.
+  env.text = 'A';
+  page.setDirty(true);
+  const first = page.saveDoc();
+  await new Promise(r => setTimeout(r, 5));
+  env.text = 'B'; page.setDirty(true);
+  const second = page.saveDoc();
+  await Promise.all([first, second]);
+  assert.deepEqual(env.sent.slice(-2), ['A', 'B'], 'the waiting save sends the edit made mid-flight');
+  assert.equal(page.dirty(), false, 'and only then is the page clean');
 });
