@@ -2936,8 +2936,14 @@ function paintPending() {
   const open = $('popover').style.display === 'block' && $('pobody');
   if (!open || !pendingSel || pendingNode || pendingElement || isAsset()) return;
   // Unsaved edits mean the offsets occurrenceFor reads are from before them, and a duplicate typed just
-  // now would be washed at the wrong copy. openComment flushes, and saveDoc repaints when it lands.
-  if (dirty) return;
+  // now would be washed at the wrong copy. Until the save lands (openComment flushes it, saveDoc
+  // repaints), wash the selection itself, which is the right copy by definition, while it still holds
+  // the selected text. A save that is slow or fails then still leaves the text marked.
+  if (dirty) {
+    if (savedRange && savedRange.startContainer.isConnected && savedRange.toString().trim() === pendingSel)
+      CSS.highlights.set('sc-pending', new Highlight(savedRange.cloneRange()));
+    return;
+  }
   const { nodes, full } = docText();
   const hit = Anchor.findNth(full, pendingSel,
     renderedOccurrence(pendingSel, occurrenceFor(pendingSel, pendingSelBlock, pendingSelOffset)));
@@ -3188,7 +3194,8 @@ function openComment() {
   popoverAt();
   makeDraggable(po, $('poHead'));   // drag the header to move it off the text you're commenting on
   const ta = $('pobody'); ta.focus();
-  if (dirty) flushSave(); else paintPending();
+  paintPending();
+  if (dirty) flushSave();   // paints the selection now, and the anchored span once this lands
   $('poCancel').onclick = hidePopover;
   $('poSubmit').onclick = submitComment;
   $('poImage').onclick = () => pickImage(ta);
@@ -6062,15 +6069,22 @@ function docText() {
 // (raw HTML, a diagram fence), so a match inside one is a copy the rendered text never sees. Every such
 // copy ahead of the target shifts it down by one; without this, a phrase that also sits in an HTML block
 // above resolved to the wrong copy in the prose, or to none at all, and the highlight vanished.
+// The atomic spans are found in the CURRENT markdown by their own source text, walked in document
+// order, rather than read off blocks[].start: those offsets go stale after a structural edit (a
+// fallback save does not reindex), and a stale range can swallow a prose copy that moved into it.
 function renderedOccurrence(quote, occurrence) {
   const hits = Anchor.findAll(state.markdown, quote);
   if (!hits[occurrence]) return occurrence;
-  let skip = 0;
-  for (let i = 0; i < occurrence; i++) {
-    const bi = blocks.findIndex(b => hits[i].start >= b.start && hits[i].start < b.end);
-    const el = bi >= 0 && $('doc').querySelector('.block[data-i="' + bi + '"]');
-    if (el && el.dataset.atomic) skip++;
+  const spans = [];
+  let from = 0;
+  for (const el of $('doc').querySelectorAll('.block[data-atomic]')) {
+    const at = el.__md ? state.markdown.indexOf(el.__md, from) : -1;
+    if (at === -1) continue;
+    spans.push([at, at + el.__md.length]);
+    from = at + el.__md.length;
   }
+  let skip = 0;
+  for (let i = 0; i < occurrence; i++) if (spans.some(([a, b]) => hits[i].start >= a && hits[i].start < b)) skip++;
   return occurrence - skip;
 }
 function wrapAnchor(quote, occurrence, id, mine) {
