@@ -9379,11 +9379,11 @@ test('an edit typed while a save is out reaches the file, through the real seria
 // An anchor's occurrence counts copies in the markdown; the highlighter's text leaves atomic blocks out.
 test('a copy of the quote inside an HTML block does not push the highlight off its target', () => {
   const src = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
-  const code = src.match(/(function renderedOccurrence\(quote, occurrence\) \{[\s\S]*?\n\})/)[1];
+  const code = src.match(/(let atomicCache = [\s\S]*?\nfunction renderedOccurrence\(quote, occurrence\) \{[\s\S]*?\n\})/)[1];
   const md = '# t\n\n<div>the foo box</div>\n\nSome foo here, and foo again.\n';
   const { doc, blocks } = buildDoc(md);
-  const fn = new Function('Anchor', 'state', 'blocks', '$', code + '\nreturn renderedOccurrence;')(
-    Anchor, { markdown: md }, blocks, () => doc);
+  const fn = new Function('Anchor', 'state', 'marked', code + '\nreturn renderedOccurrence;')(
+    Anchor, { markdown: md }, require('marked').marked);
   assert.equal(fn('foo', 1), 0, 'the first prose copy is the first the rendered text has');
   assert.equal(fn('foo', 2), 1, 'and the second is the second');
   assert.equal(fn('foo', 0), 0, 'a target inside the block itself is left as it is');
@@ -9392,24 +9392,34 @@ test('a copy of the quote inside an HTML block does not push the highlight off i
 
 test('the atomic spans are found in the current markdown, not at stale block offsets', () => {
   const src = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
-  const code = src.match(/(function renderedOccurrence\(quote, occurrence\) \{[\s\S]*?\n\})/)[1];
+  const code = src.match(/(let atomicCache = [\s\S]*?\nfunction renderedOccurrence\(quote, occurrence\) \{[\s\S]*?\n\})/)[1];
   const before = 'A foo line.\n\n<div>no match</div>\n\nEnd foo.\n';
   const { doc, blocks } = buildDoc(before);
   // A paragraph inserted at the top and saved on the fallback path, which does not reindex: blocks[]
   // still says the HTML block starts where "A foo line." now sits.
   const after = 'Inserted.\n\n' + before;   // moves the first foo to offset 13, inside the block's old range
-  const fn = new Function('Anchor', 'state', 'blocks', '$', code + '\nreturn renderedOccurrence;')(
-    Anchor, { markdown: after }, blocks, () => doc);
+  const fn = new Function('Anchor', 'state', 'marked', code + '\nreturn renderedOccurrence;')(
+    Anchor, { markdown: after }, require('marked').marked);
   assert.equal(fn('foo', 1), 1, 'no copy of foo is in the HTML block, so the second stays the second');
 });
 
 test('an inline code span quoting an HTML block below is not mistaken for the block', () => {
   const src = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
-  const code = src.match(/(function renderedOccurrence\(quote, occurrence\) \{[\s\S]*?\n\})/)[1];
+  const code = src.match(/(let atomicCache = [\s\S]*?\nfunction renderedOccurrence\(quote, occurrence\) \{[\s\S]*?\n\})/)[1];
   const md = '`<div>foo</div>` foo\n\n<div>foo</div>\n\nfoo\n';
   const { doc, blocks } = buildDoc(md);
-  const fn = new Function('Anchor', 'state', 'blocks', '$', code + '\nreturn renderedOccurrence;')(
-    Anchor, { markdown: md }, blocks, () => doc);
+  const fn = new Function('Anchor', 'state', 'marked', code + '\nreturn renderedOccurrence;')(
+    Anchor, { markdown: md }, require('marked').marked);
   assert.equal(fn('foo', 1), 1, 'the prose foo after the code span is the second copy the page shows');
   assert.equal(fn('foo', 3), 2, 'and the last foo is the third, past the one inside the block');
+});
+
+test('an inline code span quoting an HTML block stays prose after a paragraph is inserted above', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+  const code = src.match(/(let atomicCache = [\s\S]*?\nfunction renderedOccurrence\(quote, occurrence\) \{[\s\S]*?\n\})/)[1];
+  const md = 'Inserted above, which stales every recorded offset.\n\n`<div>foo</div>` foo\n\n<div>foo</div>\n\nfoo\n';
+  const fn = new Function('Anchor', 'state', 'marked', code + '\nreturn renderedOccurrence;')(
+    Anchor, { markdown: md }, require('marked').marked);
+  assert.equal(fn('foo', 1), 1, 'the prose foo is the second copy the page shows');
+  assert.equal(fn('foo', 3), 2);
 });

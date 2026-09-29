@@ -6069,26 +6069,27 @@ function docText() {
 // (raw HTML, a diagram fence), so a match inside one is a copy the rendered text never sees. Every such
 // copy ahead of the target shifts it down by one; without this, a phrase that also sits in an HTML block
 // above resolved to the wrong copy in the prose, or to none at all, and the highlight vanished.
-// The atomic spans are found in the CURRENT markdown by their own source text, walked in document
-// order, rather than read off blocks[].start: those offsets go stale after a structural edit (a
-// fallback save does not reindex), and a stale range can swallow a prose copy that moved into it.
-// The recorded start still breaks a tie, the way fenceBase uses it: when the source text also appears
-// earlier as prose (an inline code span quoting the block), the copy nearest the block wins.
+// Where the atomic blocks sit in the CURRENT markdown, from the same lexer renderDoc builds the page
+// with, so a block here is exactly a block there. Neither blocks[].start (stale after a fallback save,
+// which does not reindex) nor a search for the block's source (an inline code span can quote it) can
+// promise that. Cached per markdown string: markAnchors asks once per item.
+let atomicCache = { md: null, spans: [] };
+function atomicSpans() {
+  if (atomicCache.md === state.markdown) return atomicCache.spans;
+  const spans = [];
+  let off = 0;
+  for (const t of marked.lexer(state.markdown)) {
+    const isFlow = t.type === 'code' && (t.lang || '').trim().toLowerCase() === 'flow';
+    if (isFlow || t.type === 'html') spans.push([off, off + t.raw.length]);
+    off += t.raw.length;
+  }
+  atomicCache = { md: state.markdown, spans };
+  return spans;
+}
 function renderedOccurrence(quote, occurrence) {
   const hits = Anchor.findAll(state.markdown, quote);
   if (!hits[occurrence]) return occurrence;
-  const spans = [];
-  let from = 0;
-  for (const el of $('doc').querySelectorAll('.block[data-atomic]')) {
-    if (!el.__md) continue;
-    const b = blocks[Number(el.dataset.i)];
-    let at = -1;
-    for (let k = state.markdown.indexOf(el.__md, from); k !== -1; k = state.markdown.indexOf(el.__md, k + 1))
-      if (at === -1 || (b && Math.abs(k - b.start) < Math.abs(at - b.start))) at = k;
-    if (at === -1) continue;
-    spans.push([at, at + el.__md.length]);
-    from = at + el.__md.length;
-  }
+  const spans = atomicSpans();
   let skip = 0;
   for (let i = 0; i < occurrence; i++) if (spans.some(([a, b]) => hits[i].start >= a && hits[i].start < b)) skip++;
   return occurrence - skip;
