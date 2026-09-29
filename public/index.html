@@ -2701,9 +2701,19 @@ $('doc').addEventListener('keydown', (e) => {
   dirty = true; setStatus('editing…'); scheduleSave(); scheduleDock();
 });
 
+// One save at a time. Three callers can ask inside the same moment (the document's blur, the comment
+// box opening, a comment being submitted), and dirty stays true until the first PUT answers, so a second
+// one went out on the same baseHash and the server refused it as "changed on disk": a conflict banner
+// for the reader's own edit. A caller that arrives mid-save waits for it, then saves only what is left.
+let saving = null;
 async function saveDoc() {
   clearTimeout(saveTimer);
+  while (saving) await saving;
   if (!dirty) return;
+  saving = writeDoc();
+  try { await saving; } finally { saving = null; }
+}
+async function writeDoc() {
   const { md, tight } = serialize();
   state.markdown = md;               // keep anchors/occurrence in sync with what's on screen
   setStatus('saving…');

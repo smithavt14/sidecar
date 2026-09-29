@@ -9236,3 +9236,40 @@ test('a heading named like an Object property folds and stores like any other', 
   // Nothing stored: an inherited property is never read as a fold.
   assert.deepEqual(Collapse.foldedFrom({}, ['constructor', 'x'], [2, 0]), [false, false]);
 });
+
+// ---- one save at a time ----
+// The document's blur, the comment box opening and a comment being submitted can all ask for a save
+// inside the same moment, and dirty stays true until the first PUT answers. Two PUTs on one baseHash
+// made the server refuse the second as "changed on disk", a conflict banner for the reader's own edit.
+test('saves run one at a time, and a save asked for mid-flight waits for it', async () => {
+  const src = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+  const m = src.match(/(let saving = null;\nasync function saveDoc\(\) \{[\s\S]*?\n\}\nasync function writeDoc\(\) \{[\s\S]*?\n\}\n)/);
+  assert.ok(m, 'saveDoc and writeDoc are still one run of source');
+  const puts = [];
+  let hash = 'h0', inFlight = 0, most = 0;
+  const env = {
+    dirty: true, state: { markdown: '', hash: 'h0' },
+    serialize: () => ({ md: 'text', tight: false }),
+    api: async (verb, url, body) => {
+      inFlight++; most = Math.max(most, inFlight); puts.push(body.baseHash);
+      await new Promise(r => setTimeout(r, 20));
+      inFlight--;
+      if (body.baseHash !== hash) throw new Error('changed on disk');
+      hash = 'h' + puts.length; return { hash };
+    },
+  };
+  const run = new Function('env', `let { dirty, state, serialize, api } = env;
+    let saveTimer = null; const clearTimeout = () => {};
+    const setStatus = () => {}, reindex = () => {}, paintPending = () => {}, showBanner = () => { env.banner = true; };
+    const reloadDiscarding = () => {}, FILE = 'a.md';
+    ${m[1]}
+    return { saveDoc, setDirty: (v) => { dirty = v; }, dirty: () => dirty };`);
+  const page = run(env);
+  await Promise.all([page.saveDoc(), page.saveDoc(), page.saveDoc()]);
+  assert.equal(most, 1, 'never two PUTs at once');
+  assert.deepEqual(puts, ['h0'], 'one edit, one save: the callers behind it found nothing left to write');
+  assert.ok(!env.banner, 'and no conflict banner');
+  page.setDirty(true);
+  await page.saveDoc();
+  assert.deepEqual(puts, ['h0', 'h1'], 'the next edit saves on the hash the last save returned');
+});
