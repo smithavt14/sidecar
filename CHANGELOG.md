@@ -3,7 +3,7 @@
 All notable changes to sidecar. Versions follow [semver](https://semver.org); dates are the day the
 version was tagged.
 
-## Unreleased
+## 1.16.0 (2026-09-29)
 
 - **The text you are commenting on stays marked while you write.** Opening the comment box moved focus
   into it, which took the browser's selection away, so a long comment left no sign of what it was
