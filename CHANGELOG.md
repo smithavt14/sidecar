@@ -27,7 +27,9 @@ version was tagged.
   start is refused after about five seconds of retries, and later it refuses requests until the
   config reads again. Without Tailscale, or with it stopped, nothing can forward and local requests
   work as before. A failed status check never lifts a refusal: only a clean read of a running
-  Tailscale with no forward, or one reporting it is not running, does.
+  Tailscale with no forward, or one reporting it is not running, does. Once Tailscale has been seen
+  running, a failed check refuses requests too. Any TCP forward to sidecar's port number counts,
+  hostname targets included, so one to the same port on another machine also stops this sidecar.
 - A request is decided on a look at Tailscale at most 2 seconds old, waiting for a fresh one when the
   last is older, so an account switch or a tagged machine shuts the previous owner out, and a raw
   forward added while sidecar runs goes unnoticed for up to about 2 seconds plus one lookup. A request

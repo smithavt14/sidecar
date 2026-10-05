@@ -75,7 +75,7 @@ const gate = Tailnet.createGate({ allowUsers: Tailnet.parseUsers(process.env.SID
   // At boot a forward refuses the start (below); found later, it refuses every request until it goes.
   onForwards: (state, f) => { if (!booted) return;
     console.error(state === 'found' ? `sidecar: tailscale serve forwards raw TCP to this server (${f.join(', ')}); refusing every request until it is removed`
-      : state === 'unknown' ? 'sidecar: tailscale is running but its serve config could not be read to check for a raw TCP forward; refusing every request until it can be'
+      : state === 'unknown' ? 'sidecar: tailscale has run here but its status or serve config could not be read to check for a raw TCP forward; refusing every request until it can be'
       : 'sidecar: no raw TCP forward to this server; serving requests again'); } });
 // An API caller reads JSON, like every other refusal here; a page load gets one bare line.
 const isApi = (p) => p.startsWith('/api/') || p === '/events' || p === '/assets';

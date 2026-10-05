@@ -2235,7 +2235,7 @@ test('tailnet: raw TCP forwards onto this port are found in every shape serve st
     Foreground: { s1: { TCP: { 9000: { TCPForward: '127.0.0.1:4880' } } } } };
   assert.deepEqual(Tailnet.tcpForwards(JSON.stringify(cfg), 4880), [
     'tcp port 8444 → 127.0.0.1:4880', 'tls-terminated-tcp port 8445 → localhost:4880', 'tcp port 8446 → ::1:4880',
-    'tcp port 8447 → [::1]:4880', 'tcp port 9000 → 127.0.0.1:4880']);
+    'tcp port 8447 → [::1]:4880', 'tcp port 8449 → 10.0.0.5:4880', 'tcp port 9000 → 127.0.0.1:4880']);
   assert.deepEqual(Tailnet.tcpForwards(JSON.stringify(cfg), 4899), ['tcp port 8448 → 127.0.0.1:4899'],
     'another port is another server, and an HTTP proxy handler is not a raw forward');
   assert.deepEqual(Tailnet.tcpForwards('{}', 4880), []);
@@ -2355,7 +2355,7 @@ test('tailnet: the forward state is none without a running Tailscale, unknown on
   assert.equal(await isBlocked(gate), false, 'a blocked request asks again, and the readable config unblocks');
   answer = { ok: false, running: false, owner: null, forwards: [] }; t += Tailnet.RETRY_KNOWN_MS;
   await gate.refresh();
-  assert.equal(await isBlocked(gate), false, 'Tailscale gone: nothing can forward');
+  assert.equal(await isBlocked(gate), true, 'the CLI failing after Tailscale was seen running proves nothing, so it blocks');
 });
 
 test('tailnet: a failed status look keeps a block, and only a clean read clears it', async () => {
@@ -2418,6 +2418,32 @@ for (const [kind, opts, line] of [
     } finally { p.kill(); }
   });
 }
+
+test('tailnet: a forward to a hostname on this port counts, whatever the name resolves to', () => {
+  // Tailscale accepts a hostname target, and `sidecar-loopback` mapped to 127.0.0.1 in /etc/hosts
+  // reaches this server; the host is not inspected at all, so another machine's same port blocks too.
+  const cfg = { TCP: { 8444: { TCPForward: 'sidecar-loopback:4880' }, 8445: { TCPForward: 'sidecar-loopback:4881' } } };
+  assert.deepEqual(Tailnet.tcpForwards(JSON.stringify(cfg), 4880), ['tcp port 8444 → sidecar-loopback:4880']);
+});
+
+test('tailnet: once Tailscale has been seen running, a failed status check blocks even from none', async () => {
+  let t = 0, answer = { ok: true, running: true, owner: OWNER, forwards: [] };
+  const gate = Tailnet.createGate({ now: () => t, lookup: async () => answer });
+  await gate.refresh();
+  assert.equal(await isBlocked(gate), false, 'running, no forward');
+  answer = { ok: false, running: false, owner: null, forwards: [] }; t += Tailnet.FRESH_MS;
+  assert.equal(await isBlocked(gate), true, 'the CLI failing could hide a forward added meanwhile');
+  assert.equal(gate.forwardState(), 'unknown');
+  t += Tailnet.FRESH_MS;
+  assert.equal(await isBlocked(gate), true, 'and further failures keep it');
+  answer = { ok: true, running: true, owner: OWNER, forwards: [] }; t += Tailnet.FRESH_MS;
+  assert.equal(await isBlocked(gate), false, 'a clean read clears it');
+  // A machine where Tailscale was never seen running keeps local trust through any number of failures.
+  const bare = Tailnet.createGate({ now: () => t, lookup: async () => ({ ok: false, running: false, owner: null, forwards: [] }) });
+  for (let i = 0; i < 3; i++) { t += Tailnet.FRESH_MS; assert.equal(await isBlocked(bare), false); }
+  assert.equal(Tailnet.forwardState({ ok: false }, 'none', true), 'unknown');
+  assert.equal(Tailnet.forwardState({ ok: false }, 'none', false), 'none');
+});
 
 test('tailnet: Q-encoded header values decode, plain ones pass through', () => {
   assert.equal(Tailnet.decodeHeader('plain@example.com'), 'plain@example.com');

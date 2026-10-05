@@ -89,7 +89,9 @@ Only a plain HTTP `tailscale serve` is supported. Funnel traffic from the public
 login and is refused. A raw `--tcp` or `--tls-terminated-tcp` forward onto sidecar's port passes a
 peer's headers through untouched, so nothing on a request can be believed while one exists: sidecar
 refuses to start with one in place, and refuses every request while one exists after startup. It does
-the same when Tailscale is running but its serve config can't be read. A forward added while sidecar
+the same when Tailscale is running, or has been, and its status or serve config can't be read. Any
+TCP forward to sidecar's port number counts, even one to another machine, so a forward to the same
+port elsewhere also stops this sidecar. A forward added while sidecar
 runs can go unnoticed for up to about 2 seconds plus one lookup (about 60 ms on a Mac), because a
 request waits for a fresh look at Tailscale only once the last one is 2 seconds old.
 
