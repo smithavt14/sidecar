@@ -3,7 +3,7 @@
 All notable changes to sidecar. Versions follow [semver](https://semver.org); dates are the day the
 version was tagged.
 
-## Unreleased
+## 1.17.0 (2026-10-05)
 
 - **Over a tailnet, sidecar answers only the person running it.** Adding a tailnet hostname to
   `SIDECAR_HOSTS` used to let every device on that tailnet read and write every document under the
