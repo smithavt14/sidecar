@@ -19,7 +19,7 @@ No build step. Twenty-nine files carry the whole tool:
 | `lib/dir.js` | The folder under `--dir`: which documents it holds, several digests read as one, the one-watcher lock. |
 | `lib/watchers.js` | The watcher registry in tmp: who is armed on what, whether the pid is still running, and what `watchers --clean` may reap. |
 | `lib/agent.js` | Who is the agent: `SIDECAR_AGENT`, else the harness (Codex is detected by `CODEX_THREAD_ID`), else `claude`. Also the list of every name that counts as an agent, which the server hands the page and `turn.js`. The CLI, the wait, the ping and the server all ask it. |
-| `lib/tailnet.js` | Who may reach the server from another device: what counts as local, the owner read from `tailscale status`, `SIDECAR_ALLOW_USERS`, raw TCP forwards found in `tailscale serve status --json`, and the gate the server runs after the Host allowlist (rechecked every `SIDECAR_TAILNET_RECHECK_MS`, default 30s). Records what `tailscale serve` was checked to do with Host and identity headers. |
+| `lib/tailnet.js` | Who may reach the server from another device: what counts as local, the owner read from `tailscale status`, `SIDECAR_ALLOW_USERS`, raw TCP forwards found in `tailscale serve status --json` (none, found, or unknown when a running Tailscale's config can't be read; found and unknown both refuse every request), and the gate the server runs after the Host allowlist (rechecked every `SIDECAR_TAILNET_RECHECK_MS`, default 30s). Records what `tailscale serve` was checked to do with Host and identity headers. |
 | `lib/presence.js` | The presence ping. Decorative and server-optional: a failed POST never affects the command that made it. |
 | `public/index.html` | The entire frontend: rendering, contenteditable editor, directory panel, review rail. |
 | `public/themes.js` | The palette, as data: the eight built-in themes, the value grammar a theme file is checked against, and the pre-paint boot. Loaded in <head> before the stylesheet; `server.js` requires the same file. |
@@ -514,8 +514,8 @@ hover title in the UI.
 - Safety properties that tests cover and should stay covered: atomic sidecar writes, merge-by-id never
   dropping the other side's work, decided statuses never regressing, path confinement to the served
   root, Host-header allowlisting, a proxied request needing the owner's Tailscale login or one in
-  `SIDECAR_ALLOW_USERS` while a loopback one needs nothing unless a raw TCP forward targets the port (refused
-  at startup, and the local fast path off when found later), DOMPurify on rendered markdown, `git diff` run without a shell
+  `SIDECAR_ALLOW_USERS` while a loopback one needs nothing unless a raw TCP forward targets the port or a running
+  Tailscale's serve config is unreadable (refused at startup, every request refused when found later), DOMPurify on rendered markdown, `git diff` run without a shell
   (the two surviving call sites: the server's /api/state and `show`'s --stat; the digest diffs
   in-process against its own baseline), atomic blocks emitting their source bytes rather than
   going through turndown, the legacy rename moving the full sibling set while never merging two

@@ -2033,21 +2033,25 @@ const tsStatus = (extra = {}) => `{"BackendState":"Running","Self":{"ID":"nSelf"
 // A stand-in CLI: prints the status, or fails until a flag file exists (Tailscale starting late).
 // A raw TCP forward onto `port`, shaped as `tailscale serve status --json` printed one on 1.98.9.
 const tsServe = (port) => JSON.stringify({ TCP: { 443: { HTTPS: true }, 8444: { TCPForward: `127.0.0.1:${port}` } } });
-// A stand-in CLI: `status --json` prints the status, or fails until a flag file exists (Tailscale
-// starting late); `serve status --json` prints no forward, or a raw TCP forward onto `forwardPort`
-// once the forward flag exists (or from the start, with no flag given).
-function fakeTailscale(dirFor, { failUntil, forwardPort, forwardWhen } = {}) {
+// A stand-in CLI: `status --json` prints the status (or a stopped one), or fails until a flag file
+// exists (Tailscale starting late); `serve status --json` prints no forward, or a raw TCP forward onto
+// `forwardPort` once the forward flag exists (or from the start, with no flag given), and fails
+// outright while `serveFailWhen` exists (`true`: always).
+function fakeTailscale(dirFor, { failUntil, forwardPort, forwardWhen, serveFailWhen, stopped } = {}) {
   const bin = path.join(dirFor, 'tailscale');
+  const status = stopped ? '{"BackendState":"Stopped","Self":{"ID":"nSelf","UserID": 1},"User":{}}' : tsStatus();
   fs.writeFileSync(bin, `#!/usr/bin/env node
 const fs = require('fs');
 const flag = (f) => !f || fs.existsSync(f);
 if (process.argv[2] === 'serve') {
+  const failWhen = ${JSON.stringify(serveFailWhen === true ? 'always' : (serveFailWhen || ''))};
+  if (failWhen === 'always' || (failWhen && fs.existsSync(failWhen))) { process.stderr.write('serve status failed'); process.exit(1); }
   const fwd = ${JSON.stringify(forwardPort ? tsServe(forwardPort) : null)};
   process.stdout.write(fwd && flag(${JSON.stringify(forwardWhen || '')}) ? fwd : '{"TCP":{"443":{"HTTPS":true}}}');
   process.exit(0);
 }
 if (${JSON.stringify(failUntil || '')} && !flag(${JSON.stringify(failUntil || '')})) process.exit(1);
-process.stdout.write(${JSON.stringify(tsStatus())});
+process.stdout.write(${JSON.stringify(status)});
 `);
   fs.chmodSync(bin, 0o755);
   return bin;
@@ -2248,7 +2252,7 @@ test('tailnet: a raw TCP forward onto the port refuses the start', async () => {
   await assert.rejects(fetch(`http://127.0.0.1:${port}/api/files`), 'nothing is listening');
 });
 
-test('tailnet: a raw TCP forward that appears later ends trust in local-looking requests', async () => {
+test('tailnet: a raw TCP forward that appears later refuses every request, a forged owner header included', async () => {
   const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-ts-'));
   const flag = path.join(tdir, 'forward');
   const port = PORT + 24;
@@ -2260,16 +2264,90 @@ test('tailnet: a raw TCP forward that appears later ends trust in local-looking 
     fs.writeFileSync(flag, '');
     const deadline = Date.now() + 4000;
     while (!/raw TCP/.test(err) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
-    assert.match(err, new RegExp(`forwards raw TCP to this server \\(tcp port 8444 → 127\\.0\\.0\\.1:${port}\\)`), 'one line names it');
+    assert.match(err, new RegExp(`forwards raw TCP to this server \\(tcp port 8444 → 127\\.0\\.0\\.1:${port}\\); refusing every request until it is removed`), 'one line names it');
     const peer = await rawReq(port, '/api/files', { Host: `localhost:${port}` });
     assert.equal(peer.status, 403, 'a raw TCP peer, which looks local and carries no identity, is refused');
     assert.deepEqual(JSON.parse(peer.body), { error: 'user not allowed' });
-    assert.equal((await rawReq(port, '/api/files', viaServe(OWNER))).status, 200, 'the owner through tailscale serve still gets in');
+    // A raw forward passes the peer's own headers through, so it can claim to be anyone.
+    assert.equal((await rawReq(port, '/api/files', { Host: `localhost:${port}`, 'Tailscale-User-Login': OWNER })).status, 403,
+      'a forged owner header through the forward is refused');
+    assert.equal((await rawReq(port, '/api/files', viaServe(OWNER))).status, 403, 'and so is everything else while it exists');
+    const page = await rawReq(port, '/', { Host: `localhost:${port}`, Accept: 'text/html' });
+    assert.equal(page.body, 'Not allowed.', 'in the usual shape');
     fs.rmSync(flag);
     const back = Date.now() + 4000;
-    while (!/trusted again/.test(err) && Date.now() < back) await new Promise((r) => setTimeout(r, 50));
-    assert.equal((await rawReq(port, '/api/files', { Host: `localhost:${port}` })).status, 200, 'and local again once it is gone');
+    while (!/serving requests again/.test(err) && Date.now() < back) await new Promise((r) => setTimeout(r, 50));
+    assert.equal((await rawReq(port, '/api/files', { Host: `localhost:${port}` })).status, 200, 'local again once it is gone');
+    assert.equal((await rawReq(port, '/api/files', viaServe(OWNER))).status, 200, 'and the owner through tailscale serve');
   } finally { p.kill(); }
+});
+
+test('tailnet: a running Tailscale whose serve config cannot be read refuses the start', async () => {
+  const port = PORT + 25;
+  const fake = fakeTailscale(fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-ts-')), { serveFailWhen: true });
+  const p = spawn('node', [path.join(__dirname, 'server.js'), dir],
+    { env: { ...process.env, SIDECAR_PORT: String(port), SIDECAR_TAILSCALE: fake }, stdio: 'pipe' });
+  let out = '', err = '';
+  p.stdout.on('data', (d) => out += d); p.stderr.on('data', (d) => err += d);
+  const t0 = Date.now();
+  const code = await new Promise((res) => p.on('exit', res));
+  assert.equal(code, 1, 'the server exits');
+  assert.ok(Date.now() - t0 >= 4000, 'after asking again for about five seconds');
+  assert.doesNotMatch(out, /ready/, 'without ever opening the port');
+  assert.match(err, /refusing to start: tailscale is running but `tailscale serve status --json` could not be read/);
+});
+
+test('tailnet: a serve config that becomes unreadable later refuses every request until it reads again', async () => {
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-ts-'));
+  const flag = path.join(tdir, 'serve-broken');
+  const port = PORT + 26;
+  const fake = fakeTailscale(tdir, { serveFailWhen: flag });
+  const p = await bootTailnet(port, { SIDECAR_TAILSCALE: fake, SIDECAR_TAILNET_RECHECK_MS: '200' });
+  let err = ''; p.stderr.on('data', (d) => err += d);
+  try {
+    assert.equal((await rawReq(port, '/api/files', { Host: `localhost:${port}` })).status, 200);
+    fs.writeFileSync(flag, '');
+    const deadline = Date.now() + 4000;
+    while (!/could not be read/.test(err) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    assert.match(err, /serve config could not be read to check for a raw TCP forward; refusing every request until it can be/);
+    assert.equal((await rawReq(port, '/api/files', { Host: `localhost:${port}` })).status, 403, 'local-looking is refused');
+    assert.equal((await rawReq(port, '/api/files', viaServe(OWNER))).status, 403, 'and so is the owner');
+    fs.rmSync(flag);
+    const back = Date.now() + 4000;
+    while (!/serving requests again/.test(err) && Date.now() < back) await new Promise((r) => setTimeout(r, 50));
+    assert.equal((await rawReq(port, '/api/files', { Host: `localhost:${port}` })).status, 200, 'back once it reads');
+  } finally { p.kill(); }
+});
+
+test('tailnet: a stopped Tailscale forwards nothing, so local requests stay trusted', async () => {
+  const port = PORT + 27;
+  // The serve config is unreadable too, and that must not matter: a stopped Tailscale forwards nothing.
+  const fake = fakeTailscale(fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-ts-')), { stopped: true, serveFailWhen: true });
+  const p = await bootTailnet(port, { SIDECAR_TAILSCALE: fake });
+  try {
+    assert.equal((await rawReq(port, '/api/files', { Host: `127.0.0.1:${port}` })).status, 200);
+    assert.equal((await rawReq(port, '/api/files', viaServe(OWNER))).status, 403, 'and nobody owns a stopped machine');
+  } finally { p.kill(); }
+});
+
+test('tailnet: the forward state is none without a running Tailscale, unknown only when a running one is unreadable', async () => {
+  const S = Tailnet.forwardState;
+  assert.equal(S({ ok: false, running: false, forwards: [] }), 'none', 'no CLI, or none answered');
+  assert.equal(S({ ok: true, running: false, forwards: [] }), 'none', 'stopped or logged out');
+  assert.equal(S({ ok: true, running: true, forwards: null }), 'unknown', 'running, serve config unreadable');
+  assert.equal(S({ ok: true, running: true, forwards: [] }), 'none');
+  assert.equal(S({ ok: true, running: true, forwards: ['tcp port 8444 → 127.0.0.1:4880'] }), 'found');
+  let t = 0, answer = { ok: true, running: true, owner: OWNER, forwards: null };
+  const gate = Tailnet.createGate({ now: () => t, lookup: async () => answer });
+  await gate.refresh();
+  assert.equal(await gate.blocked(), true, 'unknown blocks like found');
+  answer = { ok: true, running: true, owner: OWNER, forwards: [] };
+  assert.equal(await gate.blocked(), true, 'not asked again inside two seconds');
+  t += Tailnet.RETRY_UNKNOWN_MS;
+  assert.equal(await gate.blocked(), false, 'a blocked request asks again, and the readable config unblocks');
+  answer = { ok: false, running: false, owner: null, forwards: [] }; t += Tailnet.RETRY_KNOWN_MS;
+  await gate.refresh();
+  assert.equal(await gate.blocked(), false, 'Tailscale gone: nothing can forward');
 });
 
 test('tailnet: Q-encoded header values decode, plain ones pass through', () => {

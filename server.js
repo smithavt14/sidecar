@@ -72,19 +72,25 @@ let booted = false;
 const gate = Tailnet.createGate({ allowUsers: Tailnet.parseUsers(process.env.SIDECAR_ALLOW_USERS),
   lookup: () => Tailnet.lookup(PORT), recheckMs: TAILNET_RECHECK_MS,
   onOwner: (o) => console.log(`tailnet owner → ${o || 'none'}`),
-  // At boot a forward refuses the start (below); found later, it ends trust in local-looking requests.
-  onForwards: (f) => { if (!booted) return;
-    console.error(f.length ? `sidecar: tailscale serve forwards raw TCP to this server (${f.join(', ')}); every request now needs an allowed Tailscale login`
-                           : 'sidecar: the raw TCP forward to this server is gone; local requests are trusted again'); } });
+  // At boot a forward refuses the start (below); found later, it refuses every request until it goes.
+  onForwards: (state, f) => { if (!booted) return;
+    console.error(state === 'found' ? `sidecar: tailscale serve forwards raw TCP to this server (${f.join(', ')}); refusing every request until it is removed`
+      : state === 'unknown' ? 'sidecar: tailscale is running but its serve config could not be read to check for a raw TCP forward; refusing every request until it can be'
+      : 'sidecar: no raw TCP forward to this server; serving requests again'); } });
 // An API caller reads JSON, like every other refusal here; a page load gets one bare line.
 const isApi = (p) => p.startsWith('/api/') || p === '/events' || p === '/assets';
+const refuse = (req, res) => isApi(req.path) ? res.status(403).json({ error: 'user not allowed' })
+  : res.status(403).type('text/plain').send('Not allowed.');
 app.use((req, res, next) => {
-  if (gate.localTrusted() && Tailnet.isLocal(req, PORT)) return next();
-  gate.allows(req.headers).then((ok) => {
-    if (ok) return next();
-    if (isApi(req.path)) return res.status(403).json({ error: 'user not allowed' });
-    res.status(403).type('text/plain').send('Not allowed.');
-  }, next);
+  (async () => {
+    // A raw TCP forward onto this port, or a running Tailscale whose serve config cannot be read, means
+    // nothing on a request can be believed: the forward passes a peer's Host and identity headers
+    // through untouched. Every request is refused until a look says otherwise.
+    if (await gate.blocked()) return refuse(req, res);
+    if (Tailnet.isLocal(req, PORT)) return next();
+    if (await gate.allows(req.headers)) return next();
+    refuse(req, res);
+  })().catch(next);
 });
 
 app.use(express.json({ limit: '10mb' }));
@@ -680,10 +686,22 @@ app.use((err, req, res, next) => { res.status(err.status || 400).json({ error: e
 // has no use for a tailscale child process. A request arriving before the answer waits on it.
 // The first look finishes before the port opens: a raw TCP forward onto this port would make every
 // tailnet peer look local, so finding one refuses the start rather than serving into it.
-gate.refresh().then(() => {
+// A serve config that cannot be read is asked again for about five seconds (Tailscale may be busy
+// starting) before the start is refused for that too.
+(async () => {
+  const deadline = Date.now() + 5000;
+  await gate.refresh();
+  while (gate.forwardState() === 'unknown' && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1000));
+    await gate.refresh();
+  }
   const fwd = gate.forwards();
-  if (fwd.length) {
+  if (gate.forwardState() === 'found') {
     console.error(`sidecar: refusing to start: tailscale serve forwards raw TCP to this port (${fwd.join(', ')}), which carries no Tailscale identity. Remove it, or use plain \`tailscale serve\`.`);
+    process.exit(1);
+  }
+  if (gate.forwardState() === 'unknown') {
+    console.error('sidecar: refusing to start: tailscale is running but `tailscale serve status --json` could not be read, so a raw TCP forward to this port cannot be ruled out.');
     process.exit(1);
   }
   booted = true;
@@ -691,7 +709,7 @@ gate.refresh().then(() => {
   // added later looks local and so would never prompt a look of its own.
   setInterval(() => gate.refresh(), TAILNET_RECHECK_MS).unref();
   listen();
-});
+})();
 
 function listen() {
   const server = app.listen(PORT, '127.0.0.1', () => {

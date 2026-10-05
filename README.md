@@ -85,8 +85,9 @@ SIDECAR_HOSTS=my-machine.tailXXXX.ts.net SIDECAR_ALLOW_USERS=sam@example.com sid
 `SIDECAR_TAILSCALE` to its path if it lives somewhere unusual. Requests from this machine itself (your
 browser at `localhost`, the CLI, your agent) need nothing. Keep it to `tailscale serve`: Funnel traffic
 from the public internet carries no login and is refused. A raw `--tcp` forward onto sidecar's port
-carries no identity either, so sidecar refuses to start while one exists, and if one appears later it
-stops trusting requests that look local until the forward is gone.
+passes a peer's headers through untouched, so nothing on a request can be believed while one exists:
+sidecar refuses to start with one in place, and refuses every request while one exists after
+startup. It does the same when Tailscale is running but its serve config can't be read.
 
 <img alt="sidecar on a phone: the document, and the review as a pull-up sheet" src="https://raw.githubusercontent.com/smithavt14/sidecar/main/docs/screenshot.png" width="420">
 

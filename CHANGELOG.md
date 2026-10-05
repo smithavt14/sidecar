@@ -20,10 +20,13 @@ version was tagged.
   `localhost` need no setup. A request is local only when it reaches loopback under a loopback `Host`
   with no forwarding header, because `tailscale serve` passes a client's `Host` through unchanged.
 - A raw TCP forward (`tailscale serve --tcp` or `--tls-terminated-tcp`) onto sidecar's port would
-  make a tailnet peer look like this machine, so sidecar reads Tailscale's serve config too. With one
-  in place it refuses to start and names it. If one appears while sidecar runs, it says so on the
-  console and every request, local-looking ones included, needs an allowed login until the forward is
-  removed. Tailscale is asked again every 30 seconds, and before trusting an owner match on an older
+  make a tailnet peer look like this machine and lets it send any identity header it likes, so
+  sidecar reads Tailscale's serve config too. With one in place it refuses to start and names it. If
+  one appears while sidecar runs, it says so on the console and refuses every request until the
+  forward is removed. A running Tailscale whose serve config can't be read counts as forwarding: the
+  start is refused after about five seconds of retries, and later it refuses requests until the
+  config reads again. Without Tailscale, or with it stopped, nothing can forward and local requests
+  work as before. Tailscale is asked again every 30 seconds, and before trusting an owner match on an older
   answer, so an account switch or a tagged machine shuts the previous owner out.
 - **Upgrading with `SIDECAR_HOSTS` set:** you keep working from your own devices. Anyone else who
   reached your sidecar over the tailnet now gets a 403 until you add their login to
