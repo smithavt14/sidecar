@@ -3,6 +3,43 @@
 All notable changes to sidecar. Versions follow [semver](https://semver.org); dates are the day the
 version was tagged.
 
+## Unreleased
+
+- **Over a tailnet, sidecar answers only the person running it.** Adding a tailnet hostname to
+  `SIDECAR_HOSTS` used to let every device on that tailnet read and write every document under the
+  served root, with no login, devices shared in from other Tailscale accounts included. Now a request
+  that comes through `tailscale serve` gets in only when the Tailscale login it carries is the one this
+  machine is signed in as, read from `tailscale status` at startup and again if Tailscale starts later.
+  Your own phone and laptops work as before. Another person's device, a tagged device and Funnel
+  traffic get a 403: JSON on the API, and one line of text on a page load.
+- `SIDECAR_ALLOW_USERS` lets someone else in: a comma-separated list of Tailscale logins, compared
+  without case. It also works when the `tailscale` CLI can't be found, and `SIDECAR_TAILSCALE` names the
+  CLI's path when it lives somewhere sidecar doesn't look. A launchd job's short `PATH` is covered: sidecar
+  also checks `/usr/local/bin`, `/opt/homebrew/bin` and the Mac app bundle.
+- Requests from the machine itself change nothing: the CLI, `sidecar wait`, presence and a browser at
+  `localhost` need no setup. A request is local only when it reaches loopback under a loopback `Host`
+  with no forwarding header, because `tailscale serve` passes a client's `Host` through unchanged.
+- A raw TCP forward (`tailscale serve --tcp` or `--tls-terminated-tcp`) onto sidecar's port would
+  make a tailnet peer look like this machine and lets it send any identity header it likes, so
+  sidecar reads Tailscale's serve config too. With one in place it refuses to start and names it. If
+  one appears while sidecar runs, it says so on the console and refuses every request until the
+  forward is removed. A running Tailscale whose serve config can't be read counts as forwarding: the
+  start is refused after about five seconds of retries, and later it refuses requests until the
+  config reads again. Without Tailscale, or with it stopped, nothing can forward and local requests
+  work as before. A failed status check never lifts a refusal: only a clean read of a running
+  Tailscale with no forward, or one reporting it is not running, does. Once Tailscale has been seen
+  running, a failed check refuses requests too. Any TCP forward to sidecar's port number counts,
+  hostname targets included, so one to the same port on another machine also stops this sidecar.
+- A request is decided on a look at Tailscale at most 2 seconds old, waiting for a fresh one when the
+  last is older, so an account switch or a tagged machine shuts the previous owner out, and a raw
+  forward added while sidecar runs goes unnoticed for up to about 2 seconds plus one lookup. A request
+  that waits pays about 60 ms on a Mac; one inside the 2 seconds pays nothing. Only a plain HTTP
+  `tailscale serve` is supported.
+- **Upgrading with `SIDECAR_HOSTS` set:** you keep working from your own devices. Anyone else who
+  reached your sidecar over the tailnet now gets a 403 until you add their login to
+  `SIDECAR_ALLOW_USERS` and restart. A proxy other than `tailscale serve` is now refused, since it
+  carries no Tailscale identity.
+
 ## 1.16.0 (2026-09-29)
 
 - **The text you are commenting on stays marked while you write.** Opening the comment box moved focus

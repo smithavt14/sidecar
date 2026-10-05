@@ -17,6 +17,11 @@ const sha_of = (s) => crypto.createHash('sha1').update(s).digest('hex').slice(0,
 // The agent's default name is read off the harness (lib/agent.js), and this suite is run from inside
 // one. Scrubbed here so every spawned command that names no agent is 'claude' whoever runs the tests.
 for (const k of ['CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'SIDECAR_AGENT']) delete process.env[k];
+// Who may reach a server from another device is read off the real Tailscale CLI when it is installed
+// (lib/tailnet.js). Pointed at nothing here, so the suite's servers never ask the machine running the
+// tests; the tailnet tests below hand each server a fake CLI of their own.
+for (const k of ['SIDECAR_HOSTS', 'SIDECAR_ALLOW_USERS']) delete process.env[k];
+process.env.SIDECAR_TAILSCALE = path.join(os.tmpdir(), 'sidecar-no-tailscale-here');
 
 const PORT = 4991;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -2007,6 +2012,445 @@ test('SIDECAR_USER / SIDECAR_AGENT are surfaced in /api/state (default and overr
     assert.equal(s.user, 'pat', 'SIDECAR_USER overrides the human name in /api/state');
     assert.equal(s.agent, 'robo', 'SIDECAR_AGENT is surfaced too');
   } finally { p2.kill(); }
+});
+
+/* ---------------------------------------------------------------------------
+   Tailnet access (lib/tailnet.js): the person running sidecar, plus anyone they name.
+
+   Each server here gets a fake `tailscale` CLI through SIDECAR_TAILSCALE, so no test asks the real
+   one. A "remote" request is shaped the way `tailscale serve` delivers it: the tailnet Host, the
+   X-Forwarded-* it always sets, and the identity it stamps (or none, for a tagged node or Funnel).
+   Logins are made up.
+--------------------------------------------------------------------------- */
+const Tailnet = require('./lib/tailnet.js');
+const TS_HOST = 'box.tail0000.ts.net';
+const OWNER = 'owner@example.com';
+// Two IDs a JS number cannot tell apart (both parse to 9007199254740992), the owner's the second. A
+// lookup that parsed them as numbers would hand back the wrong person.
+const tsStatus = (extra = {}) => `{"BackendState":"Running","Self":{"ID":"nSelf","UserID": 9007199254740993${extra.tags ? ',"Tags":["tag:server"]' : ''}},`
+  + `"User":{"9007199254740992":{"ID": 9007199254740992,"LoginName":"someone-else@example.com"},`
+  + `"9007199254740993":{"ID": 9007199254740993,"LoginName":"${OWNER}"}}}`;
+// A stand-in CLI: prints the status, or fails until a flag file exists (Tailscale starting late).
+// A raw TCP forward onto `port`, shaped as `tailscale serve status --json` printed one on 1.98.9.
+const tsServe = (port) => JSON.stringify({ TCP: { 443: { HTTPS: true }, 8444: { TCPForward: `127.0.0.1:${port}` } } });
+// A stand-in CLI: `status --json` prints the status (or a stopped one), or fails until a flag file
+// exists (Tailscale starting late); `serve status --json` prints no forward, or a raw TCP forward onto
+// `forwardPort` once the forward flag exists (or from the start, with no flag given), and fails
+// outright while `serveFailWhen` exists (`true`: always).
+function fakeTailscale(dirFor, { failUntil, forwardPort, forwardWhen, serveFailWhen, stopped } = {}) {
+  const bin = path.join(dirFor, 'tailscale');
+  const status = stopped ? '{"BackendState":"Stopped","Self":{"ID":"nSelf","UserID": 1},"User":{}}' : tsStatus();
+  fs.writeFileSync(bin, `#!/usr/bin/env node
+const fs = require('fs');
+const flag = (f) => !f || fs.existsSync(f);
+if (process.argv[2] === 'serve') {
+  const failWhen = ${JSON.stringify(serveFailWhen === true ? 'always' : (serveFailWhen || ''))};
+  if (failWhen === 'always' || (failWhen && fs.existsSync(failWhen))) { process.stderr.write('serve status failed'); process.exit(1); }
+  const fwd = ${JSON.stringify(forwardPort ? tsServe(forwardPort) : null)};
+  process.stdout.write(fwd && flag(${JSON.stringify(forwardWhen || '')}) ? fwd : '{"TCP":{"443":{"HTTPS":true}}}');
+  process.exit(0);
+}
+if (${JSON.stringify(failUntil || '')} && !flag(${JSON.stringify(failUntil || '')})) process.exit(1);
+process.stdout.write(${JSON.stringify(status)});
+`);
+  fs.chmodSync(bin, 0o755);
+  return bin;
+}
+// A request with full control of its headers: undici normalizes Host, and these tests need it forged.
+const rawReq = (port, pathname, headers) => new Promise((resolve, reject) => {
+  const req = http.request({ host: '127.0.0.1', port, path: pathname, method: 'GET', headers }, (res) => {
+    let d = ''; res.on('data', (c) => d += c);
+    res.on('end', () => resolve({ status: res.statusCode, type: res.headers['content-type'] || '', body: d }));
+  });
+  req.on('error', reject); req.end();
+});
+const viaServe = (login, extra = {}) => ({ Host: TS_HOST, 'X-Forwarded-For': '100.64.0.7', 'X-Forwarded-Host': TS_HOST,
+  'X-Forwarded-Proto': 'https', ...(login ? { 'Tailscale-User-Login': login, 'Tailscale-User-Name': 'Someone' } : {}), ...extra });
+function bootTailnet(port, env) {
+  return new Promise((res, rej) => {
+    const p = spawn('node', [path.join(__dirname, 'server.js'), dir],
+      { env: { ...process.env, SIDECAR_PORT: String(port), SIDECAR_HOSTS: TS_HOST, ...env }, stdio: 'pipe' });
+    let out = '';
+    p.stdout.on('data', (d) => { out += d; if (out.includes('ready')) res(p); });
+    p.on('exit', () => rej(new Error('server died')));
+    setTimeout(() => rej(new Error('server never became ready')), 8000);
+  });
+}
+
+test('tailnet: the owner and allowlisted users get in; everyone else is refused', async () => {
+  const fake = fakeTailscale(fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-ts-')));
+  const port = PORT + 20;
+  const p = await bootTailnet(port, { SIDECAR_TAILSCALE: fake, SIDECAR_ALLOW_USERS: ' Friend@Example.com , zoë@example.com' });
+  try {
+    const owner = await rawReq(port, '/api/files', viaServe(OWNER));
+    assert.equal(owner.status, 200, 'the owner, resolved from tailscale status, gets in');
+    assert.equal((await rawReq(port, '/', viaServe(OWNER, { Accept: 'text/html' }))).status, 200, 'and the page loads for them');
+
+    assert.equal((await rawReq(port, '/api/files', viaServe('friend@example.com'))).status, 200,
+      'a login in SIDECAR_ALLOW_USERS gets in, compared without case');
+    assert.equal((await rawReq(port, '/api/files', viaServe('=?utf-8?q?zo=C3=AB@example.com?=') )).status, 200,
+      'a non-ASCII login arrives Q-encoded and still matches its allowlist entry');
+
+    const stranger = await rawReq(port, '/api/files', viaServe('someone-else@example.com'));
+    assert.equal(stranger.status, 403, 'another tailnet user is refused');
+    assert.match(stranger.type, /json/);
+    assert.deepEqual(JSON.parse(stranger.body), { error: 'user not allowed' });
+    const page = await rawReq(port, '/?f=doc.md', viaServe('someone-else@example.com', { Accept: 'text/html' }));
+    assert.equal(page.status, 403, 'and so is their page load');
+    assert.match(page.type, /text\/plain/);
+    assert.equal(page.body, 'Not allowed.', 'one bare line, nothing else');
+    assert.equal((await rawReq(port, '/events', viaServe('someone-else@example.com'))).status, 403, 'the live stream too');
+
+    assert.equal((await rawReq(port, '/api/files', viaServe(null))).status, 403,
+      'a remote request with no identity (a tagged node) is refused');
+    assert.equal((await rawReq(port, '/api/files', viaServe(null, { 'Tailscale-Funnel-Request': '?1' }))).status, 403,
+      'Funnel traffic from the public internet is refused');
+    assert.equal((await rawReq(port, '/api/files', viaServe(OWNER, { 'Tailscale-Funnel-Request': '?1' }))).status, 403,
+      'a Funnel marker is refused whatever login rides with it');
+    // tailscale serve passes a client's Host through verbatim, so a forged loopback Host must not make a
+    // proxied request local.
+    assert.equal((await rawReq(port, '/api/files', viaServe('someone-else@example.com', { Host: `localhost:${port}` }))).status, 403,
+      'a proxied request forging a loopback Host is still remote');
+    assert.equal((await rawReq(port, '/api/files', { Host: `127.0.0.1:${port}`, 'X-Forwarded-For': '100.64.0.7' })).status, 403,
+      'any forwarding header makes a request remote');
+
+    const local = await rawReq(port, '/api/files', { Host: `127.0.0.1:${port}` });
+    assert.equal(local.status, 200, 'a loopback request needs no identity');
+    assert.equal((await rawReq(port, '/api/files', { Host: `localhost:${port}` })).status, 200, 'by either loopback name');
+    assert.equal((await fetch(`http://127.0.0.1:${port}/api/state?path=doc.md`)).status, 200, 'the way the CLI and doctor call it');
+
+    const rebind = await rawReq(port, '/api/files', viaServe(OWNER, { Host: 'evil.example.com' }));
+    assert.equal(rebind.status, 403, 'the Host allowlist still runs first, even for the owner');
+    assert.deepEqual(JSON.parse(rebind.body), { error: 'host not allowed' });
+  } finally { p.kill(); }
+});
+
+test('tailnet: with Tailscale missing, local requests still work and only the allowlist gets in', async () => {
+  const port = PORT + 21;
+  const p = await bootTailnet(port, { SIDECAR_TAILSCALE: path.join(os.tmpdir(), 'sidecar-no-such-tailscale'),
+    SIDECAR_ALLOW_USERS: 'friend@example.com' });
+  try {
+    assert.equal((await rawReq(port, '/api/files', { Host: `127.0.0.1:${port}` })).status, 200, 'local works, nothing crashed');
+    assert.equal((await rawReq(port, '/api/state?path=doc.md', { Host: `localhost:${port}` })).status, 200);
+    assert.equal((await rawReq(port, '/api/files', viaServe(OWNER))).status, 403, 'no CLI means no owner to match');
+    assert.equal((await rawReq(port, '/api/files', viaServe('friend@example.com'))).status, 200, 'the allowlist needs no CLI');
+    const doctor = spawnSync('node', [path.join(__dirname, 'server.js'), 'doctor'],
+      { cwd: dir, encoding: 'utf8', env: { ...process.env, SIDECAR_PORT: String(port), SIDECAR_REGISTRY: 'off' } });
+    assert.match(doctor.stdout, new RegExp(`running on :${port}`), 'doctor still reaches the server over loopback');
+  } finally { p.kill(); }
+});
+
+test('tailnet: an owner Tailscale only reports after boot is picked up without a restart', async () => {
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-ts-'));
+  const flag = path.join(tdir, 'up');
+  const fake = fakeTailscale(tdir, { failUntil: flag });
+  const port = PORT + 22;
+  const p = await bootTailnet(port, { SIDECAR_TAILSCALE: fake });
+  try {
+    assert.equal((await rawReq(port, '/api/files', viaServe(OWNER))).status, 403, 'Tailscale down: no owner yet');
+    fs.writeFileSync(flag, '');
+    await new Promise((r) => setTimeout(r, Tailnet.FRESH_MS + 200));
+    assert.equal((await rawReq(port, '/api/files', viaServe(OWNER))).status, 200, 'the next request asks again and gets in');
+  } finally { p.kill(); }
+});
+
+test('tailnet: the owner comes from Self.UserID, never a tagged machine, never a rounded ID', () => {
+  assert.equal(Tailnet.ownerFromStatus(tsStatus()), OWNER);
+  assert.equal(Tailnet.ownerFromStatus(tsStatus({ tags: true })), null, 'a tagged machine belongs to nobody');
+  assert.equal(Tailnet.ownerFromStatus(tsStatus().replace('"Running"', '"NeedsLogin"')), null, 'logged out: no owner');
+  assert.equal(Tailnet.ownerFromStatus('not json'), null);
+  assert.equal(Tailnet.ownerFromStatus(''), null);
+});
+
+test('tailnet: isLocal needs a loopback socket, a loopback Host and no proxy header', () => {
+  const req = (host, extra = {}, addr = '127.0.0.1') => ({ headers: { host, ...extra }, socket: { remoteAddress: addr } });
+  assert.equal(Tailnet.isLocal(req('127.0.0.1:4880'), 4880), true);
+  assert.equal(Tailnet.isLocal(req('localhost:4880'), 4880), true);
+  assert.equal(Tailnet.isLocal(req('localhost:4880', {}, '::ffff:127.0.0.1'), 4880), true);
+  assert.equal(Tailnet.isLocal(req('localhost:4881'), 4880), false, 'another port is another server');
+  assert.equal(Tailnet.isLocal(req(TS_HOST), 4880), false, 'the tailnet name is never local');
+  assert.equal(Tailnet.isLocal(req('localhost:4880', {}, '100.64.0.7'), 4880), false, 'a non-loopback socket is never local');
+  for (const h of ['x-forwarded-for', 'x-forwarded-host', 'forwarded', 'tailscale-user-login', 'tailscale-funnel-request'])
+    assert.equal(Tailnet.isLocal(req('localhost:4880', { [h]: 'x' }), 4880), false, `${h} marks a proxy`);
+});
+
+// What the server's middleware does with a gate: settle, then read. Every gate test goes through it.
+const ask = async (gate, headers) => { await gate.settle(); return !gate.blocked() && gate.allows(headers); };
+const isBlocked = async (gate) => { await gate.settle(); return gate.blocked(); };
+
+test('tailnet: the gate asks again on a miss, throttled, and forgets an owner a failed lookup cannot confirm', async () => {
+  let t = 0, calls = 0, answer = { ok: true, owner: null, forwards: [] };
+  const gate = Tailnet.createGate({ allowUsers: ['friend@example.com'], now: () => t, lookup: async () => { calls++; return answer; } });
+  const h = (login) => ({ 'tailscale-user-login': login });
+  await gate.refresh();
+  assert.equal(calls, 1);
+  assert.equal(await ask(gate, h(OWNER)), false, 'unknown owner');
+  assert.equal(calls, 1, 'not asked again inside the window');
+  assert.equal(await ask(gate, h('friend@example.com')), true, 'the allowlist never waits on a lookup');
+  answer = { ok: true, owner: OWNER, forwards: [] }; t += Tailnet.FRESH_MS;
+  assert.equal(await ask(gate, h(OWNER)), true, 'asked again once the window passed');
+  assert.equal(calls, 2);
+  assert.equal(await ask(gate, {}), false, 'no identity, no entry');
+  answer = { ok: false, owner: null, forwards: null }; t += Tailnet.RETRY_KNOWN_MS;
+  assert.equal(await ask(gate, h(OWNER)), false, 'a lookup that failed confirms nobody, the owner included');
+  assert.equal(gate.owner(), null);
+  answer = { ok: true, owner: OWNER, forwards: [] }; t += Tailnet.FRESH_MS;
+  assert.equal(await ask(gate, h(OWNER)), true, 'and the owner is back on the next good look');
+});
+
+test('tailnet: a former owner is out once the machine switches accounts, even without a miss', async () => {
+  let t = 0, answer = { ok: true, owner: OWNER, forwards: [] };
+  const gate = Tailnet.createGate({ now: () => t, lookup: async () => answer });
+  const h = (login) => ({ 'tailscale-user-login': login });
+  await gate.refresh();
+  assert.equal(await ask(gate, h(OWNER)), true);
+  answer = { ok: true, owner: 'new-account@example.com', forwards: [] };
+  t += Tailnet.FRESH_MS - 1;
+  assert.equal(await ask(gate, h(OWNER)), true, 'inside the window the last look stands');
+  t += 1;
+  assert.equal(await ask(gate, h(OWNER)), false, 'a stale look is refreshed before an owner match is trusted');
+  assert.equal(await ask(gate, h('new-account@example.com')), true, 'and the new account is the owner');
+});
+
+test('tailnet: a good look reporting no owner (tagged, logged out) clears the owner', async () => {
+  let t = 0, answer = { ok: true, owner: OWNER, forwards: [] };
+  const gate = Tailnet.createGate({ now: () => t, lookup: async () => answer });
+  await gate.refresh();
+  assert.equal(gate.owner(), OWNER);
+  answer = { ok: true, owner: Tailnet.ownerFromStatus(tsStatus({ tags: true })), forwards: [] };
+  assert.equal(answer.owner, null);
+  t += Tailnet.RETRY_KNOWN_MS;
+  assert.equal(await ask(gate, { 'tailscale-user-login': 'stranger@example.com' }), false);
+  assert.equal(gate.owner(), null, 'the machine is tagged now, so nobody owns it');
+  assert.equal(await ask(gate, { 'tailscale-user-login': OWNER }), false, 'and the former owner is refused');
+  assert.equal(Tailnet.parseStatus('{"BackendState":"Stopped"}').ok, true, 'a stopped Tailscale is a real answer');
+  assert.equal(Tailnet.parseStatus('nope').ok, false, 'unparseable output is a failure');
+});
+
+test('tailnet: raw TCP forwards onto this port are found in every shape serve status prints', () => {
+  const cfg = { TCP: { 443: { HTTPS: true }, 8444: { TCPForward: '127.0.0.1:4880' },
+    8445: { TCPForward: 'localhost:4880', TerminateTLS: 'box.tail0000.ts.net' }, 8446: { TCPForward: '::1:4880' },
+    8447: { TCPForward: '[::1]:4880' }, 8448: { TCPForward: '127.0.0.1:4899' }, 8449: { TCPForward: '10.0.0.5:4880' } },
+    Web: { 'box.tail0000.ts.net:443': { Handlers: { '/': { Proxy: 'http://127.0.0.1:4880' } } } },
+    Foreground: { s1: { TCP: { 9000: { TCPForward: '127.0.0.1:4880' } } } } };
+  assert.deepEqual(Tailnet.tcpForwards(JSON.stringify(cfg), 4880), [
+    'tcp port 8444 → 127.0.0.1:4880', 'tls-terminated-tcp port 8445 → localhost:4880', 'tcp port 8446 → ::1:4880',
+    'tcp port 8447 → [::1]:4880', 'tcp port 8449 → 10.0.0.5:4880', 'tcp port 9000 → 127.0.0.1:4880']);
+  assert.deepEqual(Tailnet.tcpForwards(JSON.stringify(cfg), 4899), ['tcp port 8448 → 127.0.0.1:4899'],
+    'another port is another server, and an HTTP proxy handler is not a raw forward');
+  assert.deepEqual(Tailnet.tcpForwards('{}', 4880), []);
+  assert.equal(Tailnet.tcpForwards('not json', 4880), null, 'unreadable is not the same as none');
+});
+
+test('tailnet: a raw TCP forward onto the port refuses the start', async () => {
+  const port = PORT + 23;
+  const fake = fakeTailscale(fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-ts-')), { forwardPort: port });
+  const p = spawn('node', [path.join(__dirname, 'server.js'), dir],
+    { env: { ...process.env, SIDECAR_PORT: String(port), SIDECAR_TAILSCALE: fake }, stdio: 'pipe' });
+  let out = '', err = '';
+  p.stdout.on('data', (d) => out += d); p.stderr.on('data', (d) => err += d);
+  const code = await new Promise((res) => p.on('exit', res));
+  assert.equal(code, 1, 'the server exits');
+  assert.doesNotMatch(out, /ready/, 'without ever opening the port');
+  assert.match(err, new RegExp(`refusing to start: .*tcp port 8444 → 127\\.0\\.0\\.1:${port}`), 'and names the forward');
+  await assert.rejects(fetch(`http://127.0.0.1:${port}/api/files`), 'nothing is listening');
+});
+
+test('tailnet: a raw TCP forward that appears later refuses every request, a forged owner header included', async () => {
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-ts-'));
+  const flag = path.join(tdir, 'forward');
+  const port = PORT + 24;
+  const fake = fakeTailscale(tdir, { forwardPort: port, forwardWhen: flag });
+  const p = await bootTailnet(port, { SIDECAR_TAILSCALE: fake, SIDECAR_TAILNET_RECHECK_MS: '200' });
+  let err = ''; p.stderr.on('data', (d) => err += d);
+  try {
+    assert.equal((await rawReq(port, '/api/files', { Host: `localhost:${port}` })).status, 200, 'no forward: local is local');
+    fs.writeFileSync(flag, '');
+    const deadline = Date.now() + 4000;
+    while (!/raw TCP/.test(err) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    assert.match(err, new RegExp(`forwards raw TCP to this server \\(tcp port 8444 → 127\\.0\\.0\\.1:${port}\\); refusing every request until it is removed`), 'one line names it');
+    const peer = await rawReq(port, '/api/files', { Host: `localhost:${port}` });
+    assert.equal(peer.status, 403, 'a raw TCP peer, which looks local and carries no identity, is refused');
+    assert.deepEqual(JSON.parse(peer.body), { error: 'user not allowed' });
+    // A raw forward passes the peer's own headers through, so it can claim to be anyone.
+    assert.equal((await rawReq(port, '/api/files', { Host: `localhost:${port}`, 'Tailscale-User-Login': OWNER })).status, 403,
+      'a forged owner header through the forward is refused');
+    assert.equal((await rawReq(port, '/api/files', viaServe(OWNER))).status, 403, 'and so is everything else while it exists');
+    const page = await rawReq(port, '/', { Host: `localhost:${port}`, Accept: 'text/html' });
+    assert.equal(page.body, 'Not allowed.', 'in the usual shape');
+    fs.rmSync(flag);
+    const back = Date.now() + 4000;
+    while (!/serving requests again/.test(err) && Date.now() < back) await new Promise((r) => setTimeout(r, 50));
+    assert.equal((await rawReq(port, '/api/files', { Host: `localhost:${port}` })).status, 200, 'local again once it is gone');
+    assert.equal((await rawReq(port, '/api/files', viaServe(OWNER))).status, 200, 'and the owner through tailscale serve');
+  } finally { p.kill(); }
+});
+
+test('tailnet: a running Tailscale whose serve config cannot be read refuses the start', async () => {
+  const port = PORT + 25;
+  const fake = fakeTailscale(fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-ts-')), { serveFailWhen: true });
+  const p = spawn('node', [path.join(__dirname, 'server.js'), dir],
+    { env: { ...process.env, SIDECAR_PORT: String(port), SIDECAR_TAILSCALE: fake }, stdio: 'pipe' });
+  let out = '', err = '';
+  p.stdout.on('data', (d) => out += d); p.stderr.on('data', (d) => err += d);
+  const t0 = Date.now();
+  const code = await new Promise((res) => p.on('exit', res));
+  assert.equal(code, 1, 'the server exits');
+  assert.ok(Date.now() - t0 >= 4000, 'after asking again for about five seconds');
+  assert.doesNotMatch(out, /ready/, 'without ever opening the port');
+  assert.match(err, /refusing to start: tailscale is running but `tailscale serve status --json` could not be read/);
+});
+
+test('tailnet: a serve config that becomes unreadable later refuses every request until it reads again', async () => {
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-ts-'));
+  const flag = path.join(tdir, 'serve-broken');
+  const port = PORT + 26;
+  const fake = fakeTailscale(tdir, { serveFailWhen: flag });
+  const p = await bootTailnet(port, { SIDECAR_TAILSCALE: fake, SIDECAR_TAILNET_RECHECK_MS: '200' });
+  let err = ''; p.stderr.on('data', (d) => err += d);
+  try {
+    assert.equal((await rawReq(port, '/api/files', { Host: `localhost:${port}` })).status, 200);
+    fs.writeFileSync(flag, '');
+    const deadline = Date.now() + 4000;
+    while (!/could not be read/.test(err) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    assert.match(err, /serve config could not be read to check for a raw TCP forward; refusing every request until it can be/);
+    assert.equal((await rawReq(port, '/api/files', { Host: `localhost:${port}` })).status, 403, 'local-looking is refused');
+    assert.equal((await rawReq(port, '/api/files', viaServe(OWNER))).status, 403, 'and so is the owner');
+    fs.rmSync(flag);
+    const back = Date.now() + 4000;
+    while (!/serving requests again/.test(err) && Date.now() < back) await new Promise((r) => setTimeout(r, 50));
+    assert.equal((await rawReq(port, '/api/files', { Host: `localhost:${port}` })).status, 200, 'back once it reads');
+  } finally { p.kill(); }
+});
+
+test('tailnet: a stopped Tailscale forwards nothing, so local requests stay trusted', async () => {
+  const port = PORT + 27;
+  // The serve config is unreadable too, and that must not matter: a stopped Tailscale forwards nothing.
+  const fake = fakeTailscale(fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-ts-')), { stopped: true, serveFailWhen: true });
+  const p = await bootTailnet(port, { SIDECAR_TAILSCALE: fake });
+  try {
+    assert.equal((await rawReq(port, '/api/files', { Host: `127.0.0.1:${port}` })).status, 200);
+    assert.equal((await rawReq(port, '/api/files', viaServe(OWNER))).status, 403, 'and nobody owns a stopped machine');
+  } finally { p.kill(); }
+});
+
+test('tailnet: the forward state is none without a running Tailscale, unknown only when a running one is unreadable', async () => {
+  const S = Tailnet.forwardState;
+  assert.equal(S({ ok: false, running: false, forwards: [] }), 'none', 'no CLI, or none answered');
+  assert.equal(S({ ok: true, running: false, forwards: [] }), 'none', 'stopped or logged out');
+  assert.equal(S({ ok: true, running: true, forwards: null }), 'unknown', 'running, serve config unreadable');
+  assert.equal(S({ ok: true, running: true, forwards: [] }), 'none');
+  assert.equal(S({ ok: true, running: true, forwards: ['tcp port 8444 → 127.0.0.1:4880'] }), 'found');
+  // A look where no CLI answered proves nothing: it never clears a block, and never sets one.
+  assert.equal(S({ ok: false, running: false, forwards: [] }, 'found'), 'found', 'a failed status keeps found');
+  assert.equal(S({ ok: false, running: false, forwards: [] }, 'unknown'), 'unknown', 'and keeps unknown');
+  assert.equal(S({ ok: true, running: false, forwards: [] }, 'found'), 'none', 'a definite not-running clears it');
+  let t = 0, answer = { ok: true, running: true, owner: OWNER, forwards: null };
+  const gate = Tailnet.createGate({ now: () => t, lookup: async () => answer });
+  await gate.refresh();
+  assert.equal(await isBlocked(gate), true, 'unknown blocks like found');
+  answer = { ok: true, running: true, owner: OWNER, forwards: [] };
+  assert.equal(await isBlocked(gate), true, 'not asked again inside two seconds');
+  t += Tailnet.FRESH_MS;
+  assert.equal(await isBlocked(gate), false, 'a blocked request asks again, and the readable config unblocks');
+  answer = { ok: false, running: false, owner: null, forwards: [] }; t += Tailnet.RETRY_KNOWN_MS;
+  await gate.refresh();
+  assert.equal(await isBlocked(gate), true, 'the CLI failing after Tailscale was seen running proves nothing, so it blocks');
+});
+
+test('tailnet: a failed status look keeps a block, and only a clean read clears it', async () => {
+  const fwdList = ['tcp port 8444 → 127.0.0.1:4880'];
+  let t = 0, answer = { ok: true, running: true, owner: OWNER, forwards: fwdList };
+  const gate = Tailnet.createGate({ now: () => t, lookup: async () => answer });
+  await gate.refresh();
+  assert.equal(gate.forwardState(), 'found');
+  answer = { ok: false, running: false, owner: null, forwards: [] }; t += Tailnet.FRESH_MS;
+  assert.equal(await isBlocked(gate), true, 'status failing or timing out does not mean the daemon stopped forwarding');
+  assert.deepEqual(gate.forwards(), fwdList, 'and the forward it found is still named');
+  answer = { ok: true, running: true, owner: OWNER, forwards: null }; t += Tailnet.FRESH_MS;
+  assert.equal(await isBlocked(gate), true, 'found → unreadable is still blocked');
+  answer = { ok: false, running: false, owner: null, forwards: [] }; t += Tailnet.FRESH_MS;
+  assert.equal(gate.forwardState(), 'unknown');
+  assert.equal(await isBlocked(gate), true, 'and a failed status keeps unknown');
+  answer = { ok: true, running: true, owner: OWNER, forwards: [] }; t += Tailnet.FRESH_MS;
+  assert.equal(await isBlocked(gate), false, 'a clean read clears it');
+});
+
+test('tailnet: a request after the cached look is two seconds old waits for a fresh one', async () => {
+  let t = 0, calls = 0, release;
+  const gate = Tailnet.createGate({ now: () => t, lookup: () => { calls++;
+    return calls === 1 ? { ok: true, running: true, owner: OWNER, forwards: [] }
+      : new Promise((r) => { release = () => r({ ok: true, running: true, owner: OWNER, forwards: ['tcp port 8444 → 127.0.0.1:4880'] }); }); } });
+  await gate.refresh();
+  t += Tailnet.FRESH_MS - 1;
+  await gate.settle();
+  assert.equal(calls, 1, 'a look under two seconds old is trusted as it is');
+  t += 1;
+  let settled = false;
+  const p = gate.settle().then(() => { settled = true; });
+  const q = gate.settle();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(settled, false, 'the request waits on the look');
+  assert.equal(calls, 2, 'and two requests share one look');
+  release(); await p; await q;
+  assert.equal(gate.blocked(), true, 'the look it waited for found a forward, so the request is refused');
+});
+
+for (const [kind, opts, line] of [
+  ['finds a forward', (flag, port) => ({ forwardPort: port, forwardWhen: flag }), /forwards raw TCP to this server/],
+  ['finds the serve config unreadable', (flag) => ({ serveFailWhen: flag }), /serve config could not be read/],
+]) {
+  test(`tailnet: the request whose own look ${kind} is refused, a forged owner header included`, async () => {
+    const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-ts-'));
+    const flag = path.join(tdir, 'flag');
+    const port = PORT + (kind.includes('forward') ? 28 : 29);
+    // The timer is pushed out of reach, so the only look that can find it is the request's own.
+    const p = await bootTailnet(port, { SIDECAR_TAILSCALE: fakeTailscale(tdir, opts(flag, port)), SIDECAR_TAILNET_RECHECK_MS: '600000' });
+    let err = ''; p.stderr.on('data', (d) => err += d);
+    try {
+      assert.equal((await rawReq(port, '/api/files', { Host: `localhost:${port}` })).status, 200);
+      await new Promise((r) => setTimeout(r, Tailnet.FRESH_MS + 200));
+      fs.writeFileSync(flag, '');
+      const r = await rawReq(port, '/api/files', { Host: `localhost:${port}`, 'Tailscale-User-Login': OWNER });
+      assert.equal(r.status, 403, 'refused by the look it triggered');
+      assert.match(err, line, 'which is the look that found it');
+      assert.equal((await rawReq(port, '/api/files', { Host: `localhost:${port}` })).status, 403, 'and a plain local request after it too');
+    } finally { p.kill(); }
+  });
+}
+
+test('tailnet: a forward to a hostname on this port counts, whatever the name resolves to', () => {
+  // Tailscale accepts a hostname target, and `sidecar-loopback` mapped to 127.0.0.1 in /etc/hosts
+  // reaches this server; the host is not inspected at all, so another machine's same port blocks too.
+  const cfg = { TCP: { 8444: { TCPForward: 'sidecar-loopback:4880' }, 8445: { TCPForward: 'sidecar-loopback:4881' } } };
+  assert.deepEqual(Tailnet.tcpForwards(JSON.stringify(cfg), 4880), ['tcp port 8444 → sidecar-loopback:4880']);
+});
+
+test('tailnet: once Tailscale has been seen running, a failed status check blocks even from none', async () => {
+  let t = 0, answer = { ok: true, running: true, owner: OWNER, forwards: [] };
+  const gate = Tailnet.createGate({ now: () => t, lookup: async () => answer });
+  await gate.refresh();
+  assert.equal(await isBlocked(gate), false, 'running, no forward');
+  answer = { ok: false, running: false, owner: null, forwards: [] }; t += Tailnet.FRESH_MS;
+  assert.equal(await isBlocked(gate), true, 'the CLI failing could hide a forward added meanwhile');
+  assert.equal(gate.forwardState(), 'unknown');
+  t += Tailnet.FRESH_MS;
+  assert.equal(await isBlocked(gate), true, 'and further failures keep it');
+  answer = { ok: true, running: true, owner: OWNER, forwards: [] }; t += Tailnet.FRESH_MS;
+  assert.equal(await isBlocked(gate), false, 'a clean read clears it');
+  // A machine where Tailscale was never seen running keeps local trust through any number of failures.
+  const bare = Tailnet.createGate({ now: () => t, lookup: async () => ({ ok: false, running: false, owner: null, forwards: [] }) });
+  for (let i = 0; i < 3; i++) { t += Tailnet.FRESH_MS; assert.equal(await isBlocked(bare), false); }
+  assert.equal(Tailnet.forwardState({ ok: false }, 'none', true), 'unknown');
+  assert.equal(Tailnet.forwardState({ ok: false }, 'none', false), 'none');
+});
+
+test('tailnet: Q-encoded header values decode, plain ones pass through', () => {
+  assert.equal(Tailnet.decodeHeader('plain@example.com'), 'plain@example.com');
+  assert.equal(Tailnet.decodeHeader('=?utf-8?q?zo=C3=AB@example.com?='), 'zoë@example.com');
+  assert.equal(Tailnet.decodeHeader('=?utf-8?q?Zo=C3=AB_?= =?utf-8?q?Smith?='), 'Zoë Smith', 'split words rejoin');
+  assert.equal(Tailnet.decodeHeader(undefined), '');
+  assert.deepEqual(Tailnet.parseUsers(' A@x.com,,b@Y.com '), ['a@x.com', 'b@y.com']);
 });
 
 /* ---------------------------------------------------------------------------

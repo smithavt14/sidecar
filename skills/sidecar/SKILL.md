@@ -624,8 +624,10 @@ overrides) and real timestamps, both filled in for you.
 `tailscale serve --bg 4880` proxies sidecar onto a private [Tailscale](https://tailscale.com) tailnet,
 so the human can review from their phone with the machine awake (the repo wraps this as
 `./scripts/tailscale-serve.sh`). Add the tailnet hostname to `SIDECAR_HOSTS` so the Host allowlist
-accepts it. Keep it tailnet-only: sidecar has no authentication, so never `tailscale funnel` it
-publicly.
+accepts it. Over the tailnet only the machine's own Tailscale login gets in, plus any login listed in
+`SIDECAR_ALLOW_USERS` (comma-separated); everyone else gets a 403. Your own commands talk to the server
+over `127.0.0.1` and need none of this. Never `tailscale funnel` it: Funnel traffic carries no login and
+is refused.
 
 ---
 

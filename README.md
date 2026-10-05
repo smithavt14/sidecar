@@ -67,9 +67,33 @@ for the full command set.
 Each turn your agent reads a digest rather than the document: the decisions you made with your reasons, new comments and replies in full, and the document's changed hunks. Reviewing this README, the file runs about 8,800 characters while the digests ran between 180 and 1,800. The first look of a session is still a full read; everything after it just costs whatever has changed.
 
 **Review on your phone** (optional): `tailscale serve --bg 4880` proxies sidecar onto your private
-[Tailscale](https://tailscale.com) tailnet. The picture button opens your camera roll there, so a comment
-can carry the screenshot you just took. Tailnet-only: sidecar has no auth, so never `tailscale funnel`
-it publicly.
+[Tailscale](https://tailscale.com) tailnet. Add the tailnet hostname to `SIDECAR_HOSTS` when you start the
+server. The picture button opens your camera roll there, so a comment can carry the screenshot you just
+took.
+
+Over the tailnet, sidecar answers only the person running it. `tailscale serve` stamps each request
+with the Tailscale login of the device that sent it, and sidecar lets a request in when that login is
+the one this machine is signed in as (read from `tailscale status` at startup). Your own phone and
+laptops get in; another person's device on the same tailnet, a device shared in from another account,
+and a tagged device get a 403. To let someone else in, list their login:
+
+```bash
+SIDECAR_HOSTS=my-machine.tailXXXX.ts.net SIDECAR_ALLOW_USERS=sam@example.com sidecar ~/docs
+```
+
+`SIDECAR_ALLOW_USERS` is comma-separated and also works when the `tailscale` CLI can't be found; set
+`SIDECAR_TAILSCALE` to its path if it lives somewhere unusual. Requests from this machine itself (your
+browser at `localhost`, the CLI, your agent) need nothing.
+
+Only a plain HTTP `tailscale serve` is supported. Funnel traffic from the public internet carries no
+login and is refused. A raw `--tcp` or `--tls-terminated-tcp` forward onto sidecar's port passes a
+peer's headers through untouched, so nothing on a request can be believed while one exists: sidecar
+refuses to start with one in place, and refuses every request while one exists after startup. It does
+the same when Tailscale is running, or has been, and its status or serve config can't be read. Any
+TCP forward to sidecar's port number counts, even one to another machine, so a forward to the same
+port elsewhere also stops this sidecar. A forward added while sidecar
+runs can go unnoticed for up to about 2 seconds plus one lookup (about 60 ms on a Mac), because a
+request waits for a fresh look at Tailscale only once the last one is 2 seconds old.
 
 <img alt="sidecar on a phone: the document, and the review as a pull-up sheet" src="https://raw.githubusercontent.com/smithavt14/sidecar/main/docs/screenshot.png" width="420">
 
@@ -154,10 +178,13 @@ touch.
 
 ## Safety mechanics
 
-Hardened for exactly its threat model, which is single-user, single-machine, localhost, and no auth:
+Hardened for exactly its threat model, which is single-user, single-machine, localhost, and no accounts:
 
 - Binds to `127.0.0.1` and validates the `Host` header against an allowlist (`SIDECAR_HOSTS`), because
   loopback binding alone doesn't stop DNS rebinding.
+- A request that arrives through a proxy needs a Tailscale identity: the owner's login, or one in
+  `SIDECAR_ALLOW_USERS`. Tailscale strips a client's own copy of that header before setting it, so it
+  can't be forged from another device.
 - Rendered markdown is sanitized with DOMPurify, so a hostile `<img onerror>` in a file can't execute.
 - File access is confined to the served directory (path-traversal guarded), and `git diff` runs without a
   shell, so a crafted filename can't inject commands.
