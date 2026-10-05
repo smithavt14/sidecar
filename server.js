@@ -52,10 +52,31 @@ const app = express();
 
 // Host allowlist — binding to loopback is NOT authentication: on a tailnet/LAN the port is
 // reachable, and a browser on any origin can DNS-rebind to 127.0.0.1. Reject unexpected Host
-// headers. SIDECAR_HOSTS (comma-separated) is how a user opts their own tailnet hostname in.
+// headers. SIDECAR_HOSTS (comma-separated) is how a user opts their own tailnet hostname in. This
+// stays as the first gate: it is what stops DNS rebinding, which the identity check below cannot.
 const ALLOWED_HOSTS = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`,
   ...(process.env.SIDECAR_HOSTS || '').split(',').map(s => s.trim()).filter(Boolean)]);
 app.use((req, res, next) => ALLOWED_HOSTS.has(req.headers.host) ? next() : res.status(403).json({ error: 'host not allowed' }));
+
+// Who, on top of where. An allowed Host says which name a request used, not who sent it: once a
+// tailnet hostname is in SIDECAR_HOSTS, every device on that tailnet could read and write the root,
+// shared-in devices from other accounts included. A request a proxy carried now needs the Tailscale
+// identity `tailscale serve` stamps on it, and that identity must be this machine's own login or one
+// listed in SIDECAR_ALLOW_USERS. Local requests (the CLI, `sidecar wait`, a browser on this machine)
+// pass untouched. The rules, and what Tailscale was checked to do, are in lib/tailnet.js.
+const Tailnet = require('./lib/tailnet.js');
+const gate = Tailnet.createGate({ allowUsers: Tailnet.parseUsers(process.env.SIDECAR_ALLOW_USERS),
+  onOwner: (o) => console.log(`tailnet owner → ${o}`) });
+// An API caller reads JSON, like every other refusal here; a page load gets one bare line.
+const isApi = (p) => p.startsWith('/api/') || p === '/events' || p === '/assets';
+app.use((req, res, next) => {
+  if (Tailnet.isLocal(req, PORT)) return next();
+  gate.allows(req.headers).then((ok) => {
+    if (ok) return next();
+    if (isApi(req.path)) return res.status(403).json({ error: 'user not allowed' });
+    res.status(403).type('text/plain').send('Not allowed.');
+  }, next);
+});
 
 app.use(express.json({ limit: '10mb' }));
 // App shell must never be cached — a stale index.html shows a ghost UI after upgrades.
@@ -646,6 +667,9 @@ chokidar.watch(THEMES_DIR, { ignoreInitial: true, depth: 0 }).on('all', (event, 
 // their throws here automatically.
 app.use((err, req, res, next) => { res.status(err.status || 400).json({ error: err.message }); });
 
+// Asked here rather than where the gate is built, which runs for every CLI verb too: `sidecar comment`
+// has no use for a tailscale child process. A request arriving before the answer waits on it.
+gate.refresh();
 const server = app.listen(PORT, '127.0.0.1', () => {
   const f = rootIsFile ? `/?f=${encodeURIComponent(path.relative(BASE_DIR, ROOT))}` : '/';
   console.log(`sidecar ready → http://localhost:${PORT}${f}  [code ${CODE_STAMP}]`);

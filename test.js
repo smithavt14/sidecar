@@ -17,6 +17,11 @@ const sha_of = (s) => crypto.createHash('sha1').update(s).digest('hex').slice(0,
 // The agent's default name is read off the harness (lib/agent.js), and this suite is run from inside
 // one. Scrubbed here so every spawned command that names no agent is 'claude' whoever runs the tests.
 for (const k of ['CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'SIDECAR_AGENT']) delete process.env[k];
+// Who may reach a server from another device is read off the real Tailscale CLI when it is installed
+// (lib/tailnet.js). Pointed at nothing here, so the suite's servers never ask the machine running the
+// tests; the tailnet tests below hand each server a fake CLI of their own.
+for (const k of ['SIDECAR_HOSTS', 'SIDECAR_ALLOW_USERS']) delete process.env[k];
+process.env.SIDECAR_TAILSCALE = path.join(os.tmpdir(), 'sidecar-no-tailscale-here');
 
 const PORT = 4991;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -2007,6 +2012,181 @@ test('SIDECAR_USER / SIDECAR_AGENT are surfaced in /api/state (default and overr
     assert.equal(s.user, 'pat', 'SIDECAR_USER overrides the human name in /api/state');
     assert.equal(s.agent, 'robo', 'SIDECAR_AGENT is surfaced too');
   } finally { p2.kill(); }
+});
+
+/* ---------------------------------------------------------------------------
+   Tailnet access (lib/tailnet.js): the person running sidecar, plus anyone they name.
+
+   Each server here gets a fake `tailscale` CLI through SIDECAR_TAILSCALE, so no test asks the real
+   one. A "remote" request is shaped the way `tailscale serve` delivers it: the tailnet Host, the
+   X-Forwarded-* it always sets, and the identity it stamps (or none, for a tagged node or Funnel).
+   Logins are made up.
+--------------------------------------------------------------------------- */
+const Tailnet = require('./lib/tailnet.js');
+const TS_HOST = 'box.tail0000.ts.net';
+const OWNER = 'owner@example.com';
+// Two IDs a JS number cannot tell apart (both parse to 9007199254740992), the owner's the second. A
+// lookup that parsed them as numbers would hand back the wrong person.
+const tsStatus = (extra = {}) => `{"BackendState":"Running","Self":{"ID":"nSelf","UserID": 9007199254740993${extra.tags ? ',"Tags":["tag:server"]' : ''}},`
+  + `"User":{"9007199254740992":{"ID": 9007199254740992,"LoginName":"someone-else@example.com"},`
+  + `"9007199254740993":{"ID": 9007199254740993,"LoginName":"${OWNER}"}}}`;
+// A stand-in CLI: prints the status, or fails until a flag file exists (Tailscale starting late).
+function fakeTailscale(dirFor, { failUntil } = {}) {
+  const bin = path.join(dirFor, 'tailscale');
+  fs.writeFileSync(bin, `#!/usr/bin/env node
+const fs = require('fs');
+if (${JSON.stringify(failUntil || '')} && !fs.existsSync(${JSON.stringify(failUntil || '')})) process.exit(1);
+process.stdout.write(${JSON.stringify(tsStatus())});
+`);
+  fs.chmodSync(bin, 0o755);
+  return bin;
+}
+// A request with full control of its headers: undici normalizes Host, and these tests need it forged.
+const rawReq = (port, pathname, headers) => new Promise((resolve, reject) => {
+  const req = http.request({ host: '127.0.0.1', port, path: pathname, method: 'GET', headers }, (res) => {
+    let d = ''; res.on('data', (c) => d += c);
+    res.on('end', () => resolve({ status: res.statusCode, type: res.headers['content-type'] || '', body: d }));
+  });
+  req.on('error', reject); req.end();
+});
+const viaServe = (login, extra = {}) => ({ Host: TS_HOST, 'X-Forwarded-For': '100.64.0.7', 'X-Forwarded-Host': TS_HOST,
+  'X-Forwarded-Proto': 'https', ...(login ? { 'Tailscale-User-Login': login, 'Tailscale-User-Name': 'Someone' } : {}), ...extra });
+function bootTailnet(port, env) {
+  return new Promise((res, rej) => {
+    const p = spawn('node', [path.join(__dirname, 'server.js'), dir],
+      { env: { ...process.env, SIDECAR_PORT: String(port), SIDECAR_HOSTS: TS_HOST, ...env }, stdio: 'pipe' });
+    let out = '';
+    p.stdout.on('data', (d) => { out += d; if (out.includes('ready')) res(p); });
+    p.on('exit', () => rej(new Error('server died')));
+    setTimeout(() => rej(new Error('server never became ready')), 8000);
+  });
+}
+
+test('tailnet: the owner and allowlisted users get in; everyone else is refused', async () => {
+  const fake = fakeTailscale(fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-ts-')));
+  const port = PORT + 20;
+  const p = await bootTailnet(port, { SIDECAR_TAILSCALE: fake, SIDECAR_ALLOW_USERS: ' Friend@Example.com , zoë@example.com' });
+  try {
+    const owner = await rawReq(port, '/api/files', viaServe(OWNER));
+    assert.equal(owner.status, 200, 'the owner, resolved from tailscale status, gets in');
+    assert.equal((await rawReq(port, '/', viaServe(OWNER, { Accept: 'text/html' }))).status, 200, 'and the page loads for them');
+
+    assert.equal((await rawReq(port, '/api/files', viaServe('friend@example.com'))).status, 200,
+      'a login in SIDECAR_ALLOW_USERS gets in, compared without case');
+    assert.equal((await rawReq(port, '/api/files', viaServe('=?utf-8?q?zo=C3=AB@example.com?=') )).status, 200,
+      'a non-ASCII login arrives Q-encoded and still matches its allowlist entry');
+
+    const stranger = await rawReq(port, '/api/files', viaServe('someone-else@example.com'));
+    assert.equal(stranger.status, 403, 'another tailnet user is refused');
+    assert.match(stranger.type, /json/);
+    assert.deepEqual(JSON.parse(stranger.body), { error: 'user not allowed' });
+    const page = await rawReq(port, '/?f=doc.md', viaServe('someone-else@example.com', { Accept: 'text/html' }));
+    assert.equal(page.status, 403, 'and so is their page load');
+    assert.match(page.type, /text\/plain/);
+    assert.equal(page.body, 'Not allowed.', 'one bare line, nothing else');
+    assert.equal((await rawReq(port, '/events', viaServe('someone-else@example.com'))).status, 403, 'the live stream too');
+
+    assert.equal((await rawReq(port, '/api/files', viaServe(null))).status, 403,
+      'a remote request with no identity (a tagged node) is refused');
+    assert.equal((await rawReq(port, '/api/files', viaServe(null, { 'Tailscale-Funnel-Request': '?1' }))).status, 403,
+      'Funnel traffic from the public internet is refused');
+    assert.equal((await rawReq(port, '/api/files', viaServe(OWNER, { 'Tailscale-Funnel-Request': '?1' }))).status, 403,
+      'a Funnel marker is refused whatever login rides with it');
+    // tailscale serve passes a client's Host through verbatim, so a forged loopback Host must not make a
+    // proxied request local.
+    assert.equal((await rawReq(port, '/api/files', viaServe('someone-else@example.com', { Host: `localhost:${port}` }))).status, 403,
+      'a proxied request forging a loopback Host is still remote');
+    assert.equal((await rawReq(port, '/api/files', { Host: `127.0.0.1:${port}`, 'X-Forwarded-For': '100.64.0.7' })).status, 403,
+      'any forwarding header makes a request remote');
+
+    const local = await rawReq(port, '/api/files', { Host: `127.0.0.1:${port}` });
+    assert.equal(local.status, 200, 'a loopback request needs no identity');
+    assert.equal((await rawReq(port, '/api/files', { Host: `localhost:${port}` })).status, 200, 'by either loopback name');
+    assert.equal((await fetch(`http://127.0.0.1:${port}/api/state?path=doc.md`)).status, 200, 'the way the CLI and doctor call it');
+
+    const rebind = await rawReq(port, '/api/files', viaServe(OWNER, { Host: 'evil.example.com' }));
+    assert.equal(rebind.status, 403, 'the Host allowlist still runs first, even for the owner');
+    assert.deepEqual(JSON.parse(rebind.body), { error: 'host not allowed' });
+  } finally { p.kill(); }
+});
+
+test('tailnet: with Tailscale missing, local requests still work and only the allowlist gets in', async () => {
+  const port = PORT + 21;
+  const p = await bootTailnet(port, { SIDECAR_TAILSCALE: path.join(os.tmpdir(), 'sidecar-no-such-tailscale'),
+    SIDECAR_ALLOW_USERS: 'friend@example.com' });
+  try {
+    assert.equal((await rawReq(port, '/api/files', { Host: `127.0.0.1:${port}` })).status, 200, 'local works, nothing crashed');
+    assert.equal((await rawReq(port, '/api/state?path=doc.md', { Host: `localhost:${port}` })).status, 200);
+    assert.equal((await rawReq(port, '/api/files', viaServe(OWNER))).status, 403, 'no CLI means no owner to match');
+    assert.equal((await rawReq(port, '/api/files', viaServe('friend@example.com'))).status, 200, 'the allowlist needs no CLI');
+    const doctor = spawnSync('node', [path.join(__dirname, 'server.js'), 'doctor'],
+      { cwd: dir, encoding: 'utf8', env: { ...process.env, SIDECAR_PORT: String(port), SIDECAR_REGISTRY: 'off' } });
+    assert.match(doctor.stdout, new RegExp(`running on :${port}`), 'doctor still reaches the server over loopback');
+  } finally { p.kill(); }
+});
+
+test('tailnet: an owner Tailscale only reports after boot is picked up without a restart', async () => {
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-ts-'));
+  const flag = path.join(tdir, 'up');
+  const fake = fakeTailscale(tdir, { failUntil: flag });
+  const port = PORT + 22;
+  const p = await bootTailnet(port, { SIDECAR_TAILSCALE: fake });
+  try {
+    assert.equal((await rawReq(port, '/api/files', viaServe(OWNER))).status, 403, 'Tailscale down: no owner yet');
+    fs.writeFileSync(flag, '');
+    await new Promise((r) => setTimeout(r, Tailnet.RETRY_UNKNOWN_MS + 200));
+    assert.equal((await rawReq(port, '/api/files', viaServe(OWNER))).status, 200, 'the next request asks again and gets in');
+  } finally { p.kill(); }
+});
+
+test('tailnet: the owner comes from Self.UserID, never a tagged machine, never a rounded ID', () => {
+  assert.equal(Tailnet.ownerFromStatus(tsStatus()), OWNER);
+  assert.equal(Tailnet.ownerFromStatus(tsStatus({ tags: true })), null, 'a tagged machine belongs to nobody');
+  assert.equal(Tailnet.ownerFromStatus(tsStatus().replace('"Running"', '"NeedsLogin"')), null, 'logged out: no owner');
+  assert.equal(Tailnet.ownerFromStatus('not json'), null);
+  assert.equal(Tailnet.ownerFromStatus(''), null);
+});
+
+test('tailnet: isLocal needs a loopback socket, a loopback Host and no proxy header', () => {
+  const req = (host, extra = {}, addr = '127.0.0.1') => ({ headers: { host, ...extra }, socket: { remoteAddress: addr } });
+  assert.equal(Tailnet.isLocal(req('127.0.0.1:4880'), 4880), true);
+  assert.equal(Tailnet.isLocal(req('localhost:4880'), 4880), true);
+  assert.equal(Tailnet.isLocal(req('localhost:4880', {}, '::ffff:127.0.0.1'), 4880), true);
+  assert.equal(Tailnet.isLocal(req('localhost:4881'), 4880), false, 'another port is another server');
+  assert.equal(Tailnet.isLocal(req(TS_HOST), 4880), false, 'the tailnet name is never local');
+  assert.equal(Tailnet.isLocal(req('localhost:4880', {}, '100.64.0.7'), 4880), false, 'a non-loopback socket is never local');
+  for (const h of ['x-forwarded-for', 'x-forwarded-host', 'forwarded', 'tailscale-user-login', 'tailscale-funnel-request'])
+    assert.equal(Tailnet.isLocal(req('localhost:4880', { [h]: 'x' }), 4880), false, `${h} marks a proxy`);
+});
+
+test('tailnet: the gate asks again on a miss, throttled, and keeps a known owner through a failed lookup', async () => {
+  let t = 0, calls = 0, answer = null;
+  const gate = Tailnet.createGate({ allowUsers: ['friend@example.com'], now: () => t, resolve: async () => { calls++; return answer; } });
+  const h = (login) => ({ 'tailscale-user-login': login });
+  await gate.refresh();
+  assert.equal(calls, 1);
+  assert.equal(await gate.allows(h(OWNER)), false, 'unknown owner');
+  assert.equal(calls, 1, 'not asked again inside the window');
+  assert.equal(await gate.allows(h('friend@example.com')), true, 'the allowlist never waits on a lookup');
+  answer = OWNER; t += Tailnet.RETRY_UNKNOWN_MS;
+  assert.equal(await gate.allows(h(OWNER)), true, 'asked again once the window passed');
+  assert.equal(calls, 2);
+  assert.equal(await gate.allows({}), false, 'no identity, no entry');
+  answer = null; t += Tailnet.RETRY_KNOWN_MS;
+  assert.equal(await gate.allows(h('stranger@example.com')), false);
+  assert.equal(gate.owner(), OWNER, 'a failed lookup does not forget the owner');
+  assert.equal(await gate.allows(h(OWNER)), true);
+  answer = 'new-account@example.com'; t += Tailnet.RETRY_KNOWN_MS;
+  assert.equal(await gate.allows(h('new-account@example.com')), true, 'an account switch is picked up on the next miss');
+  assert.equal(await gate.allows(h(OWNER)), false, 'and the old login is no longer the owner');
+});
+
+test('tailnet: Q-encoded header values decode, plain ones pass through', () => {
+  assert.equal(Tailnet.decodeHeader('plain@example.com'), 'plain@example.com');
+  assert.equal(Tailnet.decodeHeader('=?utf-8?q?zo=C3=AB@example.com?='), 'zoë@example.com');
+  assert.equal(Tailnet.decodeHeader('=?utf-8?q?Zo=C3=AB_?= =?utf-8?q?Smith?='), 'Zoë Smith', 'split words rejoin');
+  assert.equal(Tailnet.decodeHeader(undefined), '');
+  assert.deepEqual(Tailnet.parseUsers(' A@x.com,,b@Y.com '), ['a@x.com', 'b@y.com']);
 });
 
 /* ---------------------------------------------------------------------------
