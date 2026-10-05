@@ -83,11 +83,15 @@ SIDECAR_HOSTS=my-machine.tailXXXX.ts.net SIDECAR_ALLOW_USERS=sam@example.com sid
 
 `SIDECAR_ALLOW_USERS` is comma-separated and also works when the `tailscale` CLI can't be found; set
 `SIDECAR_TAILSCALE` to its path if it lives somewhere unusual. Requests from this machine itself (your
-browser at `localhost`, the CLI, your agent) need nothing. Keep it to `tailscale serve`: Funnel traffic
-from the public internet carries no login and is refused. A raw `--tcp` forward onto sidecar's port
-passes a peer's headers through untouched, so nothing on a request can be believed while one exists:
-sidecar refuses to start with one in place, and refuses every request while one exists after
-startup. It does the same when Tailscale is running but its serve config can't be read.
+browser at `localhost`, the CLI, your agent) need nothing.
+
+Only a plain HTTP `tailscale serve` is supported. Funnel traffic from the public internet carries no
+login and is refused. A raw `--tcp` or `--tls-terminated-tcp` forward onto sidecar's port passes a
+peer's headers through untouched, so nothing on a request can be believed while one exists: sidecar
+refuses to start with one in place, and refuses every request while one exists after startup. It does
+the same when Tailscale is running but its serve config can't be read. A forward added while sidecar
+runs can go unnoticed for up to about 2 seconds plus one lookup (about 60 ms on a Mac), because a
+request waits for a fresh look at Tailscale only once the last one is 2 seconds old.
 
 <img alt="sidecar on a phone: the document, and the review as a pull-up sheet" src="https://raw.githubusercontent.com/smithavt14/sidecar/main/docs/screenshot.png" width="420">
 

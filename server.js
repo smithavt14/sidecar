@@ -70,7 +70,7 @@ const Tailnet = require('./lib/tailnet.js');
 const TAILNET_RECHECK_MS = Number(process.env.SIDECAR_TAILNET_RECHECK_MS) || Tailnet.RETRY_KNOWN_MS;
 let booted = false;
 const gate = Tailnet.createGate({ allowUsers: Tailnet.parseUsers(process.env.SIDECAR_ALLOW_USERS),
-  lookup: () => Tailnet.lookup(PORT), recheckMs: TAILNET_RECHECK_MS,
+  lookup: () => Tailnet.lookup(PORT),
   onOwner: (o) => console.log(`tailnet owner → ${o || 'none'}`),
   // At boot a forward refuses the start (below); found later, it refuses every request until it goes.
   onForwards: (state, f) => { if (!booted) return;
@@ -82,15 +82,16 @@ const isApi = (p) => p.startsWith('/api/') || p === '/events' || p === '/assets'
 const refuse = (req, res) => isApi(req.path) ? res.status(403).json({ error: 'user not allowed' })
   : res.status(403).type('text/plain').send('Not allowed.');
 app.use((req, res, next) => {
-  (async () => {
-    // A raw TCP forward onto this port, or a running Tailscale whose serve config cannot be read, means
-    // nothing on a request can be believed: the forward passes a peer's Host and identity headers
-    // through untouched. Every request is refused until a look says otherwise.
-    if (await gate.blocked()) return refuse(req, res);
+  // Decided only once any look at Tailscale has settled, then in this order. A raw TCP forward onto
+  // this port, or a running Tailscale whose serve config cannot be read, means nothing on a request can
+  // be believed (the forward passes a peer's Host and identity headers through untouched), so every
+  // request is refused until a look says otherwise. Then locality, then identity.
+  gate.settle().then(() => {
+    if (gate.blocked()) return refuse(req, res);
     if (Tailnet.isLocal(req, PORT)) return next();
-    if (await gate.allows(req.headers)) return next();
+    if (gate.allows(req.headers)) return next();
     refuse(req, res);
-  })().catch(next);
+  }).catch(next);
 });
 
 app.use(express.json({ limit: '10mb' }));

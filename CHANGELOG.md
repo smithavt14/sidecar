@@ -26,8 +26,13 @@ version was tagged.
   forward is removed. A running Tailscale whose serve config can't be read counts as forwarding: the
   start is refused after about five seconds of retries, and later it refuses requests until the
   config reads again. Without Tailscale, or with it stopped, nothing can forward and local requests
-  work as before. Tailscale is asked again every 30 seconds, and before trusting an owner match on an older
-  answer, so an account switch or a tagged machine shuts the previous owner out.
+  work as before. A failed status check never lifts a refusal: only a clean read of a running
+  Tailscale with no forward, or one reporting it is not running, does.
+- A request is decided on a look at Tailscale at most 2 seconds old, waiting for a fresh one when the
+  last is older, so an account switch or a tagged machine shuts the previous owner out, and a raw
+  forward added while sidecar runs goes unnoticed for up to about 2 seconds plus one lookup. A request
+  that waits pays about 60 ms on a Mac; one inside the 2 seconds pays nothing. Only a plain HTTP
+  `tailscale serve` is supported.
 - **Upgrading with `SIDECAR_HOSTS` set:** you keep working from your own devices. Anyone else who
   reached your sidecar over the tailnet now gets a 403 until you add their login to
   `SIDECAR_ALLOW_USERS` and restart. A proxy other than `tailscale serve` is now refused, since it

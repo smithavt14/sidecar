@@ -2149,7 +2149,7 @@ test('tailnet: an owner Tailscale only reports after boot is picked up without a
   try {
     assert.equal((await rawReq(port, '/api/files', viaServe(OWNER))).status, 403, 'Tailscale down: no owner yet');
     fs.writeFileSync(flag, '');
-    await new Promise((r) => setTimeout(r, Tailnet.RETRY_UNKNOWN_MS + 200));
+    await new Promise((r) => setTimeout(r, Tailnet.FRESH_MS + 200));
     assert.equal((await rawReq(port, '/api/files', viaServe(OWNER))).status, 200, 'the next request asks again and gets in');
   } finally { p.kill(); }
 });
@@ -2174,24 +2174,28 @@ test('tailnet: isLocal needs a loopback socket, a loopback Host and no proxy hea
     assert.equal(Tailnet.isLocal(req('localhost:4880', { [h]: 'x' }), 4880), false, `${h} marks a proxy`);
 });
 
+// What the server's middleware does with a gate: settle, then read. Every gate test goes through it.
+const ask = async (gate, headers) => { await gate.settle(); return !gate.blocked() && gate.allows(headers); };
+const isBlocked = async (gate) => { await gate.settle(); return gate.blocked(); };
+
 test('tailnet: the gate asks again on a miss, throttled, and forgets an owner a failed lookup cannot confirm', async () => {
   let t = 0, calls = 0, answer = { ok: true, owner: null, forwards: [] };
   const gate = Tailnet.createGate({ allowUsers: ['friend@example.com'], now: () => t, lookup: async () => { calls++; return answer; } });
   const h = (login) => ({ 'tailscale-user-login': login });
   await gate.refresh();
   assert.equal(calls, 1);
-  assert.equal(await gate.allows(h(OWNER)), false, 'unknown owner');
+  assert.equal(await ask(gate, h(OWNER)), false, 'unknown owner');
   assert.equal(calls, 1, 'not asked again inside the window');
-  assert.equal(await gate.allows(h('friend@example.com')), true, 'the allowlist never waits on a lookup');
-  answer = { ok: true, owner: OWNER, forwards: [] }; t += Tailnet.RETRY_UNKNOWN_MS;
-  assert.equal(await gate.allows(h(OWNER)), true, 'asked again once the window passed');
+  assert.equal(await ask(gate, h('friend@example.com')), true, 'the allowlist never waits on a lookup');
+  answer = { ok: true, owner: OWNER, forwards: [] }; t += Tailnet.FRESH_MS;
+  assert.equal(await ask(gate, h(OWNER)), true, 'asked again once the window passed');
   assert.equal(calls, 2);
-  assert.equal(await gate.allows({}), false, 'no identity, no entry');
+  assert.equal(await ask(gate, {}), false, 'no identity, no entry');
   answer = { ok: false, owner: null, forwards: null }; t += Tailnet.RETRY_KNOWN_MS;
-  assert.equal(await gate.allows(h(OWNER)), false, 'a lookup that failed confirms nobody, the owner included');
+  assert.equal(await ask(gate, h(OWNER)), false, 'a lookup that failed confirms nobody, the owner included');
   assert.equal(gate.owner(), null);
-  answer = { ok: true, owner: OWNER, forwards: [] }; t += Tailnet.RETRY_UNKNOWN_MS;
-  assert.equal(await gate.allows(h(OWNER)), true, 'and the owner is back on the next good look');
+  answer = { ok: true, owner: OWNER, forwards: [] }; t += Tailnet.FRESH_MS;
+  assert.equal(await ask(gate, h(OWNER)), true, 'and the owner is back on the next good look');
 });
 
 test('tailnet: a former owner is out once the machine switches accounts, even without a miss', async () => {
@@ -2199,13 +2203,13 @@ test('tailnet: a former owner is out once the machine switches accounts, even wi
   const gate = Tailnet.createGate({ now: () => t, lookup: async () => answer });
   const h = (login) => ({ 'tailscale-user-login': login });
   await gate.refresh();
-  assert.equal(await gate.allows(h(OWNER)), true);
+  assert.equal(await ask(gate, h(OWNER)), true);
   answer = { ok: true, owner: 'new-account@example.com', forwards: [] };
-  t += Tailnet.RETRY_KNOWN_MS - 1;
-  assert.equal(await gate.allows(h(OWNER)), true, 'inside the window the last look stands');
+  t += Tailnet.FRESH_MS - 1;
+  assert.equal(await ask(gate, h(OWNER)), true, 'inside the window the last look stands');
   t += 1;
-  assert.equal(await gate.allows(h(OWNER)), false, 'a stale look is refreshed before an owner match is trusted');
-  assert.equal(await gate.allows(h('new-account@example.com')), true, 'and the new account is the owner');
+  assert.equal(await ask(gate, h(OWNER)), false, 'a stale look is refreshed before an owner match is trusted');
+  assert.equal(await ask(gate, h('new-account@example.com')), true, 'and the new account is the owner');
 });
 
 test('tailnet: a good look reporting no owner (tagged, logged out) clears the owner', async () => {
@@ -2216,9 +2220,9 @@ test('tailnet: a good look reporting no owner (tagged, logged out) clears the ow
   answer = { ok: true, owner: Tailnet.ownerFromStatus(tsStatus({ tags: true })), forwards: [] };
   assert.equal(answer.owner, null);
   t += Tailnet.RETRY_KNOWN_MS;
-  assert.equal(await gate.allows({ 'tailscale-user-login': 'stranger@example.com' }), false);
+  assert.equal(await ask(gate, { 'tailscale-user-login': 'stranger@example.com' }), false);
   assert.equal(gate.owner(), null, 'the machine is tagged now, so nobody owns it');
-  assert.equal(await gate.allows({ 'tailscale-user-login': OWNER }), false, 'and the former owner is refused');
+  assert.equal(await ask(gate, { 'tailscale-user-login': OWNER }), false, 'and the former owner is refused');
   assert.equal(Tailnet.parseStatus('{"BackendState":"Stopped"}').ok, true, 'a stopped Tailscale is a real answer');
   assert.equal(Tailnet.parseStatus('nope').ok, false, 'unparseable output is a failure');
 });
@@ -2337,18 +2341,83 @@ test('tailnet: the forward state is none without a running Tailscale, unknown on
   assert.equal(S({ ok: true, running: true, forwards: null }), 'unknown', 'running, serve config unreadable');
   assert.equal(S({ ok: true, running: true, forwards: [] }), 'none');
   assert.equal(S({ ok: true, running: true, forwards: ['tcp port 8444 → 127.0.0.1:4880'] }), 'found');
+  // A look where no CLI answered proves nothing: it never clears a block, and never sets one.
+  assert.equal(S({ ok: false, running: false, forwards: [] }, 'found'), 'found', 'a failed status keeps found');
+  assert.equal(S({ ok: false, running: false, forwards: [] }, 'unknown'), 'unknown', 'and keeps unknown');
+  assert.equal(S({ ok: true, running: false, forwards: [] }, 'found'), 'none', 'a definite not-running clears it');
   let t = 0, answer = { ok: true, running: true, owner: OWNER, forwards: null };
   const gate = Tailnet.createGate({ now: () => t, lookup: async () => answer });
   await gate.refresh();
-  assert.equal(await gate.blocked(), true, 'unknown blocks like found');
+  assert.equal(await isBlocked(gate), true, 'unknown blocks like found');
   answer = { ok: true, running: true, owner: OWNER, forwards: [] };
-  assert.equal(await gate.blocked(), true, 'not asked again inside two seconds');
-  t += Tailnet.RETRY_UNKNOWN_MS;
-  assert.equal(await gate.blocked(), false, 'a blocked request asks again, and the readable config unblocks');
+  assert.equal(await isBlocked(gate), true, 'not asked again inside two seconds');
+  t += Tailnet.FRESH_MS;
+  assert.equal(await isBlocked(gate), false, 'a blocked request asks again, and the readable config unblocks');
   answer = { ok: false, running: false, owner: null, forwards: [] }; t += Tailnet.RETRY_KNOWN_MS;
   await gate.refresh();
-  assert.equal(await gate.blocked(), false, 'Tailscale gone: nothing can forward');
+  assert.equal(await isBlocked(gate), false, 'Tailscale gone: nothing can forward');
 });
+
+test('tailnet: a failed status look keeps a block, and only a clean read clears it', async () => {
+  const fwdList = ['tcp port 8444 → 127.0.0.1:4880'];
+  let t = 0, answer = { ok: true, running: true, owner: OWNER, forwards: fwdList };
+  const gate = Tailnet.createGate({ now: () => t, lookup: async () => answer });
+  await gate.refresh();
+  assert.equal(gate.forwardState(), 'found');
+  answer = { ok: false, running: false, owner: null, forwards: [] }; t += Tailnet.FRESH_MS;
+  assert.equal(await isBlocked(gate), true, 'status failing or timing out does not mean the daemon stopped forwarding');
+  assert.deepEqual(gate.forwards(), fwdList, 'and the forward it found is still named');
+  answer = { ok: true, running: true, owner: OWNER, forwards: null }; t += Tailnet.FRESH_MS;
+  assert.equal(await isBlocked(gate), true, 'found → unreadable is still blocked');
+  answer = { ok: false, running: false, owner: null, forwards: [] }; t += Tailnet.FRESH_MS;
+  assert.equal(gate.forwardState(), 'unknown');
+  assert.equal(await isBlocked(gate), true, 'and a failed status keeps unknown');
+  answer = { ok: true, running: true, owner: OWNER, forwards: [] }; t += Tailnet.FRESH_MS;
+  assert.equal(await isBlocked(gate), false, 'a clean read clears it');
+});
+
+test('tailnet: a request after the cached look is two seconds old waits for a fresh one', async () => {
+  let t = 0, calls = 0, release;
+  const gate = Tailnet.createGate({ now: () => t, lookup: () => { calls++;
+    return calls === 1 ? { ok: true, running: true, owner: OWNER, forwards: [] }
+      : new Promise((r) => { release = () => r({ ok: true, running: true, owner: OWNER, forwards: ['tcp port 8444 → 127.0.0.1:4880'] }); }); } });
+  await gate.refresh();
+  t += Tailnet.FRESH_MS - 1;
+  await gate.settle();
+  assert.equal(calls, 1, 'a look under two seconds old is trusted as it is');
+  t += 1;
+  let settled = false;
+  const p = gate.settle().then(() => { settled = true; });
+  const q = gate.settle();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(settled, false, 'the request waits on the look');
+  assert.equal(calls, 2, 'and two requests share one look');
+  release(); await p; await q;
+  assert.equal(gate.blocked(), true, 'the look it waited for found a forward, so the request is refused');
+});
+
+for (const [kind, opts, line] of [
+  ['finds a forward', (flag, port) => ({ forwardPort: port, forwardWhen: flag }), /forwards raw TCP to this server/],
+  ['finds the serve config unreadable', (flag) => ({ serveFailWhen: flag }), /serve config could not be read/],
+]) {
+  test(`tailnet: the request whose own look ${kind} is refused, a forged owner header included`, async () => {
+    const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'sidecar-ts-'));
+    const flag = path.join(tdir, 'flag');
+    const port = PORT + (kind.includes('forward') ? 28 : 29);
+    // The timer is pushed out of reach, so the only look that can find it is the request's own.
+    const p = await bootTailnet(port, { SIDECAR_TAILSCALE: fakeTailscale(tdir, opts(flag, port)), SIDECAR_TAILNET_RECHECK_MS: '600000' });
+    let err = ''; p.stderr.on('data', (d) => err += d);
+    try {
+      assert.equal((await rawReq(port, '/api/files', { Host: `localhost:${port}` })).status, 200);
+      await new Promise((r) => setTimeout(r, Tailnet.FRESH_MS + 200));
+      fs.writeFileSync(flag, '');
+      const r = await rawReq(port, '/api/files', { Host: `localhost:${port}`, 'Tailscale-User-Login': OWNER });
+      assert.equal(r.status, 403, 'refused by the look it triggered');
+      assert.match(err, line, 'which is the look that found it');
+      assert.equal((await rawReq(port, '/api/files', { Host: `localhost:${port}` })).status, 403, 'and a plain local request after it too');
+    } finally { p.kill(); }
+  });
+}
 
 test('tailnet: Q-encoded header values decode, plain ones pass through', () => {
   assert.equal(Tailnet.decodeHeader('plain@example.com'), 'plain@example.com');
