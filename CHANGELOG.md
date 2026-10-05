@@ -19,6 +19,12 @@ version was tagged.
 - Requests from the machine itself change nothing: the CLI, `sidecar wait`, presence and a browser at
   `localhost` need no setup. A request is local only when it reaches loopback under a loopback `Host`
   with no forwarding header, because `tailscale serve` passes a client's `Host` through unchanged.
+- A raw TCP forward (`tailscale serve --tcp` or `--tls-terminated-tcp`) onto sidecar's port would
+  make a tailnet peer look like this machine, so sidecar reads Tailscale's serve config too. With one
+  in place it refuses to start and names it. If one appears while sidecar runs, it says so on the
+  console and every request, local-looking ones included, needs an allowed login until the forward is
+  removed. Tailscale is asked again every 30 seconds, and before trusting an owner match on an older
+  answer, so an account switch or a tagged machine shuts the previous owner out.
 - **Upgrading with `SIDECAR_HOSTS` set:** you keep working from your own devices. Anyone else who
   reached your sidecar over the tailnet now gets a 403 until you add their login to
   `SIDECAR_ALLOW_USERS` and restart. A proxy other than `tailscale serve` is now refused, since it

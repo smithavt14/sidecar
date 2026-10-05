@@ -84,8 +84,9 @@ SIDECAR_HOSTS=my-machine.tailXXXX.ts.net SIDECAR_ALLOW_USERS=sam@example.com sid
 `SIDECAR_ALLOW_USERS` is comma-separated and also works when the `tailscale` CLI can't be found; set
 `SIDECAR_TAILSCALE` to its path if it lives somewhere unusual. Requests from this machine itself (your
 browser at `localhost`, the CLI, your agent) need nothing. Keep it to `tailscale serve`: Funnel traffic
-from the public internet carries no login and is refused, and a raw `--tcp` forward strips the
-identity sidecar relies on.
+from the public internet carries no login and is refused. A raw `--tcp` forward onto sidecar's port
+carries no identity either, so sidecar refuses to start while one exists, and if one appears later it
+stops trusting requests that look local until the forward is gone.
 
 <img alt="sidecar on a phone: the document, and the review as a pull-up sheet" src="https://raw.githubusercontent.com/smithavt14/sidecar/main/docs/screenshot.png" width="420">
 

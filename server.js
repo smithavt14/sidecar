@@ -65,12 +65,21 @@ app.use((req, res, next) => ALLOWED_HOSTS.has(req.headers.host) ? next() : res.s
 // listed in SIDECAR_ALLOW_USERS. Local requests (the CLI, `sidecar wait`, a browser on this machine)
 // pass untouched. The rules, and what Tailscale was checked to do, are in lib/tailnet.js.
 const Tailnet = require('./lib/tailnet.js');
+// How often Tailscale is asked again (owner, and any raw TCP forward onto this port). Overridable so
+// the tests can watch a forward appear without waiting half a minute.
+const TAILNET_RECHECK_MS = Number(process.env.SIDECAR_TAILNET_RECHECK_MS) || Tailnet.RETRY_KNOWN_MS;
+let booted = false;
 const gate = Tailnet.createGate({ allowUsers: Tailnet.parseUsers(process.env.SIDECAR_ALLOW_USERS),
-  onOwner: (o) => console.log(`tailnet owner → ${o}`) });
+  lookup: () => Tailnet.lookup(PORT), recheckMs: TAILNET_RECHECK_MS,
+  onOwner: (o) => console.log(`tailnet owner → ${o || 'none'}`),
+  // At boot a forward refuses the start (below); found later, it ends trust in local-looking requests.
+  onForwards: (f) => { if (!booted) return;
+    console.error(f.length ? `sidecar: tailscale serve forwards raw TCP to this server (${f.join(', ')}); every request now needs an allowed Tailscale login`
+                           : 'sidecar: the raw TCP forward to this server is gone; local requests are trusted again'); } });
 // An API caller reads JSON, like every other refusal here; a page load gets one bare line.
 const isApi = (p) => p.startsWith('/api/') || p === '/events' || p === '/assets';
 app.use((req, res, next) => {
-  if (Tailnet.isLocal(req, PORT)) return next();
+  if (gate.localTrusted() && Tailnet.isLocal(req, PORT)) return next();
   gate.allows(req.headers).then((ok) => {
     if (ok) return next();
     if (isApi(req.path)) return res.status(403).json({ error: 'user not allowed' });
@@ -669,24 +678,40 @@ app.use((err, req, res, next) => { res.status(err.status || 400).json({ error: e
 
 // Asked here rather than where the gate is built, which runs for every CLI verb too: `sidecar comment`
 // has no use for a tailscale child process. A request arriving before the answer waits on it.
-gate.refresh();
-const server = app.listen(PORT, '127.0.0.1', () => {
-  const f = rootIsFile ? `/?f=${encodeURIComponent(path.relative(BASE_DIR, ROOT))}` : '/';
-  console.log(`sidecar ready → http://localhost:${PORT}${f}  [code ${CODE_STAMP}]`);
-  // The startup line is the one moment a first-time reader is definitely looking, and a running
-  // server is worth little until the agent on the other side knows the verbs.
-  console.log(`agent needs the protocol → npx skills add smithavt14/sidecar   (or: sidecar skill)`);
+// The first look finishes before the port opens: a raw TCP forward onto this port would make every
+// tailnet peer look local, so finding one refuses the start rather than serving into it.
+gate.refresh().then(() => {
+  const fwd = gate.forwards();
+  if (fwd.length) {
+    console.error(`sidecar: refusing to start: tailscale serve forwards raw TCP to this port (${fwd.join(', ')}), which carries no Tailscale identity. Remove it, or use plain \`tailscale serve\`.`);
+    process.exit(1);
+  }
+  booted = true;
+  // Looked at again on a timer as well as on a stale remote request, because a peer through a forward
+  // added later looks local and so would never prompt a look of its own.
+  setInterval(() => gate.refresh(), TAILNET_RECHECK_MS).unref();
+  listen();
 });
 
-// Starting a second server on a taken port is the likeliest startup failure, and Node's default for
-// it is an unhandled 'error' event with a stack dump. Say what happened, and where the other one is.
-server.on('error', (e) => {
-  if (e.code === 'EADDRINUSE') {
-    console.error(`sidecar: port ${PORT} is already in use — a server is probably already running.\n` +
-      `  check it:      sidecar doctor\n` +
-      `  or use another port:  SIDECAR_PORT=4881 sidecar <dir>`);
-  } else {
-    console.error(`sidecar: ${e.message}`);
-  }
-  process.exit(1);
-});
+function listen() {
+  const server = app.listen(PORT, '127.0.0.1', () => {
+    const f = rootIsFile ? `/?f=${encodeURIComponent(path.relative(BASE_DIR, ROOT))}` : '/';
+    console.log(`sidecar ready → http://localhost:${PORT}${f}  [code ${CODE_STAMP}]`);
+    // The startup line is the one moment a first-time reader is definitely looking, and a running
+    // server is worth little until the agent on the other side knows the verbs.
+    console.log(`agent needs the protocol → npx skills add smithavt14/sidecar   (or: sidecar skill)`);
+  });
+
+  // Starting a second server on a taken port is the likeliest startup failure, and Node's default for
+  // it is an unhandled 'error' event with a stack dump. Say what happened, and where the other one is.
+  server.on('error', (e) => {
+    if (e.code === 'EADDRINUSE') {
+      console.error(`sidecar: port ${PORT} is already in use — a server is probably already running.\n` +
+        `  check it:      sidecar doctor\n` +
+        `  or use another port:  SIDECAR_PORT=4881 sidecar <dir>`);
+    } else {
+      console.error(`sidecar: ${e.message}`);
+    }
+    process.exit(1);
+  });
+}
